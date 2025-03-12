@@ -1,0 +1,9 @@
+project:
+  output-dir: _docs
+
+website:
+  title: "ribosome"
+  site-url: "https://Binjian.github.io/ribosome"
+  description: "text generator with llm magic"
+  repo-branch: main
+  repo-url: "https://github.com/Binjian/ribosome"
