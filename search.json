@@ -1,0 +1,152 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "ribosome",
+    "section": "",
+    "text": "This file will become your README and also the index of your documentation.",
+    "crumbs": [
+      "ribosome"
+    ]
+  },
+  {
+    "objectID": "index.html#developer-guide",
+    "href": "index.html#developer-guide",
+    "title": "ribosome",
+    "section": "Developer Guide",
+    "text": "Developer Guide\nIf you are new to using nbdev here are some useful pointers to get you started.\n\nInstall ribosome in Development mode\n# make sure ribosome package is installed in development mode\n$ pip install -e .\n\n# make changes under nbs/ directory\n# ...\n\n# compile to have changes apply to ribosome\n$ nbdev_prepare",
+    "crumbs": [
+      "ribosome"
+    ]
+  },
+  {
+    "objectID": "index.html#usage",
+    "href": "index.html#usage",
+    "title": "ribosome",
+    "section": "Usage",
+    "text": "Usage\n\nInstallation\nInstall latest from the GitHub repository:\n$ pip install git+https://github.com/Binjian/ribosome.git\nor from conda\n$ conda install -c Binjian ribosome\nor from pypi\n$ pip install ribosome\n\n\nDocumentation\nDocumentation can be found hosted on this GitHub repository’s pages. Additionally you can find package manager specific guidelines on conda and pypi respectively.",
+    "crumbs": [
+      "ribosome"
+    ]
+  },
+  {
+    "objectID": "index.html#how-to-use",
+    "href": "index.html#how-to-use",
+    "title": "ribosome",
+    "section": "How to use",
+    "text": "How to use\nFill me in please! Don’t forget code examples:\n\n1+1\n\n2",
+    "crumbs": [
+      "ribosome"
+    ]
+  },
+  {
+    "objectID": "gradio.html",
+    "href": "gradio.html",
+    "title": "Gradio tutorial with Hugging Face Spaces deployment",
+    "section": "",
+    "text": "Please reference this blog post on how to use this notebook.",
+    "crumbs": [
+      "Gradio tutorial with Hugging Face Spaces deployment"
+    ]
+  },
+  {
+    "objectID": "gradio.html#install-dependencies",
+    "href": "gradio.html#install-dependencies",
+    "title": "Gradio tutorial with Hugging Face Spaces deployment",
+    "section": "Install dependencies",
+    "text": "Install dependencies",
+    "crumbs": [
+      "Gradio tutorial with Hugging Face Spaces deployment"
+    ]
+  },
+  {
+    "objectID": "gradio.html#make-an-app-with-gradio",
+    "href": "gradio.html#make-an-app-with-gradio",
+    "title": "Gradio tutorial with Hugging Face Spaces deployment",
+    "section": "Make an app with Gradio",
+    "text": "Make an app with Gradio\n\n\nsize\n\n size (repo:str)\n\nReturns the size in GB of a HuggingFace Dataset.\n\n!echo $HF_ENDPOINT\n\nhttps://hf-mirror.com\n\n\n\nsize(\"tglcourse/CelebA-faces-cropped-128\")\n\n'5.49 GB'\n\n\n\n# this is only necessary in a notebook\niface.close()\n\nClosing server running on port: 7860",
+    "crumbs": [
+      "Gradio tutorial with Hugging Face Spaces deployment"
+    ]
+  },
+  {
+    "objectID": "gradio.html#create-a-requirements.txt-file",
+    "href": "gradio.html#create-a-requirements.txt-file",
+    "title": "Gradio tutorial with Hugging Face Spaces deployment",
+    "section": "Create a requirements.txt file",
+    "text": "Create a requirements.txt file\n\nfastcore\n\nOverwriting ../requirements.txt",
+    "crumbs": [
+      "Gradio tutorial with Hugging Face Spaces deployment"
+    ]
+  },
+  {
+    "objectID": "gradio.html#convert-this-notebook-into-a-gradio-app",
+    "href": "gradio.html#convert-this-notebook-into-a-gradio-app",
+    "title": "Gradio tutorial with Hugging Face Spaces deployment",
+    "section": "Convert this notebook into a Gradio app",
+    "text": "Convert this notebook into a Gradio app\n\n# from nbdev.export import nb_export\n# nb_export('01_gradio.ipynb', lib_path='.', name='gradio')",
+    "crumbs": [
+      "Gradio tutorial with Hugging Face Spaces deployment"
+    ]
+  },
+  {
+    "objectID": "core.html",
+    "href": "core.html",
+    "title": "core",
+    "section": "",
+    "text": "source\n\nfoo\n\n foo ()",
+    "crumbs": [
+      "core"
+    ]
+  },
+  {
+    "objectID": "llama_index.html",
+    "href": "llama_index.html",
+    "title": "Gradio RAG tutorial with llama_index",
+    "section": "",
+    "text": "Please reference this blog post on how to use this notebook.",
+    "crumbs": [
+      "Gradio RAG tutorial with llama_index"
+    ]
+  },
+  {
+    "objectID": "llama_index.html#install-dependencies",
+    "href": "llama_index.html#install-dependencies",
+    "title": "Gradio RAG tutorial with llama_index",
+    "section": "Install dependencies",
+    "text": "Install dependencies",
+    "crumbs": [
+      "Gradio RAG tutorial with llama_index"
+    ]
+  },
+  {
+    "objectID": "llama_index.html#make-an-app-with-gradio",
+    "href": "llama_index.html#make-an-app-with-gradio",
+    "title": "Gradio RAG tutorial with llama_index",
+    "section": "Make an app with Gradio",
+    "text": "Make an app with Gradio\nThis is a simple RAG chatbot built on top of Llama Index and Gradio. It allows you to upload any text or PDF files and ask questions about them! Before running this, make sure you have exported your OpenAI API key as an environment variable:\nexport OPENAI_API_KEY=\"mykey\"\n\noai_key = os.getenv('OPENAI_API_KEY')\nprint(oai_key)\n\nyour-openai-api-key\n\n\n\n\nanswer\n\n answer (message, history)\n\n\n!echo $HF_ENDPOINT\n\n\n\n\n\n# this is only necessary in a notebook\niface.close()\n\nClosing server running on port: 7860",
+    "crumbs": [
+      "Gradio RAG tutorial with llama_index"
+    ]
+  },
+  {
+    "objectID": "llama_index.html#create-a-requirements.txt-file",
+    "href": "llama_index.html#create-a-requirements.txt-file",
+    "title": "Gradio RAG tutorial with llama_index",
+    "section": "Create a requirements.txt file",
+    "text": "Create a requirements.txt file\n\nfastcore\n\nWriting ../requirements.txt",
+    "crumbs": [
+      "Gradio RAG tutorial with llama_index"
+    ]
+  },
+  {
+    "objectID": "llama_index.html#convert-this-notebook-into-a-gradio-app",
+    "href": "llama_index.html#convert-this-notebook-into-a-gradio-app",
+    "title": "Gradio RAG tutorial with llama_index",
+    "section": "Convert this notebook into a Gradio app",
+    "text": "Convert this notebook into a Gradio app\n\n# from nbdev.export import nb_export\n# nb_export('01_gradio.ipynb', lib_path='.', name='gradio')",
+    "crumbs": [
+      "Gradio RAG tutorial with llama_index"
+    ]
+  }
+]
