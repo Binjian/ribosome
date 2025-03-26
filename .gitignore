@@ -176,3 +176,7 @@ cython_debug/
 
 # pipenv environment
 /.env
+/.idea/
+/db/
+/ribosome/*.py
+/.python-version
