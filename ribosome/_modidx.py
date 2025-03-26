@@ -5,4 +5,8 @@ d = { 'settings': { 'branch': 'main',
                 'doc_host': 'https://Binjian.github.io',
                 'git_url': 'https://github.com/Binjian/ribosome',
                 'lib_path': 'ribosome'},
-  'syms': {'ribosome.core': {'ribosome.core.foo': ('core.html#foo', 'ribosome/core.py')}}}
+  'syms': { 'ribosome.chroma_db': {},
+            'ribosome.core': {'ribosome.core.foo': ('core.html#foo', 'ribosome/core.py')},
+            'ribosome.data_preprocessing': {},
+            'ribosome.gradio': {'ribosome.gradio.size': ('gradio.html#size', 'ribosome/gradio.py')},
+            'ribosome.llama_index': {'ribosome.llama_index.answer': ('llama_index.html#answer', 'ribosome/llama_index.py')}}}
