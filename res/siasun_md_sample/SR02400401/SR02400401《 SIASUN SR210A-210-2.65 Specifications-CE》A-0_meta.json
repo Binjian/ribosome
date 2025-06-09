@@ -1,0 +1,1057 @@
+{
+  "table_of_contents": [
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          521.015625,
+          7.811279296875
+        ],
+        [
+          701.71875,
+          7.811279296875
+        ],
+        [
+          701.71875,
+          37.078857421875
+        ],
+        [
+          521.015625,
+          37.078857421875
+        ]
+      ]
+    },
+    {
+      "title": "SR210A-210/2.65",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          333.28125,
+          94.5758056640625
+        ],
+        [
+          666.5625,
+          94.5758056640625
+        ],
+        [
+          666.5625,
+          136.944580078125
+        ],
+        [
+          333.28125,
+          136.944580078125
+        ]
+      ]
+    },
+    {
+      "title": "Technical Specifications",
+      "heading_level": null,
+      "page_id": 0,
+      "polygon": [
+        [
+          335.0390625,
+          149.30419921875
+        ],
+        [
+          742.699951171875,
+          149.30419921875
+        ],
+        [
+          742.699951171875,
+          174.928955078125
+        ],
+        [
+          335.0390625,
+          174.928955078125
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 1,
+      "polygon": [
+        [
+          522.0703125,
+          9.26971435546875
+        ],
+        [
+          699.9609375,
+          9.26971435546875
+        ],
+        [
+          699.9609375,
+          36.18896484375
+        ],
+        [
+          522.0703125,
+          36.18896484375
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          521.3671875,
+          9.36859130859375
+        ],
+        [
+          700.6640625,
+          9.36859130859375
+        ],
+        [
+          700.6640625,
+          36.4361572265625
+        ],
+        [
+          521.3671875,
+          36.4361572265625
+        ]
+      ]
+    },
+    {
+      "title": "Robot Controller",
+      "heading_level": null,
+      "page_id": 2,
+      "polygon": [
+        [
+          20.56640625,
+          35.42266845703125
+        ],
+        [
+          343.8299560546875,
+          35.42266845703125
+        ],
+        [
+          343.8299560546875,
+          57.843017578125
+        ],
+        [
+          20.56640625,
+          57.843017578125
+        ]
+      ]
+    },
+    {
+      "title": "ROBOTS MAKE A BETTER WORLD",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          20.052000045776367,
+          11.982650756835938
+        ],
+        [
+          265.3800048828125,
+          11.982650756835938
+        ],
+        [
+          265.3800048828125,
+          21.4068603515625
+        ],
+        [
+          20.052000045776367,
+          21.4068603515625
+        ]
+      ]
+    },
+    {
+      "title": "Robot Interconnection Cable",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          20.7421875,
+          36.6339111328125
+        ],
+        [
+          429.8299560546875,
+          36.6339111328125
+        ],
+        [
+          429.8299560546875,
+          57.2991943359375
+        ],
+        [
+          20.7421875,
+          57.2991943359375
+        ]
+      ]
+    },
+    {
+      "title": "Power Cable , Encoder Cable",
+      "heading_level": null,
+      "page_id": 3,
+      "polygon": [
+        [
+          238.0078125,
+          160.477294921875
+        ],
+        [
+          578.1170043945312,
+          160.477294921875
+        ],
+        [
+          578.1170043945312,
+          177.72398376464844
+        ],
+        [
+          238.0078125,
+          177.72398376464844
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          522.421875,
+          10.184326171875
+        ],
+        [
+          700.3125,
+          9.393310546875
+        ],
+        [
+          700.3125,
+          34.9530029296875
+        ],
+        [
+          522.421875,
+          35.7440185546875
+        ]
+      ]
+    },
+    {
+      "title": "Motion range of robot",
+      "heading_level": null,
+      "page_id": 4,
+      "polygon": [
+        [
+          21.26953125,
+          35.37322998046875
+        ],
+        [
+          311.3089904785156,
+          34.58221435546875
+        ],
+        [
+          311.3089904785156,
+          57.54638671875
+        ],
+        [
+          21.26953125,
+          58.33740234375
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          520.3125,
+          9.46746826171875
+        ],
+        [
+          701.015625,
+          9.46746826171875
+        ],
+        [
+          701.015625,
+          35.9912109375
+        ],
+        [
+          520.3125,
+          35.9912109375
+        ]
+      ]
+    },
+    {
+      "title": "Base Mounting Interface",
+      "heading_level": null,
+      "page_id": 5,
+      "polygon": [
+        [
+          22.32421875,
+          35.9417724609375
+        ],
+        [
+          342.8289794921875,
+          35.9417724609375
+        ],
+        [
+          342.8289794921875,
+          57.645263671875
+        ],
+        [
+          22.32421875,
+          57.645263671875
+        ]
+      ]
+    },
+    {
+      "title": "ROBOTS MAKE A BETTER WORLD",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          20.052000045776367,
+          11.951751708984375
+        ],
+        [
+          265.3800048828125,
+          11.951751708984375
+        ],
+        [
+          265.3800048828125,
+          21.320343017578125
+        ],
+        [
+          20.052000045776367,
+          21.320343017578125
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          522.7734375,
+          11.04949951171875
+        ],
+        [
+          698.5546875,
+          10.25848388671875
+        ],
+        [
+          698.5546875,
+          35.595703125
+        ],
+        [
+          522.7734375,
+          36.38671875
+        ]
+      ]
+    },
+    {
+      "title": "End Effector Flange",
+      "heading_level": null,
+      "page_id": 6,
+      "polygon": [
+        [
+          20.91796875,
+          36.8316650390625
+        ],
+        [
+          306.3089904785156,
+          36.0406494140625
+        ],
+        [
+          306.3089904785156,
+          57.249755859375
+        ],
+        [
+          20.91796875,
+          58.040771484375
+        ]
+      ]
+    },
+    {
+      "title": "Other Interfaces",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          21.7529296875,
+          35.00244140625
+        ],
+        [
+          252.80899047851562,
+          35.00244140625
+        ],
+        [
+          252.80899047851562,
+          57.4969482421875
+        ],
+        [
+          21.7529296875,
+          57.4969482421875
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 7,
+      "polygon": [
+        [
+          60.99609375,
+          99.2230224609375
+        ],
+        [
+          100.546875,
+          99.2230224609375
+        ],
+        [
+          100.546875,
+          111.038818359375
+        ],
+        [
+          60.99609375,
+          111.038818359375
+        ]
+      ]
+    },
+    {
+      "title": "Load Curve",
+      "heading_level": null,
+      "page_id": 8,
+      "polygon": [
+        [
+          19.4677734375,
+          35.5462646484375
+        ],
+        [
+          285.489013671875,
+          35.5462646484375
+        ],
+        [
+          285.489013671875,
+          57.5958251953125
+        ],
+        [
+          19.4677734375,
+          57.5958251953125
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 9,
+      "polygon": [
+        [
+          522.7734375,
+          9.628143310546875
+        ],
+        [
+          699.2578125,
+          9.628143310546875
+        ],
+        [
+          699.2578125,
+          35.9912109375
+        ],
+        [
+          522.7734375,
+          35.9912109375
+        ]
+      ]
+    },
+    {
+      "title": "Handle with crane",
+      "heading_level": null,
+      "page_id": 9,
+      "polygon": [
+        [
+          21.4013671875,
+          36.01593017578125
+        ],
+        [
+          348.8089599609375,
+          36.01593017578125
+        ],
+        [
+          348.8089599609375,
+          57.54638671875
+        ],
+        [
+          21.4013671875,
+          57.54638671875
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 10,
+      "polygon": [
+        [
+          521.3671875,
+          9.282073974609375
+        ],
+        [
+          699.9609375,
+          9.282073974609375
+        ],
+        [
+          699.9609375,
+          35.8428955078125
+        ],
+        [
+          521.3671875,
+          35.8428955078125
+        ]
+      ]
+    },
+    {
+      "title": "ROBOTS MAKE A BETTER WORLD",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          20.052000045776367,
+          11.964111328125
+        ],
+        [
+          267.58001708984375,
+          11.964111328125
+        ],
+        [
+          267.58001708984375,
+          24.7686767578125
+        ],
+        [
+          20.052000045776367,
+          24.7686767578125
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          522.0703125,
+          8.602294921875
+        ],
+        [
+          701.3671875,
+          8.602294921875
+        ],
+        [
+          701.3671875,
+          36.36199951171875
+        ],
+        [
+          522.0703125,
+          36.36199951171875
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          8.4375,
+          372.76611328125
+        ],
+        [
+          216.5625,
+          371.97509765625
+        ],
+        [
+          216.5625,
+          399.26513671875
+        ],
+        [
+          8.4375,
+          400.05615234375
+        ]
+      ]
+    },
+    {
+      "title": "",
+      "heading_level": null,
+      "page_id": 11,
+      "polygon": [
+        [
+          580.078125,
+          372.1728515625
+        ],
+        [
+          707.34375,
+          371.3818359375
+        ],
+        [
+          707.34375,
+          393.5302734375
+        ],
+        [
+          580.078125,
+          394.3212890625
+        ]
+      ]
+    }
+  ],
+  "page_stats": [
+    {
+      "page_id": 0,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          7
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Line",
+          3
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "Picture",
+          1
+        ],
+        [
+          "Text",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 1,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          192
+        ],
+        [
+          "TableCell",
+          34
+        ],
+        [
+          "Line",
+          27
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "Picture",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 2,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          160
+        ],
+        [
+          "TableCell",
+          33
+        ],
+        [
+          "Line",
+          16
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "Text",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 3,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          63
+        ],
+        [
+          "TableCell",
+          28
+        ],
+        [
+          "Line",
+          10
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Picture",
+          3
+        ],
+        [
+          "PageFooter",
+          2
+        ],
+        [
+          "Table",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 4,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          11
+        ],
+        [
+          "Line",
+          3
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Text",
+          2
+        ],
+        [
+          "PageHeader",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 5,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          75
+        ],
+        [
+          "Line",
+          20
+        ],
+        [
+          "Text",
+          4
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "TextInlineMath",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 6,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          73
+        ],
+        [
+          "Line",
+          20
+        ],
+        [
+          "TableCell",
+          16
+        ],
+        [
+          "SectionHeader",
+          3
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "Table",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "Text",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 7,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          7
+        ],
+        [
+          "Line",
+          3
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "Figure",
+          2
+        ],
+        [
+          "Text",
+          2
+        ],
+        [
+          "PageHeader",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 8,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          7
+        ],
+        [
+          "Text",
+          3
+        ],
+        [
+          "Line",
+          3
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "Figure",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 9,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          93
+        ],
+        [
+          "Line",
+          7
+        ],
+        [
+          "SectionHeader",
+          2
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "Picture",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 10,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          21
+        ],
+        [
+          "Line",
+          4
+        ],
+        [
+          "PageHeader",
+          1
+        ],
+        [
+          "SectionHeader",
+          1
+        ],
+        [
+          "Figure",
+          1
+        ],
+        [
+          "PageFooter",
+          1
+        ],
+        [
+          "Text",
+          1
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    },
+    {
+      "page_id": 11,
+      "text_extraction_method": "pdftext",
+      "block_counts": [
+        [
+          "Span",
+          21
+        ],
+        [
+          "Text",
+          5
+        ],
+        [
+          "SectionHeader",
+          4
+        ],
+        [
+          "Line",
+          3
+        ],
+        [
+          "Picture",
+          2
+        ]
+      ],
+      "block_metadata": {
+        "llm_request_count": 0,
+        "llm_error_count": 0,
+        "llm_tokens_used": 0
+      }
+    }
+  ],
+  "debug_data_path": "debug_data/SR02400401\u300a SIASUN SR210A-210-2.65 Specifications-CE\u300bA-0"
+}
