@@ -70,6 +70,8 @@ class Element{
 class Figure~Element~{
     base64 rawdata
 }
+style Element fill:lime
+style Figure fill:lightblue
 Element <|-- Figure
 class Cell {
     string c
@@ -87,14 +89,17 @@ Cell *-- Column
 Column *-- Row
 Row *-- Table
 Element <|-- Table
+style Table fill:lightblue
 
 
 class Paragraph~Element~{
     string text
 }
+style Paragraph fill:lightblue
 Element <|-- Paragraph
 
 class Markdown
+style Markdown fill:yellow
 
 class Section~Element~{
     +string summary
@@ -105,8 +110,86 @@ class Section~Element~{
     +List~Section~ subsections
     +init(Markdown md)
 }
+style Section fill:fuchsia
 
 Table *-- Section 
 Figure *-- Section 
 Section *-- Section 
+```
+
+## File system embedding
+
+The `ribosome` package provides a file system embedding feature that
+allows you to work with Markdown files directly from the file system.
+This feature is useful for managing and organizing your Markdown
+documents.
+
+``` mermaid
+---
+config:
+  theme: 'forest'
+  themeVariables:
+    primaryColor: '#BB2528'
+    primaryTextColor: '#fff'
+    primaryBorderColor: '#7C0000'
+    lineColor: '#F8B229'
+    secondaryColor: '#006100'
+    tertiaryColor: '#fff'
+---
+
+classDiagram
+class Element{
+    string summary
+}
+style Element fill:lime
+class File{
+    +string title
+    +Path path
+    +List~Section~ sections
+}
+Element <|-- File
+Element <|-- Section
+Section *-- File
+
+
+class Folder{
+    +string title
+    +Path path
+    +List~File~ files
+    +List~Folder~ subfolders
+    +init(Markdown md)
+}
+Element <|-- Folder
+File *-- Folder
+Folder *-- Folder
+style Folder fill:fuchsia
+```
+
+## Semantical tree with embedding vector space
+
+``` mermaid
+---
+config:
+  theme: 'forest'
+  themeVariables:
+    primaryColor: '#BB2528'
+    primaryTextColor: '#fff'
+    primaryBorderColor: '#7C0000'
+    lineColor: '#F8B229'
+    secondaryColor: '#006100'
+    tertiaryColor: '#fff'
+---
+
+graph LR;
+    subgraph 计算语义
+                text(文本) --> 内嵌
+    end
+        内嵌 --> 语义树
+    subgraph 检索
+        语义树 --> 摘要 --> 对象树
+        end
+
+        text --> raw[(原始文件)]
+        语义树 --> embedding[(向量数据库)]
+        对象树 --> markdown[(内容对象数据库)]
 ```

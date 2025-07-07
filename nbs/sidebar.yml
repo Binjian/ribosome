@@ -1,0 +1,8 @@
+website:
+  sidebar:
+    contents:
+      - index.ipynb
+      - 01.core.dom.ipynb
+      - 01.parsing.ms_office.marker.ipynb
+      - 01.parsing.ms_office.markitdown.ipynb
+      - 03.chroma_db.ipynb
