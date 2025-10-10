@@ -178,5 +178,9 @@ cython_debug/
 /.env
 /.idea/
 /db/
-/ribosome/*.py
+/ribosome/
 /.python-version
+/log/
+/ollama_logs.text
+/res/
+/.vscode/
