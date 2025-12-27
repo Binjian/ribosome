@@ -1,0 +1,50 @@
+{
+  "name": "siasun_robot",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for Siasun Robot programming language",
+  "author": "Siasun Robot Language Support",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Binjian/ribosome"
+  },
+  "keywords": [
+    "tree-sitter",
+    "parser",
+    "siasun",
+    "robot",
+    "robotics",
+    "industrial-robot"
+  ],
+  "tree-sitter": [
+    {
+      "scope": "source.siasun",
+      "file-types": [
+        "siasun",
+        "siasun_robot"
+      ],
+      "highlights": [
+        "queries/highlights.scm"
+      ],
+      "injections": [
+        "queries/injections.scm"
+      ]
+    }
+  ],
+  "main": "bindings/node",
+  "types": "bindings/node",
+  "files": [
+    "grammar.js",
+    "binding.gyp",
+    "bindings/node/*",
+    "bindings/rust/*",
+    "queries/*",
+    "src/**"
+  ],
+  "dependencies": {
+    "nan": "^2.17.0"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.20.0"
+  }
+}
