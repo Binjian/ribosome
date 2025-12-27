@@ -1,0 +1,60 @@
+NOP
+
+// Loop and Counter Demo
+// Demonstrates arithmetic operations and conditional loops
+
+TF #1
+
+SET P1 LPOS    // Position A
+SET P2 LPOS    // Position B
+
+// Initialize counters
+SET I1 0       // Loop counter
+SET I2 5       // Max iterations
+SET I3 0       // Direction flag (0=forward, 1=backward)
+
+// Initialize real variables
+SET R1 0.0     // Accumulated distance
+SET R2 100.0   // Distance per cycle
+
+L10
+// Check loop limit
+IF I1 >= I2 L99
+
+// Calculate current offset
+MUL R3 R2 I1
+
+// Move based on direction
+IF I3 = 1 L20
+
+// Forward movement
+MOVL P1 VL=500 ACC=50 CNT=0
+MOVL P2 VL=500 ACC=50 CNT=0
+GOTO L30
+
+L20
+// Backward movement
+MOVL P2 VL=500 ACC=50 CNT=0
+MOVL P1 VL=500 ACC=50 CNT=0
+
+L30
+// Update accumulator
+ADD R1 R2
+
+// Increment counter
+ADD I1 1
+
+// Toggle direction
+IF I3 = 0 L40
+SET I3 0
+GOTO L10
+
+L40
+SET I3 1
+GOTO L10
+
+L99
+// Final position
+MOVJ P1 VJ=100 ACC=100 CNT=0
+
+END
