@@ -14,10 +14,7 @@ module.exports = grammar({
     $.comment,
   ],
 
-  conflicts: ($) => [
-    // Conflict resolution between variable types and identifiers if necessary
-    [$._value, $.variable],
-  ],
+  word: ($) => $.identifier,
 
   rules: {
     source_file: ($) => repeat($._statement),
@@ -32,44 +29,38 @@ module.exports = grammar({
         $.io_statement,
         $.control_statement,
         $.macro_statement,
-        $.socket_statement, // Added based on [1]
-        $.empty_line
+        $.socket_statement
       ),
-
-    empty_line: ($) => /[\r\n]+/,
 
     comment: ($) =>
       token(
         choice(
           seq("//", /.*/),
-          seq(";", /.*/) // Source [2] mentions COMMENT format
+          seq(";", /.*/)
         )
       ),
 
-    // --- Program Structure [3] ---
+    // --- Program Structure ---
     program_header: ($) => "NOP",
     program_footer: ($) => "END",
 
-    // --- Identifiers & Variables [4] ---
+    // --- Identifiers & Variables ---
     identifier: ($) => /[a-zA-Z_][a-zA-Z0-9_]*/,
 
-    // Line Numbers (Optional, usually editor generated but can appear in text)
-    line_number: ($) => /\d+/,
-
-    // Variables [4]
+    // Variables
     variable: ($) =>
       choice(
-        $.var_i, // Integer: I1-I520
-        $.var_r, // Real: R1-R520
-        $.var_b, // Byte: B1-B100
-        $.var_s, // String: S1 or Str1
-        $.var_ls, // Local String: LS#1
-        $.var_p, // Local Position: P1
-        $.var_pr, // Global Position: PR1
-        $.var_si, // System Integer
-        $.var_sr, // System Real
-        $.var_io, // IO variables: IN#1, OUT#1
-        $.var_gio // Group IO: IG#1, OG#1
+        $.var_i,   // Integer: I1-I520
+        $.var_r,   // Real: R1-R520
+        $.var_b,   // Byte: B1-B100
+        $.var_s,   // String: S1 or Str1
+        $.var_ls,  // Local String: LS#1
+        $.var_p,   // Local Position: P1
+        $.var_pr,  // Global Position: PR1
+        $.var_si,  // System Integer
+        $.var_sr,  // System Real
+        $.var_io,  // IO variables: IN#1, OUT#1
+        $.var_gio  // Group IO: IG#1, OG#1
       ),
 
     var_i: ($) => /I\d+/,
@@ -77,54 +68,39 @@ module.exports = grammar({
     var_b: ($) => /B\d+/,
     var_s: ($) => /(Str|S#)\d+/,
     var_ls: ($) => /LS#\d+/,
-    // Position variables can have sub-fields (e.g., PR1.1) [5]
-    var_p: ($) => seq(/P\d+/, optional(seq(".", /\d+/))),
-    var_pr: ($) => seq(/PR\d+/, optional(seq(".", /\d+/))),
+    var_p: ($) => /P\d+(\.\d+)?/,
+    var_pr: ($) => /PR\d+(\.\d+)?/,
     var_si: ($) => /SI\d+/,
     var_sr: ($) => /SR\d+/,
-
-    // IO Variables [6]
-    var_io: ($) => choice(/IN#\d+/, /OT#\d+/, /OUT#\d+/, /AIN#\d+/, /AOUT#\d+/),
-    var_gio: ($) =>
-      choice(/IG#\d+/, /OG#\d+/, /IGH#\d+/, /OGH#\d+/, /IGFA#\d+/, /OGFA#\d+/),
+    var_io: ($) => /(IN|OT|OUT|AIN|AOUT)#\d+/,
+    var_gio: ($) => /(IG|OG|IGH|OGH|IGFA|OGFA)#\d+/,
 
     // Literals
-    number: ($) =>
-      choice(
-        /\d+(\.\d+)?/, // Floating point or Integer
-        /-\d+(\.\d+)?/
-      ),
-
+    number: ($) => /-?\d+(\.\d+)?/,
     string_literal: ($) => /"[^"]*"/,
 
-    // --- Motion Statements [7-16] ---
+    // Boolean values as keywords
+    bool_value: ($) => choice("ON", "OFF", "TRUE", "FALSE"),
+
+    // --- Motion Statements ---
     motion_statement: ($) =>
       seq(
-        choice("MOVJ", "MOVL", "MOVC", "MOVSPI", "MOVCIRA"),
+        field("command", choice("MOVJ", "MOVL", "MOVC", "MOVSPI", "MOVCIRA")),
         field("target", choice($.var_p, $.var_pr)),
         repeat($.motion_param),
-        optional("ET"), // External Tool [9]
-        optional($._statement_terminator)
+        optional("ET")
       ),
 
     motion_param: ($) =>
-      choice(
-        seq("VJ=", $._value), // Joint Speed %
-        seq("VL=", $._value), // Linear Speed mm/s
-        seq("VC=", $._value), // Circular Speed
-        seq("ACC=", $._value), // Acceleration
-        seq("CNT=", $._value), // Continuous trajectory (0-100)
-        seq("R=", $._value), // Radius (for CIRA)
-        seq("D=", $._value), // Distance (for SPI)
-        seq("SD=", $._value), // Stop Distance (for SPI)
-        seq("RTYPE=", $._value),
-        seq("OFFSET=", $._value),
-        seq("OVER=", $._value),
-        seq("UF=", $._value),
-        seq("INTERLOCK=", $._value) // [17]
+      seq(
+        field("param_name", choice(
+          "VJ=", "VL=", "VC=", "ACC=", "CNT=", "R=", "D=", "SD=",
+          "RTYPE=", "OFFSET=", "OVER=", "UF=", "INTERLOCK="
+        )),
+        field("param_value", $._value)
       ),
 
-    // --- Logic & Calculation Statements [4, 5, 18-27] ---
+    // --- Logic & Calculation Statements ---
     logic_statement: ($) =>
       choice($.assignment, $.math_operation, $.unary_operation),
 
@@ -132,28 +108,27 @@ module.exports = grammar({
       seq(
         "SET",
         field("destination", $.variable),
-        optional("="), // Manual shows SET I1=100 and SET I1 I2
+        optional("="),
         field("source", $._value),
-        // Specific handling for "N" batch assignment [22]
         optional(seq("N=", $._value, optional($.variable)))
       ),
 
     math_operation: ($) =>
       seq(
-        choice("ADD", "SUB", "MUL", "DIV", "SQRT", "SIN", "COS", "ATAN"),
+        field("op", choice("ADD", "SUB", "MUL", "DIV", "SQRT", "SIN", "COS", "ATAN")),
         field("operand1", $.variable),
         field("operand2", $._value),
-        optional(field("destination", $.variable)) // Some ops store in operand1, some have dest [5]
+        optional(field("destination", $.variable))
       ),
 
     unary_operation: ($) =>
       seq(
-        choice("INC", "DEC", "INT"), // INT is cast to int
+        field("op", choice("INC", "DEC", "INT")),
         field("operand", $.variable),
-        optional(field("source", $.variable)) // For INT I1 R1
+        optional(field("source", $.variable))
       ),
 
-    // --- I/O Statements [28-34] ---
+    // --- I/O Statements ---
     io_statement: ($) =>
       choice(
         $.out_statement,
@@ -164,11 +139,11 @@ module.exports = grammar({
 
     out_statement: ($) =>
       seq(
-        choice("OUT", "OUT_P", "OUT_T"),
-        field("port", choice($.var_io, $.var_gio, $.variable)),
+        field("command", choice("OUT", "OUT_P", "OUT_T")),
+        field("port", $.variable),
         "=",
-        field("value", choice("ON", "OFF", $._value)),
-        optional(seq(choice("D=", "T="), $._value)) // For OUT_P and OUT_T
+        field("value", $._value),
+        optional(seq(choice("D=", "T="), $._value))
       ),
 
     pulse_statement: ($) =>
@@ -176,28 +151,28 @@ module.exports = grammar({
         "PULSE",
         field("port", $.var_io),
         "=",
-        choice("ON", "OFF"),
+        $.bool_value,
         "T=",
-        $._value // Duration
+        $._value
       ),
 
     wait_statement: ($) =>
       seq(
         "WAIT",
         $.condition_expression,
-        optional(seq("T=", $._value)) // Timeout (-1 for infinite)
+        optional(seq("T=", $._value))
       ),
 
     analog_io_statement: ($) =>
       seq(
         choice("AIN", "AOUT"),
         choice(
-          seq($.var_r, /AI\d+/), // AIN R1 AI1
-          seq(/AO\d+/, "=", $._value) // AOUT AO1 = 5.0
+          seq($.var_r, /AI\d+/),
+          seq(/AO\d+/, "=", $._value)
         )
       ),
 
-    // --- Control Flow Statements [2, 32, 35-45] ---
+    // --- Control Flow Statements ---
     control_statement: ($) =>
       choice(
         $.goto_statement,
@@ -206,107 +181,108 @@ module.exports = grammar({
         $.if_statement,
         $.select_statement,
         $.loop_statement,
-        $.interrupt_statement, // IRQ
-        $.coord_statement // SET TF/UF
+        $.interrupt_statement,
+        $.coord_statement
       ),
 
     label_definition: ($) =>
-      seq(
-        choice("LABEL", "L"),
-        field("label_name", choice($.number, $.identifier))
-      ),
+      prec(2, seq(
+        field("keyword", choice("LABEL", "L")),
+        field("label_name", $.label_name)
+      )),
+
+    label_name: ($) => choice($.number, $.identifier),
 
     goto_statement: ($) =>
-      seq(
-        "GOTO",
+      seq("GOTO", $.goto_target),
+
+    goto_target: ($) =>
+      prec(1, seq(
         choice("L", "LABEL"),
-        field("target", choice($.number, $.identifier))
-      ),
+        field("target", $.label_name)
+      )),
 
     call_statement: ($) =>
       seq(
         "CALL",
-        // CALL can have a condition prefix [35] e.g. CALL IN#1=1 SUB1
         optional($.condition_expression),
         field("program", choice($.identifier, $.var_s)),
-        optional(seq("JOB", $._value)) // For cases like A01_CMN JobOrder
+        optional(seq("JOB", $._value))
       ),
 
-    return_statement: ($) => choice("RET", "RESUME"), // RESUME for interrupts
+    return_statement: ($) => choice("RET", "RESUME"),
 
-    // IF Structures [36-40]
+    // IF Structures
     if_statement: ($) =>
       choice(
         // Simple line IF: IF I1=1 L10
-        seq("IF", $.condition_expression, $.goto_target),
+        prec(2, seq("IF", $.condition_expression, $.goto_target)),
         // Block IF: IF THEN ... ENDIF
-        seq(
-          "IF",
-          "THEN",
+        prec(1, seq(
+          "IF", "THEN",
           $.condition_expression,
           repeat($._statement),
-          optional($.else_block),
+          optional($.else_clause),
           "ENDIF"
-        )
+        ))
       ),
 
-    else_block: ($) =>
-      seq(
-        choice("ELSE", seq("ELSE", "IF", $.condition_expression)),
-        repeat($._statement)
+    else_clause: ($) =>
+      choice(
+        seq("ELSE", repeat($._statement)),
+        seq("ELSEIF", $.condition_expression, repeat($._statement), optional($.else_clause))
       ),
 
-    goto_target: ($) =>
-      seq(choice("L", "LABEL"), choice($.number, $.identifier)),
-
-    // SELECT Structure [38]
+    // SELECT Structure
     select_statement: ($) =>
       seq(
         "SELECT",
         $.condition_expression,
-        choice(seq("CALL", $.identifier), seq("GOTO", $.goto_target))
+        choice(
+          seq("CALL", $.identifier),
+          seq("GOTO", $.goto_target)
+        )
       ),
 
-    // WHILE / Loops [43]
+    // WHILE Loop
     loop_statement: ($) =>
       seq(
         "WHILE",
         $._value,
         $.comparison_operator,
         $._value,
-        $.goto_target // Documentation shows WHILE jumping to a Label
+        $.goto_target
       ),
 
-    // Interrupts [46]
+    // Interrupts
     interrupt_statement: ($) =>
       seq(
         choice("IRQON", "IRQOFF"),
-        optional(seq("LEV=", $._value)), // Priority
+        optional(seq("LEV=", $._value)),
         optional($.condition_expression),
-        optional($.identifier) // Interrupt program name
+        optional($.identifier)
       ),
 
-    // Coordinate System [47]
-    coord_statement: ($) => seq("SET", choice("TF", "UF"), "#", $._value),
+    // Coordinate System
+    coord_statement: ($) =>
+      seq("SET", choice("TF", "UF"), "#", $._value),
 
-    // Macro Call [39]
+    // Macro Call
     macro_statement: ($) => seq("MACRO", $._value),
 
-    // Socket/String [1]
+    // Socket/String
     socket_statement: ($) =>
       seq(
         choice("TCPCREATE", "TCPSEND", "TCPRECV", "TCPCLOSE"),
-        repeat(seq($.identifier, "=", $._value)) // Key=Value style arguments
+        repeat(seq($.identifier, "=", $._value))
       ),
 
     // --- Shared Expressions ---
-
-    // Condition: I1 = 100, IN#1 = ON, R1 > 5.0
     condition_expression: ($) =>
       seq(
-        choice($.variable, $.var_io, $.var_gio),
-        $.comparison_operator,
-        $._value
+        field("left", $.variable),
+        field("operator", $.comparison_operator),
+        field("right", $._value)
       ),
 
     comparison_operator: ($) => choice("=", "==", ">", "<", "<>", ">=", "<="),
@@ -316,11 +292,8 @@ module.exports = grammar({
         $.number,
         $.string_literal,
         $.variable,
-        $.identifier, // For ON/OFF/TRUE/FALSE or constants
-        "ON",
-        "OFF"
+        $.bool_value,
+        $.identifier
       ),
-
-    _statement_terminator: ($) => /[\r\n]+/,
   },
 });
