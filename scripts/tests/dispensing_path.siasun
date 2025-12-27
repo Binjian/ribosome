@@ -1,0 +1,71 @@
+NOP
+
+// Adhesive Dispensing Path
+// Rectangular bead pattern with controlled speed
+
+TF #3    // Dispenser tool frame
+
+// Dispenser control outputs
+// OT#1 = Dispenser ON/OFF
+// OT#2 = Purge
+// OT#3 = Pressure boost
+
+// Path corners
+SET P1 LPOS    // Corner 1 (start)
+SET P2 LPOS    // Corner 2
+SET P3 LPOS    // Corner 3
+SET P4 LPOS    // Corner 4
+
+// Approach height
+SET R1 30.0    // mm above work
+
+// Dispense parameters
+SET I1 80      // Dispense speed (mm/s)
+SET I2 200     // Travel speed (mm/s)
+
+// === SETUP ===
+// Purge dispenser
+OUT OT#2=ON
+WAIT IN#1=ON T=1000
+OUT OT#2=OFF
+
+// Move to start position (above corner 1)
+MOVJ P1 VJ=50 ACC=80 CNT=0 OFFSET=0,0,R1,0,0,0
+
+// Lower to dispense height
+MOVL P1 VL=100 ACC=30 CNT=0
+
+// === START DISPENSE ===
+OUT OT#1=ON    // Dispenser ON
+
+// Dispense along rectangle
+// Side 1: P1 -> P2
+MOVL P2 VL=80 ACC=20 CNT=0
+
+// Side 2: P2 -> P3
+MOVL P3 VL=80 ACC=20 CNT=0
+
+// Side 3: P3 -> P4
+MOVL P4 VL=80 ACC=20 CNT=0
+
+// Side 4: P4 -> P1 (close loop)
+MOVL P1 VL=80 ACC=20 CNT=0
+
+// Slight overlap for seal
+MOVL P1 VL=80 ACC=20 CNT=0 OFFSET=10,0,0,0,0,0
+
+// === STOP DISPENSE ===
+OUT OT#1=OFF   // Dispenser OFF
+
+// Suck-back to prevent drip
+OUT OT#3=ON
+PULSE OT#3=ON T=200
+OUT OT#3=OFF
+
+// Lift from work
+MOVL P1 VL=200 ACC=50 CNT=0 OFFSET=0,0,R1,0,0,0
+
+// Return to safe position
+MOVJ P1 VJ=80 ACC=80 CNT=0 OFFSET=0,0,100,0,0,0
+
+END

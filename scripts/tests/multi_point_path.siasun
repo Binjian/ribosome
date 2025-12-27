@@ -1,0 +1,46 @@
+NOP
+
+// Multi-Point Path Following
+// Demonstrates continuous path with different motion types
+
+TF #1
+UF #1
+
+// Define waypoints
+SET P1 LPOS    // Start/Home
+SET P2 LPOS    // Point A
+SET P3 LPOS    // Point B
+SET P4 LPOS    // Point C
+SET P5 LPOS    // Point D
+SET P6 LPOS    // Point E
+
+// Speed settings
+SET I1 100     // High speed (%)
+SET I2 50      // Medium speed (%)
+SET I3 20      // Low speed (%)
+
+// Move to start (joint move, fast)
+MOVJ P1 VJ=100 ACC=100 CNT=0
+
+// Fast approach to first point
+MOVJ P2 VJ=80 ACC=80 CNT=50
+
+// Linear moves with continuous blending
+MOVL P3 VL=500 ACC=50 CNT=80
+MOVL P4 VL=500 ACC=50 CNT=80
+MOVL P5 VL=500 ACC=50 CNT=80
+MOVL P6 VL=500 ACC=50 CNT=0
+
+// Precise positioning at P6 (CNT=0 means stop)
+MOVL P6 VL=100 ACC=30 CNT=0
+
+// Return path with different speeds
+MOVL P5 VL=300 ACC=40 CNT=50
+MOVL P4 VL=400 ACC=50 CNT=50
+MOVL P3 VL=500 ACC=60 CNT=50
+MOVL P2 VL=600 ACC=70 CNT=50
+
+// Joint move back to home
+MOVJ P1 VJ=100 ACC=100 CNT=0
+
+END

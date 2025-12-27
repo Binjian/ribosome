@@ -1,0 +1,63 @@
+NOP
+
+// Automatic Tool Change Sequence
+// Demonstrates tool frame switching and tool changer I/O
+
+// Initial tool frame (no tool)
+TF #0
+
+// Tool changer positions
+SET P1 LPOS    // Home position
+SET P2 LPOS    // Tool 1 dock
+SET P3 LPOS    // Tool 2 dock
+SET P4 LPOS    // Tool 3 dock
+SET P5 LPOS    // Work position
+
+// Current tool (0=none, 1-3=tool number)
+SET I1 0
+
+// === PICK TOOL 1 ===
+// Move to tool 1 dock approach
+MOVJ P2 VJ=50 ACC=80 CNT=0 OFFSET=0,0,50,0,0,0
+
+// Move into dock
+MOVL P2 VL=100 ACC=30 CNT=0
+
+// Lock tool
+OUT OT#1=ON    // Tool lock actuator
+WAIT IN#1=ON T=2000    // Tool locked sensor
+
+// Set tool frame
+TF #1
+SET I1 1
+
+// Retract with tool
+MOVL P2 VL=100 ACC=30 CNT=0 OFFSET=0,0,50,0,0,0
+
+// Move to work position
+MOVJ P5 VJ=80 ACC=80 CNT=0
+
+// ... Perform work with Tool 1 ...
+
+// === RETURN TOOL 1 ===
+// Move to dock approach
+MOVJ P2 VJ=50 ACC=80 CNT=0 OFFSET=0,0,50,0,0,0
+
+// Insert into dock
+MOVL P2 VL=100 ACC=30 CNT=0
+
+// Unlock tool
+OUT OT#1=OFF   // Tool unlock
+WAIT IN#1=OFF T=2000
+
+// Clear tool frame
+TF #0
+SET I1 0
+
+// Retract without tool
+MOVL P2 VL=100 ACC=30 CNT=0 OFFSET=0,0,50,0,0,0
+
+// Return home
+MOVJ P1 VJ=100 ACC=100 CNT=0
+
+END

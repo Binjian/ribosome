@@ -1,0 +1,67 @@
+NOP
+
+// 3x3 Palletizing Pattern
+// Places 9 items in a grid pattern
+
+TF #1
+UF #1
+
+// Counter variables
+SET I1 0     // Row counter (0-2)
+SET I2 0     // Column counter (0-2)
+SET I3 0     // Total piece counter
+
+// Grid spacing (mm)
+SET R1 100.0   // X spacing
+SET R2 100.0   // Y spacing
+
+// Base positions
+SET P1 LPOS    // Pick position
+SET P2 LPOS    // Pallet origin (first place position)
+SET P10 LPOS   // Current place position
+
+// Open gripper
+OUT OT#1=OFF
+
+L10
+// Check if all 9 pieces done
+IF I3 >= 9 L99
+
+// === PICK SEQUENCE ===
+MOVJ P1 VJ=80 ACC=80 CNT=0 OFFSET=0,0,50,0,0,0
+MOVL P1 VL=300 ACC=50 CNT=0
+OUT OT#1=ON
+MOVL P1 VL=300 ACC=50 CNT=0 OFFSET=0,0,50,0,0,0
+
+// === CALCULATE PLACE OFFSET ===
+// X offset = I2 * R1 (column)
+// Y offset = I1 * R2 (row)
+SET R3 0.0
+SET R4 0.0
+MUL R3 I2 R1
+MUL R4 I1 R2
+
+// === PLACE SEQUENCE ===
+// Move to current grid position with offset
+MOVJ P2 VJ=80 ACC=80 CNT=0 OFFSET=0,0,100,0,0,0
+MOVL P2 VL=200 ACC=30 CNT=0
+OUT OT#1=OFF
+MOVL P2 VL=300 ACC=50 CNT=0 OFFSET=0,0,100,0,0,0
+
+// === UPDATE COUNTERS ===
+ADD I2 1        // Next column
+ADD I3 1        // Total count
+
+// Check if row complete
+IF I2 < 3 L10
+
+// Move to next row
+SET I2 0
+ADD I1 1
+GOTO L10
+
+L99
+// Return home
+MOVJ P1 VJ=100 ACC=100 CNT=0
+
+END

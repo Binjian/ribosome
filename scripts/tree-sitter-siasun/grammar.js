@@ -84,21 +84,49 @@ module.exports = grammar({
 
     // --- Motion Statements ---
     motion_statement: ($) =>
-      seq(
-        field("command", choice("MOVJ", "MOVL", "MOVC", "MOVSPI", "MOVCIRA")),
-        field("target", choice($.var_p, $.var_pr)),
-        repeat($.motion_param),
-        optional("ET")
+      choice(
+        // MOVC with via point and end point
+        seq(
+          field("command", "MOVC"),
+          field("via_point", choice($.var_p, $.var_pr)),
+          field("target", choice($.var_p, $.var_pr)),
+          repeat($.motion_param),
+          optional("ET")
+        ),
+        // Standard motion commands
+        seq(
+          field("command", choice("MOVJ", "MOVL", "MOVSPI", "MOVCIRA")),
+          field("target", choice($.var_p, $.var_pr)),
+          repeat($.motion_param),
+          optional("ET")
+        )
       ),
 
     motion_param: ($) =>
-      seq(
-        field("param_name", choice(
-          "VJ=", "VL=", "VC=", "ACC=", "CNT=", "R=", "D=", "SD=",
-          "RTYPE=", "OFFSET=", "OVER=", "UF=", "INTERLOCK="
-        )),
-        field("param_value", $._value)
+      choice(
+        // Regular single-value parameters
+        seq(
+          field("param_name", choice(
+            "VJ=", "VL=", "VC=", "ACC=", "CNT=", "R=", "D=", "SD=",
+            "RTYPE=", "OVER=", "UF=", "INTERLOCK="
+          )),
+          field("param_value", $._value)
+        ),
+        // OFFSET with comma-separated values (X,Y,Z,Rx,Ry,Rz)
+        seq(
+          "OFFSET=",
+          $.offset_values
+        )
       ),
+
+    offset_values: ($) =>
+      seq(
+        $.offset_component,
+        repeat(seq(",", $.offset_component))
+      ),
+
+    offset_component: ($) =>
+      choice($.number, $.var_r, $.var_i, $.identifier),
 
     // --- Logic & Calculation Statements ---
     logic_statement: ($) =>
@@ -186,10 +214,15 @@ module.exports = grammar({
       ),
 
     label_definition: ($) =>
-      prec(2, seq(
-        field("keyword", choice("LABEL", "L")),
-        field("label_name", $.label_name)
-      )),
+      choice(
+        // Standard label: LABEL name or L name
+        prec(2, seq(
+          field("keyword", choice("LABEL", "L")),
+          field("label_name", $.label_name)
+        )),
+        // Standalone label: L10 (L followed immediately by number)
+        prec(3, /L\d+/)
+      ),
 
     label_name: ($) => choice($.number, $.identifier),
 
@@ -197,10 +230,15 @@ module.exports = grammar({
       seq("GOTO", $.goto_target),
 
     goto_target: ($) =>
-      prec(1, seq(
-        choice("L", "LABEL"),
-        field("target", $.label_name)
-      )),
+      choice(
+        // Standalone label reference: L10
+        prec(2, /L\d+/),
+        // Keyword-based reference: L name or LABEL name
+        prec(1, seq(
+          choice("L", "LABEL"),
+          field("target", $.label_name)
+        ))
+      ),
 
     call_statement: ($) =>
       seq(
@@ -263,12 +301,15 @@ module.exports = grammar({
         optional($.identifier)
       ),
 
-    // Coordinate System
+    // Coordinate System (handled by macro_statement now)
     coord_statement: ($) =>
       seq("SET", choice("TF", "UF"), "#", $._value),
 
-    // Macro Call
-    macro_statement: ($) => seq("MACRO", $._value),
+    // Tool/User Frame commands
+    macro_statement: ($) => choice(
+      seq("MACRO", $._value),
+      seq(choice("TF", "UF"), "#", $.number)
+    ),
 
     // Socket/String
     socket_statement: ($) =>
@@ -279,11 +320,11 @@ module.exports = grammar({
 
     // --- Shared Expressions ---
     condition_expression: ($) =>
-      seq(
+      prec(2, seq(
         field("left", $.variable),
         field("operator", $.comparison_operator),
         field("right", $._value)
-      ),
+      )),
 
     comparison_operator: ($) => choice("=", "==", ">", "<", "<>", ">=", "<="),
 

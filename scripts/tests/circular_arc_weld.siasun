@@ -1,0 +1,47 @@
+NOP
+
+// Circular Arc Welding Path
+// Welds a circular arc using MOVC command
+
+TF #2    // Welding torch tool frame
+
+// Arc parameters
+SET R1 50.0    // Arc radius (mm)
+SET R2 180.0   // Arc angle (degrees)
+
+// Positions
+SET P1 LPOS    // Arc start point
+SET P2 LPOS    // Arc via point (middle)
+SET P3 LPOS    // Arc end point
+SET P4 LPOS    // Approach point
+
+// Welding parameters
+SET I1 200     // Wire feed speed
+SET I2 22      // Voltage
+
+// Approach weld start
+MOVJ P4 VJ=50 ACC=80 CNT=0
+MOVL P1 VL=100 ACC=30 CNT=0
+
+// Start arc (welding ON)
+OUT OT#5=ON    // Arc start signal
+OUT OT#6=ON    // Gas flow
+
+// Wait for arc establish
+WAIT IN#10=ON T=2000
+
+// Weld circular arc
+// MOVC moves through via point (P2) to end point (P3)
+MOVC P2 P3 VL=80 ACC=20 CNT=0
+
+// Stop welding
+OUT OT#5=OFF   // Arc stop
+OUT OT#6=OFF   // Gas off (after delay)
+
+// Retract from weld
+MOVL P4 VL=100 ACC=30 CNT=0
+
+// Return home
+MOVJ P1 VJ=80 ACC=80 CNT=0 OFFSET=0,0,100,0,0,0
+
+END

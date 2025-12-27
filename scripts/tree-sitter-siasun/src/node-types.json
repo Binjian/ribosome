@@ -364,7 +364,7 @@
     "fields": {
       "target": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "label_name",
@@ -501,7 +501,7 @@
     "fields": {
       "keyword": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "L",
@@ -515,7 +515,7 @@
       },
       "label_name": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "label_name",
@@ -733,7 +733,7 @@
     "fields": {
       "param_name": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "ACC=",
@@ -749,10 +749,6 @@
           },
           {
             "type": "INTERLOCK=",
-            "named": false
-          },
-          {
-            "type": "OFFSET=",
             "named": false
           },
           {
@@ -791,7 +787,7 @@
       },
       "param_value": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "bool_value",
@@ -815,6 +811,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "offset_values",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -860,6 +866,20 @@
             "named": true
           }
         ]
+      },
+      "via_point": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "var_p",
+            "named": true
+          },
+          {
+            "type": "var_pr",
+            "named": true
+          }
+        ]
       }
     },
     "children": {
@@ -868,6 +888,48 @@
       "types": [
         {
           "type": "motion_param",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "offset_component",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "var_i",
+          "named": true
+        },
+        {
+          "type": "var_r",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "offset_values",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "offset_component",
           "named": true
         }
       ]
@@ -1244,6 +1306,10 @@
   },
   {
     "type": "#",
+    "named": false
+  },
+  {
+    "type": ",",
     "named": false
   },
   {

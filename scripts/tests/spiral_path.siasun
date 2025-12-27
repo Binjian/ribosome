@@ -1,0 +1,55 @@
+NOP
+
+// Spiral Path Generation
+// Creates a spiral pattern using incremental offsets
+
+TF #1
+
+// Spiral parameters
+SET R1 5.0     // Radial increment per revolution (mm)
+SET R2 10.0    // Z increment per revolution (mm)
+SET R3 0.0     // Current radius
+SET R4 0.0     // Current angle (degrees)
+SET R5 0.0     // Current Z offset
+
+// Loop control
+SET I1 0       // Step counter
+SET I2 36      // Steps per revolution (10 degrees each)
+SET I3 3       // Number of revolutions
+
+// Starting position
+SET P1 LPOS    // Center of spiral
+
+// Move to start
+MOVJ P1 VJ=80 ACC=80 CNT=0
+
+// Spiral loop
+L10
+// Check if complete
+IF I1 >= 108 L99    // 36 steps x 3 revolutions
+
+// Calculate current angle increment
+SET R6 10.0    // Angle step (degrees)
+
+// Update radius (increases gradually)
+DIV R7 I1 I2   // Revolution number
+MUL R3 R7 R1   // Current radius = revolution * radial_increment
+
+// Update Z
+MUL R5 R7 R2   // Current Z = revolution * Z_increment
+
+// Move with calculated offset
+// Note: Actual X,Y would need trig functions (simplified here)
+MOVL P1 VL=200 ACC=30 CNT=80 OFFSET=R3,0,R5,0,0,0
+
+// Increment counter
+ADD I1 1
+
+// Continue loop
+GOTO L10
+
+L99
+// Return to start
+MOVJ P1 VJ=80 ACC=80 CNT=0
+
+END

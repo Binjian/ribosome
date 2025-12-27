@@ -1,0 +1,55 @@
+NOP
+
+// Pick and Place Operation
+// Moves between pick station and place station
+
+// Set tool frame for gripper
+TF #1
+
+// Define positions
+SET P1 LPOS    // Home position
+SET P2 LPOS    // Pick approach
+SET P3 LPOS    // Pick position
+SET P4 LPOS    // Place approach
+SET P5 LPOS    // Place position
+
+// Initialize gripper (open)
+OUT OT#1=OFF
+
+// Move to home
+MOVJ P1 VJ=100 ACC=100 CNT=0
+
+// Approach pick position (fast)
+MOVJ P2 VJ=80 ACC=80 CNT=50
+
+// Move down to pick (slow, linear)
+MOVL P3 VL=200 ACC=30 CNT=0
+
+// Close gripper
+OUT OT#1=ON
+
+// Wait for gripper to close
+WAIT OT#1=ON T=500
+
+// Lift from pick
+MOVL P2 VL=300 ACC=50 CNT=50
+
+// Move to place approach
+MOVJ P4 VJ=80 ACC=80 CNT=50
+
+// Move down to place
+MOVL P5 VL=200 ACC=30 CNT=0
+
+// Open gripper
+OUT OT#1=OFF
+
+// Wait for gripper to open
+WAIT OT#1=OFF T=300
+
+// Retract from place
+MOVL P4 VL=300 ACC=50 CNT=50
+
+// Return to home
+MOVJ P1 VJ=100 ACC=100 CNT=0
+
+END
