@@ -1,53 +1,79 @@
-root ::= (_statement)*
+# Siasun Robot Language GBNF Grammar
+# Converted from tree-sitter grammar.js
 
-_statement ::= (program_header | program_footer | label_definition | motion_statement | logic_statement | io_statement | control_statement | macro_statement | socket_statement)
-_value ::= (number | string_literal | variable | bool_value | identifier)
-analog_io_statement ::= ("AIN" | "AOUT") (var_r "AI\\d+" | "AO\\d+" "=" _value)
-assignment ::= "SET" variable ("=" | "") _value ("N=" _value (variable | "") | "")
-bool_value ::= ("ON" | "OFF" | "TRUE" | "FALSE")
-call_statement ::= "CALL" (condition_expression | "") (identifier | var_s) ("JOB" _value | "")
-comment ::= ("//" [\x00-\xFF]* | ";" [\x00-\xFF]*)
-comparison_operator ::= ("=" | "==" | ">" | "<" | "<>" | ">=" | "<=")
+source_file ::= _statement*
+
+_statement ::= program_header | program_footer | label_definition | motion_statement | logic_statement | io_statement | control_statement | macro_statement | socket_statement
+
+comment ::= '//' /[^\n]*/ | ';' /[^\n]*/
+
+program_header ::= 'NOP'
+program_footer ::= 'END'
+
+identifier ::= /[a-zA-Z_][a-zA-Z0-9_]*/
+
+variable ::= var_i | var_r | var_b | var_s | var_ls | var_p | var_pr | var_si | var_sr | var_io | var_gio
+var_i ::= /I\d+/
+var_r ::= /R\d+/
+var_b ::= /B\d+/
+var_s ::= /(Str|S#)\d+/
+var_ls ::= /LS#\d+/
+var_p ::= /P\d+(\.\d+)?/
+var_pr ::= /PR\d+(\.\d+)?/
+var_si ::= /SI\d+/
+var_sr ::= /SR\d+/
+var_io ::= /(IN|OT|OUT|AIN|AOUT)#\d+/
+var_gio ::= /(IG|OG|IGH|OGH|IGFA|OGFA)#\d+/
+
+number ::= /-?\d+(\.\d+)?/
+string_literal ::= '"' /[^"]*/ '"'
+bool_value ::= 'ON' | 'OFF' | 'TRUE' | 'FALSE'
+
+motion_statement ::= ( 'MOVC' via_point target motion_param* 'ET'? )
+                  | ( ( 'MOVJ' | 'MOVL' | 'MOVSPI' | 'MOVCIRA' ) target motion_param* 'ET'? )
+via_point ::= var_p | var_pr
+target ::= var_p | var_pr
+motion_param ::= ( ( 'VJ=' | 'VL=' | 'VC=' | 'ACC=' | 'CNT=' | 'R=' | 'D=' | 'SD=' | 'RTYPE=' | 'OVER=' | 'UF=' | 'INTERLOCK=' ) _value )
+              | ( 'OFFSET=' offset_values )
+offset_values ::= offset_component (',' offset_component)*
+offset_component ::= number | var_r | var_i | identifier
+
+logic_statement ::= assignment | math_operation | unary_operation
+assignment ::= 'SET' destination ('='?) source ( 'N=' _value variable? )?
+destination ::= variable
+source ::= _value
+math_operation ::= ( 'ADD' | 'SUB' | 'MUL' | 'DIV' | 'SQRT' | 'SIN' | 'COS' | 'ATAN' ) operand1 operand2 destination?
+operand1 ::= variable
+operand2 ::= _value
+unary_operation ::= ( 'INC' | 'DEC' | 'INT' ) operand source?
+operand ::= variable
+
+io_statement ::= out_statement | pulse_statement | wait_statement | analog_io_statement
+out_statement ::= ( 'OUT' | 'OUT_P' | 'OUT_T' ) port '=' value ( ( 'D=' | 'T=' ) _value )?
+port ::= variable
+value ::= _value
+pulse_statement ::= 'PULSE' var_io '=' bool_value 'T=' _value
+wait_statement ::= 'WAIT' condition_expression ( 'T=' _value )?
+analog_io_statement ::= ( 'AIN' | 'AOUT' ) ( var_r /AI\d+/ | /AO\d+/ '=' _value )
+
+control_statement ::= goto_statement | call_statement | return_statement | if_statement | select_statement | loop_statement | interrupt_statement | coord_statement
+label_definition ::= ( ( 'LABEL' | 'L' ) label_name ) | /L\d+/
+label_name ::= number | identifier
+goto_statement ::= 'GOTO' goto_target
+goto_target ::= /L\d+/ | ( ( 'L' | 'LABEL' ) label_name )
+call_statement ::= 'CALL' condition_expression? program ( 'JOB' _value )?
+program ::= identifier | var_s
+return_statement ::= 'RET' | 'RESUME'
+if_statement ::= ( 'IF' condition_expression goto_target )
+              | ( 'IF' 'THEN' condition_expression _statement* else_clause? 'ENDIF' )
+else_clause ::= ( 'ELSE' _statement* ) | ( 'ELSEIF' condition_expression _statement* else_clause? )
+select_statement ::= 'SELECT' condition_expression ( 'CALL' identifier | 'GOTO' goto_target )
+loop_statement ::= 'WHILE' _value comparison_operator _value goto_target
+interrupt_statement ::= ( 'IRQON' | 'IRQOFF' ) ( 'LEV=' _value )? condition_expression? identifier?
+coord_statement ::= 'SET' ( 'TF' | 'UF' ) '#' _value
+macro_statement ::= ( 'MACRO' _value ) | ( ( 'TF' | 'UF' ) '#' number )
+socket_statement ::= ( 'TCPCREATE' | 'TCPSEND' | 'TCPRECV' | 'TCPCLOSE' ) ( identifier '=' _value )*
+
 condition_expression ::= variable comparison_operator _value
-control_statement ::= (goto_statement | call_statement | return_statement | if_statement | select_statement | loop_statement | interrupt_statement | coord_statement)
-coord_statement ::= "SET" ("TF" | "UF") "#" _value
-else_clause ::= ("ELSE" (_statement)* | "ELSEIF" condition_expression (_statement)* (else_clause | ""))
-goto_statement ::= "GOTO" goto_target
-goto_target ::= ("L\\d+" | ("L" | "LABEL") label_name)
-identifier ::= [a-zA-Z_] [a-zA-Z0-9_]*
-if_statement ::= ("IF" condition_expression goto_target | "IF" "THEN" condition_expression (_statement)* (else_clause | "") "ENDIF")
-interrupt_statement ::= ("IRQON" | "IRQOFF") ("LEV=" _value | "") (condition_expression | "") (identifier | "")
-io_statement ::= (out_statement | pulse_statement | wait_statement | analog_io_statement)
-label_definition ::= (("LABEL" | "L") label_name | "L\\d+")
-label_name ::= (number | identifier)
-logic_statement ::= (assignment | math_operation | unary_operation)
-loop_statement ::= "WHILE" _value comparison_operator _value goto_target
-macro_statement ::= ("MACRO" _value | ("TF" | "UF") "#" number)
-math_operation ::= ("ADD" | "SUB" | "MUL" | "DIV" | "SQRT" | "SIN" | "COS" | "ATAN") variable _value (variable | "")
-motion_param ::= (("VJ=" | "VL=" | "VC=" | "ACC=" | "CNT=" | "R=" | "D=" | "SD=" | "RTYPE=" | "OVER=" | "UF=" | "INTERLOCK=") _value | "OFFSET=" offset_values)
-motion_statement ::= ("MOVC" (var_p | var_pr) (var_p | var_pr) (motion_param)* ("ET" | "") | ("MOVJ" | "MOVL" | "MOVSPI" | "MOVCIRA") (var_p | var_pr) (motion_param)* ("ET" | ""))
-number ::= ("-"?) [0-9]+ ("." [0-9]+)?
-offset_component ::= (number | var_r | var_i | identifier)
-offset_values ::= offset_component ("," offset_component)*
-out_statement ::= ("OUT" | "OUT_P" | "OUT_T") variable "=" _value (("D=" | "T=") _value | "")
-program_footer ::= "END"
-program_header ::= "NOP"
-pulse_statement ::= "PULSE" var_io "=" bool_value "T=" _value
-return_statement ::= ("RET" | "RESUME")
-select_statement ::= "SELECT" condition_expression ("CALL" identifier | "GOTO" goto_target)
-socket_statement ::= ("TCPCREATE" | "TCPSEND" | "TCPRECV" | "TCPCLOSE") (identifier "=" _value)*
-string_literal ::= "\"[^\"]*\""
-unary_operation ::= ("INC" | "DEC" | "INT") variable (variable | "")
-var_b ::= "B\\d+"
-var_gio ::= "(IG|OG|IGH|OGH|IGFA|OGFA)#\\d+"
-var_i ::= "I\\d+"
-var_io ::= "(IN|OT|OUT|AIN|AOUT)#\\d+"
-var_ls ::= "LS#\\d+"
-var_p ::= "P\\d+(\\.\\d+)?"
-var_pr ::= "PR\\d+(\\.\\d+)?"
-var_r ::= "R\\d+"
-var_s ::= "(Str|S#)\\d+"
-var_si ::= "SI\\d+"
-var_sr ::= "SR\\d+"
-variable ::= (var_i | var_r | var_b | var_s | var_ls | var_p | var_pr | var_si | var_sr | var_io | var_gio)
-wait_statement ::= "WAIT" condition_expression ("T=" _value | "")
+comparison_operator ::= '=' | '==' | '>' | '<' | '<>' | '>=' | '<='
+_value ::= number | string_literal | variable | bool_value | identifier
