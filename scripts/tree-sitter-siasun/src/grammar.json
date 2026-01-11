@@ -1,58 +1,961 @@
 {
   "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/grammar.schema.json",
   "name": "siasun_robot",
-  "word": "identifier",
   "rules": {
-    "source_file": {
-      "type": "REPEAT",
+    "prog": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "instStart"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "inst"
+          }
+        },
+        {
+          "type": "SYMBOL",
+          "name": "instEnd"
+        }
+      ]
+    },
+    "inst": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "opExp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "NEWLINE"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NOTE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "COMMENT"
+        }
+      ]
+    },
+    "instStart": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "NOP"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NEWLINE"
+        }
+      ]
+    },
+    "instEnd": {
+      "type": "STRING",
+      "value": "END"
+    },
+    "COMMENT": {
+      "type": "TOKEN",
       "content": {
-        "type": "SYMBOL",
-        "name": "_statement"
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "// "
+          },
+          {
+            "type": "PATTERN",
+            "value": ".*"
+          }
+        ]
       }
     },
-    "_statement": {
+    "NOTE": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "! "
+          },
+          {
+            "type": "PATTERN",
+            "value": ".*"
+          }
+        ]
+      }
+    },
+    "NEWLINE": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\r?\\n"
+      }
+    },
+    "SPACE": {
+      "type": "TOKEN",
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "STRING",
+            "value": " "
+          },
+          {
+            "type": "STRING",
+            "value": "\t"
+          }
+        ]
+      }
+    },
+    "INT": {
+      "type": "TOKEN",
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "0"
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "PATTERN",
+                "value": "[1-9]"
+              },
+              {
+                "type": "REPEAT",
+                "content": {
+                  "type": "PATTERN",
+                  "value": "[0-9]"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "FLOAT": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "REPEAT1",
+            "content": {
+              "type": "PATTERN",
+              "value": "[0-9]"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "."
+          },
+          {
+            "type": "REPEAT1",
+            "content": {
+              "type": "PATTERN",
+              "value": "[0-9]"
+            }
+          }
+        ]
+      }
+    },
+    "STRING": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "\""
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "PATTERN",
+              "value": "[^\"]"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "\""
+          }
+        ]
+      }
+    },
+    "ID": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "[a-zA-Z0-9_.]+"
+      }
+    },
+    "number": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "-"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "INT"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "-"
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "FLOAT"
+            }
+          ]
+        }
+      ]
+    },
+    "varIndex": {
       "type": "CHOICE",
       "members": [
         {
           "type": "SYMBOL",
-          "name": "program_header"
+          "name": "INT"
         },
         {
-          "type": "SYMBOL",
-          "name": "program_footer"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "label_definition"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "motion_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "logic_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "io_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "control_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "macro_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "socket_statement"
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "I"
+            },
+            {
+              "type": "STRING",
+              "value": "["
+            },
+            {
+              "type": "SYMBOL",
+              "name": "INT"
+            },
+            {
+              "type": "STRING",
+              "value": "]"
+            }
+          ]
         }
       ]
     },
-    "comment": {
-      "type": "TOKEN",
+    "iVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "I"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "hVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "H"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "bVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "B"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "floatVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "R"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "strVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "S"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "intVar": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "iVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "hVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "bVar"
+        }
+      ]
+    },
+    "numVar": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "intVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "floatVar"
+        }
+      ]
+    },
+    "posGVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "PR"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "posLVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "P"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "positionVar": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "posGVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "posLVar"
+        }
+      ]
+    },
+    "positionVarCoordScalar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "P"
+            },
+            {
+              "type": "STRING",
+              "value": "PR"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        },
+        {
+          "type": "STRING",
+          "value": "."
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "X"
+            },
+            {
+              "type": "STRING",
+              "value": "Y"
+            },
+            {
+              "type": "STRING",
+              "value": "Z"
+            },
+            {
+              "type": "STRING",
+              "value": "RZ"
+            }
+          ]
+        }
+      ]
+    },
+    "positionVarJointScalar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "P"
+            },
+            {
+              "type": "STRING",
+              "value": "PR"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        },
+        {
+          "type": "STRING",
+          "value": "."
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "J1"
+            },
+            {
+              "type": "STRING",
+              "value": "J2"
+            },
+            {
+              "type": "STRING",
+              "value": "J3"
+            },
+            {
+              "type": "STRING",
+              "value": "J4"
+            }
+          ]
+        }
+      ]
+    },
+    "positionVarScalar": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "positionVarCoordScalar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "positionVarJointScalar"
+        }
+      ]
+    },
+    "diVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "DI"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "doVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "DO"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "giBVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GIB"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "giHVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GIH"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "giIVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GII"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "giFVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GIF"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "goBVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GOB"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "goHVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GOH"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "goIVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GOI"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "goFVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GOF"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "anInVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "AI"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "anOutVar": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "AO"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "digitalIOVar": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "diVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "giBVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "giHVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "giIVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "giFVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "doVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "goBVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "goHVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "goIVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "goFVar"
+        }
+      ]
+    },
+    "assignOp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "="
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "opExp": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "copInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "ioInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "baseInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "moveInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "operateInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "controlInst"
+        }
+      ]
+    },
+    "copInst": {
+      "type": "PREC_LEFT",
+      "value": 1,
       "content": {
         "type": "CHOICE",
         "members": [
@@ -61,11 +964,15 @@
             "members": [
               {
                 "type": "STRING",
-                "value": "//"
+                "value": "INV"
               },
               {
-                "type": "PATTERN",
-                "value": ".*"
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "positionVar"
               }
             ]
           },
@@ -73,1166 +980,712 @@
             "type": "SEQ",
             "members": [
               {
-                "type": "STRING",
-                "value": ";"
+                "type": "SYMBOL",
+                "name": "intVar"
               },
               {
-                "type": "PATTERN",
-                "value": ".*"
+                "type": "SYMBOL",
+                "name": "assignOp"
+              },
+              {
+                "type": "STRING",
+                "value": "NOT"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
               }
             ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "floatVar"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "assignOp"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": "ATAN"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "SQRT"
+                  }
+                ]
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "floatVar"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "assignOp"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": "SIN"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "COS"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "TAN"
+                  }
+                ]
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "floatVar"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "assignOp"
+              },
+              {
+                "type": "STRING",
+                "value": "ATAN2"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarCoordScalar"
+                  }
+                ]
+              },
+              {
+                "type": "SYMBOL",
+                "name": "assignOp"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": "MAX"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "MIN"
+                  }
+                ]
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "numVar"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "assignOp"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": "LOG"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "POW"
+                  }
+                ]
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "numVar"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "assignOp"
+              },
+              {
+                "type": "STRING",
+                "value": "ABS"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "SPACE"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "numVar"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "number"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVarScalar"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "SYMBOL",
+            "name": "operateExp"
           }
         ]
       }
     },
-    "program_header": {
-      "type": "STRING",
-      "value": "NOP"
-    },
-    "program_footer": {
-      "type": "STRING",
-      "value": "END"
-    },
-    "identifier": {
-      "type": "PATTERN",
-      "value": "[a-zA-Z_][a-zA-Z0-9_]*"
-    },
-    "variable": {
+    "operateExp": {
       "type": "CHOICE",
       "members": [
         {
           "type": "SYMBOL",
-          "name": "var_i"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_r"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_b"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_s"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_ls"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_p"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_pr"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_si"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_sr"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_io"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_gio"
-        }
-      ]
-    },
-    "var_i": {
-      "type": "PATTERN",
-      "value": "I\\d+"
-    },
-    "var_r": {
-      "type": "PATTERN",
-      "value": "R\\d+"
-    },
-    "var_b": {
-      "type": "PATTERN",
-      "value": "B\\d+"
-    },
-    "var_s": {
-      "type": "PATTERN",
-      "value": "(Str|S#)\\d+"
-    },
-    "var_ls": {
-      "type": "PATTERN",
-      "value": "LS#\\d+"
-    },
-    "var_p": {
-      "type": "PATTERN",
-      "value": "P\\d+(\\.\\d+)?"
-    },
-    "var_pr": {
-      "type": "PATTERN",
-      "value": "PR\\d+(\\.\\d+)?"
-    },
-    "var_si": {
-      "type": "PATTERN",
-      "value": "SI\\d+"
-    },
-    "var_sr": {
-      "type": "PATTERN",
-      "value": "SR\\d+"
-    },
-    "var_io": {
-      "type": "PATTERN",
-      "value": "(IN|OT|OUT|AIN|AOUT)#\\d+"
-    },
-    "var_gio": {
-      "type": "PATTERN",
-      "value": "(IG|OG|IGH|OGH|IGFA|OGFA)#\\d+"
-    },
-    "number": {
-      "type": "PATTERN",
-      "value": "-?\\d+(\\.\\d+)?"
-    },
-    "string_literal": {
-      "type": "PATTERN",
-      "value": "\"[^\"]*\""
-    },
-    "bool_value": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "ON"
-        },
-        {
-          "type": "STRING",
-          "value": "OFF"
-        },
-        {
-          "type": "STRING",
-          "value": "TRUE"
-        },
-        {
-          "type": "STRING",
-          "value": "FALSE"
-        }
-      ]
-    },
-    "motion_statement": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SEQ",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "command",
-              "content": {
-                "type": "STRING",
-                "value": "MOVC"
-              }
-            },
-            {
-              "type": "FIELD",
-              "name": "via_point",
-              "content": {
-                "type": "CHOICE",
-                "members": [
-                  {
-                    "type": "SYMBOL",
-                    "name": "var_p"
-                  },
-                  {
-                    "type": "SYMBOL",
-                    "name": "var_pr"
-                  }
-                ]
-              }
-            },
-            {
-              "type": "FIELD",
-              "name": "target",
-              "content": {
-                "type": "CHOICE",
-                "members": [
-                  {
-                    "type": "SYMBOL",
-                    "name": "var_p"
-                  },
-                  {
-                    "type": "SYMBOL",
-                    "name": "var_pr"
-                  }
-                ]
-              }
-            },
-            {
-              "type": "REPEAT",
-              "content": {
-                "type": "SYMBOL",
-                "name": "motion_param"
-              }
-            },
-            {
-              "type": "CHOICE",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": "ET"
-                },
-                {
-                  "type": "BLANK"
-                }
-              ]
-            }
-          ]
+          "name": "numScalarOpExp"
         },
         {
           "type": "SEQ",
           "members": [
             {
-              "type": "FIELD",
-              "name": "command",
-              "content": {
-                "type": "CHOICE",
-                "members": [
-                  {
-                    "type": "STRING",
-                    "value": "MOVJ"
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "MOVL"
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "MOVSPI"
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "MOVCIRA"
-                  }
-                ]
-              }
-            },
-            {
-              "type": "FIELD",
-              "name": "target",
-              "content": {
-                "type": "CHOICE",
-                "members": [
-                  {
-                    "type": "SYMBOL",
-                    "name": "var_p"
-                  },
-                  {
-                    "type": "SYMBOL",
-                    "name": "var_pr"
-                  }
-                ]
-              }
-            },
-            {
-              "type": "REPEAT",
-              "content": {
-                "type": "SYMBOL",
-                "name": "motion_param"
-              }
-            },
-            {
-              "type": "CHOICE",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": "ET"
-                },
-                {
-                  "type": "BLANK"
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    "motion_param": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SEQ",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "param_name",
-              "content": {
-                "type": "CHOICE",
-                "members": [
-                  {
-                    "type": "STRING",
-                    "value": "VJ="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "VL="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "VC="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "ACC="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "CNT="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "R="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "D="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "SD="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "RTYPE="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "OVER="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "UF="
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "INTERLOCK="
-                  }
-                ]
-              }
-            },
-            {
-              "type": "FIELD",
-              "name": "param_value",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_value"
-              }
-            }
-          ]
-        },
-        {
-          "type": "SEQ",
-          "members": [
-            {
-              "type": "STRING",
-              "value": "OFFSET="
+              "type": "SYMBOL",
+              "name": "positionVar"
             },
             {
               "type": "SYMBOL",
-              "name": "offset_values"
+              "name": "assignOp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "SEQ",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "SPACE"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "+"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "SPACE"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "positionVar"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "SEQ",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "SPACE"
+                  },
+                  {
+                    "type": "STRING",
+                    "value": "+"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "SPACE"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "strVar"
+                  }
+                ]
+              }
             }
           ]
         }
       ]
     },
-    "offset_values": {
+    "numScalarOpExp": {
       "type": "SEQ",
       "members": [
         {
-          "type": "SYMBOL",
-          "name": "offset_component"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVarCoordScalar"
+            }
+          ]
         },
         {
-          "type": "REPEAT",
-          "content": {
-            "type": "SEQ",
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "copOpExp"
+        }
+      ]
+    },
+    "copOpExp": {
+      "type": "PREC_LEFT",
+      "value": 2,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "CHOICE",
             "members": [
               {
-                "type": "STRING",
-                "value": ","
+                "type": "SEQ",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": "("
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "SPACE"
+                  }
+                ]
+              },
+              {
+                "type": "BLANK"
+              }
+            ]
+          },
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "number"
               },
               {
                 "type": "SYMBOL",
-                "name": "offset_component"
+                "name": "numVar"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "positionVarCoordScalar"
               }
             ]
-          }
-        }
-      ]
-    },
-    "offset_component": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SYMBOL",
-          "name": "number"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_r"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "var_i"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "identifier"
-        }
-      ]
-    },
-    "logic_statement": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SYMBOL",
-          "name": "assignment"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "math_operation"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "unary_operation"
-        }
-      ]
-    },
-    "assignment": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "SET"
-        },
-        {
-          "type": "FIELD",
-          "name": "destination",
-          "content": {
-            "type": "SYMBOL",
-            "name": "variable"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "STRING",
-              "value": "="
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "FIELD",
-          "name": "source",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_value"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
+          },
+          {
+            "type": "REPEAT",
+            "content": {
               "type": "SEQ",
               "members": [
                 {
-                  "type": "STRING",
-                  "value": "N="
+                  "type": "SYMBOL",
+                  "name": "SPACE"
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": "+"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "-"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "*"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "/"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "&&"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "||"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "|"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "&"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "<<"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": ">>"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "^"
+                    }
+                  ]
                 },
                 {
                   "type": "SYMBOL",
-                  "name": "_value"
+                  "name": "SPACE"
                 },
                 {
                   "type": "CHOICE",
                   "members": [
                     {
                       "type": "SYMBOL",
-                      "name": "variable"
+                      "name": "number"
                     },
                     {
-                      "type": "BLANK"
+                      "type": "SYMBOL",
+                      "name": "numVar"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "positionVarCoordScalar"
                     }
                   ]
                 }
               ]
-            },
-            {
-              "type": "BLANK"
             }
-          ]
-        }
-      ]
-    },
-    "math_operation": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "FIELD",
-          "name": "op",
-          "content": {
+          },
+          {
             "type": "CHOICE",
             "members": [
               {
-                "type": "STRING",
-                "value": "ADD"
-              },
-              {
-                "type": "STRING",
-                "value": "SUB"
-              },
-              {
-                "type": "STRING",
-                "value": "MUL"
-              },
-              {
-                "type": "STRING",
-                "value": "DIV"
-              },
-              {
-                "type": "STRING",
-                "value": "SQRT"
-              },
-              {
-                "type": "STRING",
-                "value": "SIN"
-              },
-              {
-                "type": "STRING",
-                "value": "COS"
-              },
-              {
-                "type": "STRING",
-                "value": "ATAN"
-              }
-            ]
-          }
-        },
-        {
-          "type": "FIELD",
-          "name": "operand1",
-          "content": {
-            "type": "SYMBOL",
-            "name": "variable"
-          }
-        },
-        {
-          "type": "FIELD",
-          "name": "operand2",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_value"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "destination",
-              "content": {
-                "type": "SYMBOL",
-                "name": "variable"
-              }
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        }
-      ]
-    },
-    "unary_operation": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "FIELD",
-          "name": "op",
-          "content": {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "STRING",
-                "value": "INC"
-              },
-              {
-                "type": "STRING",
-                "value": "DEC"
-              },
-              {
-                "type": "STRING",
-                "value": "INT"
-              }
-            ]
-          }
-        },
-        {
-          "type": "FIELD",
-          "name": "operand",
-          "content": {
-            "type": "SYMBOL",
-            "name": "variable"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "source",
-              "content": {
-                "type": "SYMBOL",
-                "name": "variable"
-              }
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        }
-      ]
-    },
-    "io_statement": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SYMBOL",
-          "name": "out_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "pulse_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "wait_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "analog_io_statement"
-        }
-      ]
-    },
-    "out_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "FIELD",
-          "name": "command",
-          "content": {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "STRING",
-                "value": "OUT"
-              },
-              {
-                "type": "STRING",
-                "value": "OUT_P"
-              },
-              {
-                "type": "STRING",
-                "value": "OUT_T"
-              }
-            ]
-          }
-        },
-        {
-          "type": "FIELD",
-          "name": "port",
-          "content": {
-            "type": "SYMBOL",
-            "name": "variable"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": "="
-        },
-        {
-          "type": "FIELD",
-          "name": "value",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_value"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "CHOICE",
-                  "members": [
-                    {
-                      "type": "STRING",
-                      "value": "D="
-                    },
-                    {
-                      "type": "STRING",
-                      "value": "T="
-                    }
-                  ]
-                },
-                {
-                  "type": "SYMBOL",
-                  "name": "_value"
-                }
-              ]
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        }
-      ]
-    },
-    "pulse_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "PULSE"
-        },
-        {
-          "type": "FIELD",
-          "name": "port",
-          "content": {
-            "type": "SYMBOL",
-            "name": "var_io"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": "="
-        },
-        {
-          "type": "SYMBOL",
-          "name": "bool_value"
-        },
-        {
-          "type": "STRING",
-          "value": "T="
-        },
-        {
-          "type": "SYMBOL",
-          "name": "_value"
-        }
-      ]
-    },
-    "wait_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "WAIT"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "condition_expression"
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": "T="
-                },
-                {
-                  "type": "SYMBOL",
-                  "name": "_value"
-                }
-              ]
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        }
-      ]
-    },
-    "analog_io_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "STRING",
-              "value": "AIN"
-            },
-            {
-              "type": "STRING",
-              "value": "AOUT"
-            }
-          ]
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "SYMBOL",
-                  "name": "var_r"
-                },
-                {
-                  "type": "PATTERN",
-                  "value": "AI\\d+"
-                }
-              ]
-            },
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "PATTERN",
-                  "value": "AO\\d+"
-                },
-                {
-                  "type": "STRING",
-                  "value": "="
-                },
-                {
-                  "type": "SYMBOL",
-                  "name": "_value"
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    "control_statement": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SYMBOL",
-          "name": "goto_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "call_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "return_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "if_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "select_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "loop_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "interrupt_statement"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "coord_statement"
-        }
-      ]
-    },
-    "label_definition": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "PREC",
-          "value": 2,
-          "content": {
-            "type": "SEQ",
-            "members": [
-              {
-                "type": "FIELD",
-                "name": "keyword",
-                "content": {
-                  "type": "CHOICE",
-                  "members": [
-                    {
-                      "type": "STRING",
-                      "value": "LABEL"
-                    },
-                    {
-                      "type": "STRING",
-                      "value": "L"
-                    }
-                  ]
-                }
-              },
-              {
-                "type": "FIELD",
-                "name": "label_name",
-                "content": {
-                  "type": "SYMBOL",
-                  "name": "label_name"
-                }
-              }
-            ]
-          }
-        },
-        {
-          "type": "PREC",
-          "value": 3,
-          "content": {
-            "type": "PATTERN",
-            "value": "L\\d+"
-          }
-        }
-      ]
-    },
-    "label_name": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "SYMBOL",
-          "name": "number"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "identifier"
-        }
-      ]
-    },
-    "goto_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "GOTO"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "goto_target"
-        }
-      ]
-    },
-    "goto_target": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "PREC",
-          "value": 2,
-          "content": {
-            "type": "PATTERN",
-            "value": "L\\d+"
-          }
-        },
-        {
-          "type": "PREC",
-          "value": 1,
-          "content": {
-            "type": "SEQ",
-            "members": [
-              {
-                "type": "CHOICE",
-                "members": [
-                  {
-                    "type": "STRING",
-                    "value": "L"
-                  },
-                  {
-                    "type": "STRING",
-                    "value": "LABEL"
-                  }
-                ]
-              },
-              {
-                "type": "FIELD",
-                "name": "target",
-                "content": {
-                  "type": "SYMBOL",
-                  "name": "label_name"
-                }
-              }
-            ]
-          }
-        }
-      ]
-    },
-    "call_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "CALL"
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "condition_expression"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "FIELD",
-          "name": "program",
-          "content": {
-            "type": "CHOICE",
-            "members": [
-              {
-                "type": "SYMBOL",
-                "name": "identifier"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "var_s"
-              }
-            ]
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": "JOB"
-                },
-                {
-                  "type": "SYMBOL",
-                  "name": "_value"
-                }
-              ]
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        }
-      ]
-    },
-    "return_statement": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "RET"
-        },
-        {
-          "type": "STRING",
-          "value": "RESUME"
-        }
-      ]
-    },
-    "if_statement": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "PREC",
-          "value": 2,
-          "content": {
-            "type": "SEQ",
-            "members": [
-              {
-                "type": "STRING",
-                "value": "IF"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "condition_expression"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "goto_target"
-              }
-            ]
-          }
-        },
-        {
-          "type": "PREC",
-          "value": 1,
-          "content": {
-            "type": "SEQ",
-            "members": [
-              {
-                "type": "STRING",
-                "value": "IF"
-              },
-              {
-                "type": "STRING",
-                "value": "THEN"
-              },
-              {
-                "type": "SYMBOL",
-                "name": "condition_expression"
-              },
-              {
-                "type": "REPEAT",
-                "content": {
-                  "type": "SYMBOL",
-                  "name": "_statement"
-                }
-              },
-              {
-                "type": "CHOICE",
+                "type": "SEQ",
                 "members": [
                   {
                     "type": "SYMBOL",
-                    "name": "else_clause"
+                    "name": "SPACE"
                   },
                   {
-                    "type": "BLANK"
+                    "type": "STRING",
+                    "value": ")"
                   }
                 ]
               },
               {
-                "type": "STRING",
-                "value": "ENDIF"
+                "type": "BLANK"
               }
             ]
           }
-        }
-      ]
+        ]
+      }
     },
-    "else_clause": {
+    "baseInst": {
       "type": "CHOICE",
       "members": [
+        {
+          "type": "SYMBOL",
+          "name": "setInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "setPInst"
+        },
         {
           "type": "SEQ",
           "members": [
             {
               "type": "STRING",
-              "value": "ELSE"
+              "value": "GETP"
             },
             {
-              "type": "REPEAT",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_statement"
-              }
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "setExtAxisInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "clearInst"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "STRLEN"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
             }
           ]
         },
@@ -1241,173 +1694,424 @@
           "members": [
             {
               "type": "STRING",
-              "value": "ELSEIF"
+              "value": "STRFIND"
             },
             {
               "type": "SYMBOL",
-              "name": "condition_expression"
+              "name": "SPACE"
             },
             {
-              "type": "REPEAT",
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "STRSUB"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "STRCMP"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "GETAT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "STRFINDEND"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "STRREVERSE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "STRSPLIT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "INT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "SPRINTF"
+            },
+            {
+              "type": "REPEAT1",
               "content": {
-                "type": "SYMBOL",
-                "name": "_statement"
+                "type": "SEQ",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "SPACE"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "strVar"
+                  }
+                ]
               }
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "setFrameInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "str2iInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "str2rInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "i2strInst"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "r2strInst"
+        }
+      ]
+    },
+    "setInst": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "SET"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "SET"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
             },
             {
               "type": "CHOICE",
               "members": [
                 {
                   "type": "SYMBOL",
-                  "name": "else_clause"
-                },
-                {
-                  "type": "BLANK"
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    "select_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "SELECT"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "condition_expression"
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SEQ",
-              "members": [
-                {
-                  "type": "STRING",
-                  "value": "CALL"
+                  "name": "numVar"
                 },
                 {
                   "type": "SYMBOL",
-                  "name": "identifier"
+                  "name": "positionVarScalar"
                 }
               ]
             },
             {
-              "type": "SEQ",
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
               "members": [
                 {
-                  "type": "STRING",
-                  "value": "GOTO"
+                  "type": "SYMBOL",
+                  "name": "positionVarScalar"
                 },
                 {
                   "type": "SYMBOL",
-                  "name": "goto_target"
+                  "name": "numVar"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "number"
                 }
               ]
             }
           ]
-        }
-      ]
-    },
-    "loop_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "WHILE"
         },
         {
-          "type": "SYMBOL",
-          "name": "_value"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "comparison_operator"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "_value"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "goto_target"
-        }
-      ]
-    },
-    "interrupt_statement": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "CHOICE",
+          "type": "SEQ",
           "members": [
             {
               "type": "STRING",
-              "value": "IRQON"
+              "value": "SET"
             },
             {
-              "type": "STRING",
-              "value": "IRQOFF"
-            }
-          ]
-        },
-        {
-          "type": "CHOICE",
-          "members": [
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
             {
-              "type": "SEQ",
+              "type": "SYMBOL",
+              "name": "strVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
               "members": [
                 {
-                  "type": "STRING",
-                  "value": "LEV="
+                  "type": "SYMBOL",
+                  "name": "strVar"
                 },
                 {
                   "type": "SYMBOL",
-                  "name": "_value"
+                  "name": "STRING"
                 }
               ]
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "condition_expression"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "identifier"
-            },
-            {
-              "type": "BLANK"
             }
           ]
         }
       ]
     },
-    "coord_statement": {
+    "setPInst": {
       "type": "SEQ",
       "members": [
         {
           "type": "STRING",
-          "value": "SET"
+          "value": "SETP"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "positionVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "STRING",
+          "value": "FRAME"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
         },
         {
           "type": "CHOICE",
@@ -1423,16 +2127,84 @@
           ]
         },
         {
-          "type": "STRING",
-          "value": "#"
+          "type": "SYMBOL",
+          "name": "SPACE"
         },
         {
-          "type": "SYMBOL",
-          "name": "_value"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            }
+          ]
         }
       ]
     },
-    "macro_statement": {
+    "tnValue": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "TN"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "INT"
+        }
+      ]
+    },
+    "setExtAxisInst": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "SETEXTAXIS"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "positionVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "ID"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            }
+          ]
+        }
+      ]
+    },
+    "clearInst": {
       "type": "CHOICE",
       "members": [
         {
@@ -1440,13 +2212,774 @@
           "members": [
             {
               "type": "STRING",
-              "value": "MACRO"
+              "value": "CLEAR"
             },
             {
               "type": "SYMBOL",
-              "name": "_value"
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
             }
           ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "CLEAR"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "hVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "hVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "CLEAR"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "bVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "bVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "CLEAR"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "floatVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "floatVar"
+            }
+          ]
+        }
+      ]
+    },
+    "setFrameInst": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "SETFRAME"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "TF"
+            },
+            {
+              "type": "STRING",
+              "value": "UF"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "INT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            }
+          ]
+        }
+      ]
+    },
+    "str2iInst": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "STR2I"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "strVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "iVar"
+        }
+      ]
+    },
+    "str2rInst": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "STR2R"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "strVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "floatVar"
+        }
+      ]
+    },
+    "i2strInst": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "I2STR"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "iVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "strVar"
+        }
+      ]
+    },
+    "r2strInst": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "R2STR"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "floatVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "strVar"
+        }
+      ]
+    },
+    "ioInst": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "IN"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "iVar"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "floatVar"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "digitalIOVar"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "outExp"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "ANIN"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "floatVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "anInVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "ANOUT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "anOutVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "positionVarScalar"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "numVar"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "number"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "outExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "OUT"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "doVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "goBVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "goHVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "goIVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "goFVar"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            }
+          ]
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "SPACE"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "tDIS"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "assignOp"
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "number"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "intVar"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "tDIS": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "T"
+        },
+        {
+          "type": "STRING",
+          "value": "DIS"
+        }
+      ]
+    },
+    "controlInst": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "ifExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "whileExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "labelExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "gotoExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "delayExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "waitExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "callExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "paracallExp"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "UALM"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": "CODE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "INT"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "intVar"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "switchExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "forExp"
+        },
+        {
+          "type": "STRING",
+          "value": "PAUSE"
+        }
+      ]
+    },
+    "ifExp": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "IF"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "multiConExp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": ":"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "gotoExp"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "callExp"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "outExp"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "delayExp"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "waitExp"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "IF"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "multiConExp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "NEWLINE"
+            },
+            {
+              "type": "REPEAT1",
+              "content": {
+                "type": "SYMBOL",
+                "name": "inst"
+              }
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": "ELSE"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "NEWLINE"
+                    },
+                    {
+                      "type": "REPEAT1",
+                      "content": {
+                        "type": "SYMBOL",
+                        "name": "inst"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            },
+            {
+              "type": "STRING",
+              "value": "ENDIF"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "IF"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "multiConExp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "NEWLINE"
+            },
+            {
+              "type": "REPEAT1",
+              "content": {
+                "type": "SYMBOL",
+                "name": "inst"
+              }
+            },
+            {
+              "type": "REPEAT",
+              "content": {
+                "type": "SEQ",
+                "members": [
+                  {
+                    "type": "STRING",
+                    "value": "ELSEIF"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "SPACE"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "multiConExp"
+                  },
+                  {
+                    "type": "SYMBOL",
+                    "name": "NEWLINE"
+                  },
+                  {
+                    "type": "REPEAT1",
+                    "content": {
+                      "type": "SYMBOL",
+                      "name": "inst"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "STRING",
+              "value": "ENDIF"
+            }
+          ]
+        }
+      ]
+    },
+    "whileExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "WHILE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "INT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "multiConExp"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NEWLINE"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "whileOpExp"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "ENDWHILE"
+        }
+      ]
+    },
+    "whileOpExp": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "inst"
         },
         {
           "type": "SEQ",
@@ -1456,27 +2989,331 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "TF"
+                  "value": "CONTINUE"
                 },
                 {
                   "type": "STRING",
-                  "value": "UF"
+                  "value": "BREAK"
                 }
               ]
             },
             {
-              "type": "STRING",
-              "value": "#"
-            },
-            {
               "type": "SYMBOL",
-              "name": "number"
+              "name": "NEWLINE"
             }
           ]
         }
       ]
     },
-    "socket_statement": {
+    "multiConExp": {
+      "type": "PREC_LEFT",
+      "value": 1,
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "conditionExp"
+              },
+              {
+                "type": "REPEAT",
+                "content": {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "SPACE"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "AND"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "SPACE"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "conditionExp"
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "conditionExp"
+              },
+              {
+                "type": "REPEAT",
+                "content": {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "SPACE"
+                    },
+                    {
+                      "type": "STRING",
+                      "value": "OR"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "SPACE"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "conditionExp"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "conditionExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVarScalar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "digitalIOVar"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "relationOp"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVarScalar"
+            }
+          ]
+        }
+      ]
+    },
+    "relationOp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "=="
+            },
+            {
+              "type": "STRING",
+              "value": "!="
+            },
+            {
+              "type": "STRING",
+              "value": ">"
+            },
+            {
+              "type": "STRING",
+              "value": ">="
+            },
+            {
+              "type": "STRING",
+              "value": "<"
+            },
+            {
+              "type": "STRING",
+              "value": "<="
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        }
+      ]
+    },
+    "labelExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "LABEL"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "STRING"
+        }
+      ]
+    },
+    "gotoExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "GOTO"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "STRING"
+        }
+      ]
+    },
+    "callExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "CALL"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "jobOrBackgroundFile"
+        }
+      ]
+    },
+    "delayExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "DELAY"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "STRING",
+          "value": "T"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            }
+          ]
+        }
+      ]
+    },
+    "waitExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "WAIT"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "digitalIOVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "STRING",
+          "value": "T"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            }
+          ]
+        }
+      ]
+    },
+    "paracallExp": {
       "type": "SEQ",
       "members": [
         {
@@ -1484,144 +3321,1548 @@
           "members": [
             {
               "type": "STRING",
+              "value": "START_BG"
+            },
+            {
+              "type": "STRING",
+              "value": "STOP_BG"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "jobOrBackgroundFile"
+        }
+      ]
+    },
+    "jobOrBackgroundFile": {
+      "type": "SYMBOL",
+      "name": "ID"
+    },
+    "marcoFile": {
+      "type": "SYMBOL",
+      "name": "ID"
+    },
+    "switchExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "SWITCH"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NEWLINE"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "caseExp"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "DEFAULT"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NEWLINE"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "switchOpExp"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "BREAK"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NEWLINE"
+        },
+        {
+          "type": "STRING",
+          "value": "ENDSWITCH"
+        }
+      ]
+    },
+    "caseExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "CASE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "strVar"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NEWLINE"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "switchOpExp"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "BREAK"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NEWLINE"
+        }
+      ]
+    },
+    "switchOpExp": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "inst"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "BREAK"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "NEWLINE"
+            }
+          ]
+        }
+      ]
+    },
+    "forExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "FOR"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "intVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "intVar"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": ">"
+            },
+            {
+              "type": "STRING",
+              "value": ">="
+            },
+            {
+              "type": "STRING",
+              "value": "<"
+            },
+            {
+              "type": "STRING",
+              "value": "<="
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "STRING",
+          "value": "STEP"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "-"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "INT"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "NEWLINE"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "whileOpExp"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "ENDFOR"
+        }
+      ]
+    },
+    "moveInst": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "MOVJ"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "velocityAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "accAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "crAssign"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "SPACE"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "additionalInst"
+                    }
+                  ]
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "MOVL"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "velocityAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "accAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "crAssign"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "SPACE"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "additionalInst"
+                    }
+                  ]
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "MOVC"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "velocityAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "accAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "crAssign"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SEQ",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "SPACE"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "additionalInst"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "SEQ",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "SPACE"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": ":"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "SPACE"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "SET"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "SPACE"
+                        },
+                        {
+                          "type": "STRING",
+                          "value": "TYPE"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "assignOp"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "INT"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "BLANK"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "MOVS"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "velocityAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "accAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "crAssign"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "JUMP"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "velocityAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "accAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "crAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "lhAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "mhAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "rhAssign"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "JUMPL"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "velocityAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "accAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "crAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "lhAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "mhAssign"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "rhAssign"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "ARMCHANGE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "LEFT"
+                },
+                {
+                  "type": "STRING",
+                  "value": "RIGHT"
+                },
+                {
+                  "type": "STRING",
+                  "value": "AUTO"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "velocityAssign"
+            }
+          ]
+        }
+      ]
+    },
+    "velocityAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "V"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "numVar"
+            }
+          ]
+        }
+      ]
+    },
+    "accAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "ACC"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "number"
+        }
+      ]
+    },
+    "cntAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "CNT"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "number"
+        }
+      ]
+    },
+    "crAssign": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "cntAssign"
+        },
+        {
+          "type": "STRING",
+          "value": "FINE"
+        }
+      ]
+    },
+    "additionalInst": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": ":"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "skipLaExp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "outExp"
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "TOOL_OFFSET"
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SEQ",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "SPACE"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "positionVar"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "USER_OFFSET"
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SEQ",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "SPACE"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "positionVar"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "skipLaExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "SKIP"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "STRING"
+        }
+      ]
+    },
+    "lhAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "LH"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "number"
+        }
+      ]
+    },
+    "mhAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "MH"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "number"
+        }
+      ]
+    },
+    "rhAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "RH"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "number"
+        }
+      ]
+    },
+    "operateInst": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "irqOnExp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "irqOffExp"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "TIMER START"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": "INDEX"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "INT"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "TIMER STOP"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": "INDEX"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "INT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "iVar"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "floatVar"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "SKIP"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": "CONDITION"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "digitalIOVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": "=="
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "USER_OFFSET_CONDITION"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "ufValue"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "TOOL_OFFSET_CONDITION"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "positionVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tfValue"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "RECORDMOTIONSTART"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "tAssign"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "RECORDMOTIONSTOP"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "fAssign"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
               "value": "TCPCREATE"
             },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "STRING"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": "SERVERIP"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "ID"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": "PORT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "INT"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "intVar"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
             {
               "type": "STRING",
               "value": "TCPSEND"
             },
             {
-              "type": "STRING",
-              "value": "TCPRECV"
+              "type": "SYMBOL",
+              "name": "SPACE"
             },
             {
-              "type": "STRING",
-              "value": "TCPCLOSE"
+              "type": "SYMBOL",
+              "name": "STRING"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "strVar"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "number"
+                }
+              ]
             }
           ]
         },
         {
-          "type": "REPEAT",
-          "content": {
-            "type": "SEQ",
-            "members": [
-              {
-                "type": "SYMBOL",
-                "name": "identifier"
-              },
-              {
-                "type": "STRING",
-                "value": "="
-              },
-              {
-                "type": "SYMBOL",
-                "name": "_value"
-              }
-            ]
-          }
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "TCPRECV"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "STRING"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "number"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "strVar"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "number"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "intVar"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "STRING",
+              "value": "TIMEOUT"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "assignOp"
+            },
+            {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "SYMBOL",
+                  "name": "number"
+                },
+                {
+                  "type": "SYMBOL",
+                  "name": "intVar"
+                }
+              ]
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "TCPCLOSE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "SPACE"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "STRING"
+            }
+          ]
         }
       ]
     },
-    "condition_expression": {
-      "type": "PREC",
-      "value": 2,
-      "content": {
-        "type": "SEQ",
-        "members": [
-          {
-            "type": "FIELD",
-            "name": "left",
-            "content": {
-              "type": "SYMBOL",
-              "name": "variable"
-            }
-          },
-          {
-            "type": "FIELD",
-            "name": "operator",
-            "content": {
-              "type": "SYMBOL",
-              "name": "comparison_operator"
-            }
-          },
-          {
-            "type": "FIELD",
-            "name": "right",
-            "content": {
-              "type": "SYMBOL",
-              "name": "_value"
-            }
-          }
-        ]
-      }
-    },
-    "comparison_operator": {
-      "type": "CHOICE",
+    "irqOnExp": {
+      "type": "SEQ",
       "members": [
         {
           "type": "STRING",
-          "value": "="
+          "value": "IRQON"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "levAssign"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "diVar"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "iVar"
+            }
+          ]
+        },
+        {
+          "type": "SYMBOL",
+          "name": "SPACE"
         },
         {
           "type": "STRING",
           "value": "=="
         },
         {
-          "type": "STRING",
-          "value": ">"
+          "type": "SYMBOL",
+          "name": "SPACE"
         },
-        {
-          "type": "STRING",
-          "value": "<"
-        },
-        {
-          "type": "STRING",
-          "value": "<>"
-        },
-        {
-          "type": "STRING",
-          "value": ">="
-        },
-        {
-          "type": "STRING",
-          "value": "<="
-        }
-      ]
-    },
-    "_value": {
-      "type": "CHOICE",
-      "members": [
         {
           "type": "SYMBOL",
           "name": "number"
         },
         {
           "type": "SYMBOL",
-          "name": "string_literal"
+          "name": "SPACE"
         },
         {
           "type": "SYMBOL",
-          "name": "variable"
+          "name": "jobOrBackgroundFile"
+        }
+      ]
+    },
+    "irqOffExp": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "IRQOFF"
         },
         {
           "type": "SYMBOL",
-          "name": "bool_value"
+          "name": "SPACE"
         },
         {
           "type": "SYMBOL",
-          "name": "identifier"
+          "name": "levAssign"
+        }
+      ]
+    },
+    "levAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "LEV"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "INT"
+        }
+      ]
+    },
+    "ufValue": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "UF"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "tfValue": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "TF"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "SYMBOL",
+          "name": "varIndex"
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
+    "fAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "F"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            }
+          ]
+        }
+      ]
+    },
+    "tAssign": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "T"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "assignOp"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "number"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "intVar"
+            }
+          ]
         }
       ]
     }
   },
   "extras": [
     {
-      "type": "PATTERN",
-      "value": "\\s"
-    },
-    {
       "type": "SYMBOL",
-      "name": "comment"
+      "name": "SPACE"
     }
   ],
   "conflicts": [],

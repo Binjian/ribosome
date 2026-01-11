@@ -1,221 +1,52 @@
 [
   {
-    "type": "analog_io_statement",
+    "type": "accAssign",
     "named": true,
     "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "bool_value",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "var_r",
-          "named": true
-        },
-        {
-          "type": "variable",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "assignment",
-    "named": true,
-    "fields": {
-      "destination": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      },
-      "source": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bool_value",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "string_literal",
-            "named": true
-          },
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      }
-    },
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
-          "type": "bool_value",
-          "named": true
-        },
-        {
-          "type": "identifier",
+          "type": "assignOp",
           "named": true
         },
         {
           "type": "number",
-          "named": true
-        },
-        {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "variable",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "bool_value",
+    "type": "additionalInst",
     "named": true,
-    "fields": {}
-  },
-  {
-    "type": "call_statement",
-    "named": true,
-    "fields": {
-      "program": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "var_s",
-            "named": true
-          }
-        ]
-      }
-    },
+    "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
-          "type": "bool_value",
+          "type": "SPACE",
           "named": true
         },
         {
-          "type": "condition_expression",
+          "type": "outExp",
           "named": true
         },
         {
-          "type": "identifier",
+          "type": "positionVar",
           "named": true
         },
         {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "variable",
+          "type": "skipLaExp",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "comparison_operator",
-    "named": true,
-    "fields": {}
-  },
-  {
-    "type": "condition_expression",
-    "named": true,
-    "fields": {
-      "left": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      },
-      "operator": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "comparison_operator",
-            "named": true
-          }
-        ]
-      },
-      "right": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bool_value",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "string_literal",
-            "named": true
-          },
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "control_statement",
+    "type": "anInVar",
     "named": true,
     "fields": {},
     "children": {
@@ -223,42 +54,14 @@
       "required": true,
       "types": [
         {
-          "type": "call_statement",
-          "named": true
-        },
-        {
-          "type": "coord_statement",
-          "named": true
-        },
-        {
-          "type": "goto_statement",
-          "named": true
-        },
-        {
-          "type": "if_statement",
-          "named": true
-        },
-        {
-          "type": "interrupt_statement",
-          "named": true
-        },
-        {
-          "type": "loop_statement",
-          "named": true
-        },
-        {
-          "type": "return_statement",
-          "named": true
-        },
-        {
-          "type": "select_statement",
+          "type": "varIndex",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "coord_statement",
+    "type": "anOutVar",
     "named": true,
     "fields": {},
     "children": {
@@ -266,30 +69,14 @@
       "required": true,
       "types": [
         {
-          "type": "bool_value",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "variable",
+          "type": "varIndex",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "else_clause",
+    "type": "assignOp",
     "named": true,
     "fields": {},
     "children": {
@@ -297,54 +84,14 @@
       "required": false,
       "types": [
         {
-          "type": "condition_expression",
-          "named": true
-        },
-        {
-          "type": "control_statement",
-          "named": true
-        },
-        {
-          "type": "else_clause",
-          "named": true
-        },
-        {
-          "type": "io_statement",
-          "named": true
-        },
-        {
-          "type": "label_definition",
-          "named": true
-        },
-        {
-          "type": "logic_statement",
-          "named": true
-        },
-        {
-          "type": "macro_statement",
-          "named": true
-        },
-        {
-          "type": "motion_statement",
-          "named": true
-        },
-        {
-          "type": "program_footer",
-          "named": true
-        },
-        {
-          "type": "program_header",
-          "named": true
-        },
-        {
-          "type": "socket_statement",
+          "type": "SPACE",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "goto_statement",
+    "type": "bVar",
     "named": true,
     "fields": {},
     "children": {
@@ -352,30 +99,14 @@
       "required": true,
       "types": [
         {
-          "type": "goto_target",
+          "type": "varIndex",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "goto_target",
-    "named": true,
-    "fields": {
-      "target": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "label_name",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "if_statement",
+    "type": "baseInst",
     "named": true,
     "fields": {},
     "children": {
@@ -383,158 +114,155 @@
       "required": true,
       "types": [
         {
-          "type": "condition_expression",
+          "type": "INT",
           "named": true
         },
         {
-          "type": "control_statement",
+          "type": "SPACE",
           "named": true
         },
         {
-          "type": "else_clause",
+          "type": "clearInst",
           "named": true
         },
         {
-          "type": "goto_target",
+          "type": "i2strInst",
           "named": true
         },
         {
-          "type": "io_statement",
+          "type": "iVar",
           "named": true
         },
         {
-          "type": "label_definition",
+          "type": "positionVar",
           "named": true
         },
         {
-          "type": "logic_statement",
+          "type": "r2strInst",
           "named": true
         },
         {
-          "type": "macro_statement",
+          "type": "setExtAxisInst",
           "named": true
         },
         {
-          "type": "motion_statement",
+          "type": "setFrameInst",
           "named": true
         },
         {
-          "type": "program_footer",
+          "type": "setInst",
           "named": true
         },
         {
-          "type": "program_header",
+          "type": "setPInst",
           "named": true
         },
         {
-          "type": "socket_statement",
+          "type": "str2iInst",
+          "named": true
+        },
+        {
+          "type": "str2rInst",
+          "named": true
+        },
+        {
+          "type": "strVar",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "interrupt_statement",
+    "type": "callExp",
     "named": true,
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
-          "type": "bool_value",
+          "type": "SPACE",
           "named": true
         },
         {
-          "type": "condition_expression",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "variable",
+          "type": "jobOrBackgroundFile",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "io_statement",
+    "type": "caseExp",
     "named": true,
     "fields": {},
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": true,
       "types": [
         {
-          "type": "analog_io_statement",
+          "type": "NEWLINE",
           "named": true
         },
         {
-          "type": "out_statement",
+          "type": "SPACE",
           "named": true
         },
         {
-          "type": "pulse_statement",
+          "type": "numVar",
           "named": true
         },
         {
-          "type": "wait_statement",
+          "type": "strVar",
+          "named": true
+        },
+        {
+          "type": "switchOpExp",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "label_definition",
-    "named": true,
-    "fields": {
-      "keyword": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "L",
-            "named": false
-          },
-          {
-            "type": "LABEL",
-            "named": false
-          }
-        ]
-      },
-      "label_name": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "label_name",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "label_name",
+    "type": "clearInst",
     "named": true,
     "fields": {},
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": true,
       "types": [
         {
-          "type": "identifier",
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "bVar",
+          "named": true
+        },
+        {
+          "type": "floatVar",
+          "named": true
+        },
+        {
+          "type": "hVar",
+          "named": true
+        },
+        {
+          "type": "iVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "cntAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignOp",
           "named": true
         },
         {
@@ -545,30 +273,7 @@
     }
   },
   {
-    "type": "logic_statement",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "assignment",
-          "named": true
-        },
-        {
-          "type": "math_operation",
-          "named": true
-        },
-        {
-          "type": "unary_operation",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "loop_statement",
+    "type": "conditionExp",
     "named": true,
     "fields": {},
     "children": {
@@ -576,19 +281,11 @@
       "required": true,
       "types": [
         {
-          "type": "bool_value",
+          "type": "digitalIOVar",
           "named": true
         },
         {
-          "type": "comparison_operator",
-          "named": true
-        },
-        {
-          "type": "goto_target",
-          "named": true
-        },
-        {
-          "type": "identifier",
+          "type": "numVar",
           "named": true
         },
         {
@@ -596,503 +293,18 @@
           "named": true
         },
         {
-          "type": "string_literal",
+          "type": "positionVarScalar",
           "named": true
         },
         {
-          "type": "variable",
+          "type": "relationOp",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "macro_statement",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "bool_value",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "variable",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "math_operation",
-    "named": true,
-    "fields": {
-      "destination": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      },
-      "op": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "ADD",
-            "named": false
-          },
-          {
-            "type": "ATAN",
-            "named": false
-          },
-          {
-            "type": "COS",
-            "named": false
-          },
-          {
-            "type": "DIV",
-            "named": false
-          },
-          {
-            "type": "MUL",
-            "named": false
-          },
-          {
-            "type": "SIN",
-            "named": false
-          },
-          {
-            "type": "SQRT",
-            "named": false
-          },
-          {
-            "type": "SUB",
-            "named": false
-          }
-        ]
-      },
-      "operand1": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      },
-      "operand2": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bool_value",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "string_literal",
-            "named": true
-          },
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "motion_param",
-    "named": true,
-    "fields": {
-      "param_name": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "ACC=",
-            "named": false
-          },
-          {
-            "type": "CNT=",
-            "named": false
-          },
-          {
-            "type": "D=",
-            "named": false
-          },
-          {
-            "type": "INTERLOCK=",
-            "named": false
-          },
-          {
-            "type": "OVER=",
-            "named": false
-          },
-          {
-            "type": "R=",
-            "named": false
-          },
-          {
-            "type": "RTYPE=",
-            "named": false
-          },
-          {
-            "type": "SD=",
-            "named": false
-          },
-          {
-            "type": "UF=",
-            "named": false
-          },
-          {
-            "type": "VC=",
-            "named": false
-          },
-          {
-            "type": "VJ=",
-            "named": false
-          },
-          {
-            "type": "VL=",
-            "named": false
-          }
-        ]
-      },
-      "param_value": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "bool_value",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "string_literal",
-            "named": true
-          },
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "offset_values",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "motion_statement",
-    "named": true,
-    "fields": {
-      "command": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "MOVC",
-            "named": false
-          },
-          {
-            "type": "MOVCIRA",
-            "named": false
-          },
-          {
-            "type": "MOVJ",
-            "named": false
-          },
-          {
-            "type": "MOVL",
-            "named": false
-          },
-          {
-            "type": "MOVSPI",
-            "named": false
-          }
-        ]
-      },
-      "target": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "var_p",
-            "named": true
-          },
-          {
-            "type": "var_pr",
-            "named": true
-          }
-        ]
-      },
-      "via_point": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "var_p",
-            "named": true
-          },
-          {
-            "type": "var_pr",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "motion_param",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "offset_component",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
-      "required": true,
-      "types": [
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "var_i",
-          "named": true
-        },
-        {
-          "type": "var_r",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "offset_values",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "offset_component",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "out_statement",
-    "named": true,
-    "fields": {
-      "command": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "OUT",
-            "named": false
-          },
-          {
-            "type": "OUT_P",
-            "named": false
-          },
-          {
-            "type": "OUT_T",
-            "named": false
-          }
-        ]
-      },
-      "port": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      },
-      "value": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "bool_value",
-            "named": true
-          },
-          {
-            "type": "identifier",
-            "named": true
-          },
-          {
-            "type": "number",
-            "named": true
-          },
-          {
-            "type": "string_literal",
-            "named": true
-          },
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "bool_value",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "variable",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "pulse_statement",
-    "named": true,
-    "fields": {
-      "port": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "var_io",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "bool_value",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        },
-        {
-          "type": "number",
-          "named": true
-        },
-        {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "variable",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "return_statement",
-    "named": true,
-    "fields": {}
-  },
-  {
-    "type": "select_statement",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "condition_expression",
-          "named": true
-        },
-        {
-          "type": "goto_target",
-          "named": true
-        },
-        {
-          "type": "identifier",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "socket_statement",
+    "type": "controlInst",
     "named": true,
     "fields": {},
     "children": {
@@ -1100,11 +312,90 @@
       "required": false,
       "types": [
         {
-          "type": "bool_value",
+          "type": "INT",
           "named": true
         },
         {
-          "type": "identifier",
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "callExp",
+          "named": true
+        },
+        {
+          "type": "delayExp",
+          "named": true
+        },
+        {
+          "type": "forExp",
+          "named": true
+        },
+        {
+          "type": "gotoExp",
+          "named": true
+        },
+        {
+          "type": "ifExp",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "labelExp",
+          "named": true
+        },
+        {
+          "type": "paracallExp",
+          "named": true
+        },
+        {
+          "type": "switchExp",
+          "named": true
+        },
+        {
+          "type": "waitExp",
+          "named": true
+        },
+        {
+          "type": "whileExp",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "copInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "floatVar",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "numVar",
           "named": true
         },
         {
@@ -1112,165 +403,1241 @@
           "named": true
         },
         {
-          "type": "string_literal",
+          "type": "operateExp",
           "named": true
         },
         {
-          "type": "variable",
+          "type": "positionVar",
+          "named": true
+        },
+        {
+          "type": "positionVarCoordScalar",
+          "named": true
+        },
+        {
+          "type": "positionVarScalar",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "source_file",
+    "type": "copOpExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "numVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "positionVarCoordScalar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "crAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "cntAssign",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "delayExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "numVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "diVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "digitalIOVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "diVar",
+          "named": true
+        },
+        {
+          "type": "doVar",
+          "named": true
+        },
+        {
+          "type": "giBVar",
+          "named": true
+        },
+        {
+          "type": "giFVar",
+          "named": true
+        },
+        {
+          "type": "giHVar",
+          "named": true
+        },
+        {
+          "type": "giIVar",
+          "named": true
+        },
+        {
+          "type": "goBVar",
+          "named": true
+        },
+        {
+          "type": "goFVar",
+          "named": true
+        },
+        {
+          "type": "goHVar",
+          "named": true
+        },
+        {
+          "type": "goIVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "doVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "fAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "floatVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "forExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "INT",
+          "named": true
+        },
+        {
+          "type": "NEWLINE",
+          "named": true
+        },
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "whileOpExp",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "giBVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "giFVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "giHVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "giIVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "goBVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "goFVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "goHVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "goIVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "gotoExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "STRING",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "hVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "i2strInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "iVar",
+          "named": true
+        },
+        {
+          "type": "strVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "iVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "ifExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "NEWLINE",
+          "named": true
+        },
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "callExp",
+          "named": true
+        },
+        {
+          "type": "delayExp",
+          "named": true
+        },
+        {
+          "type": "gotoExp",
+          "named": true
+        },
+        {
+          "type": "inst",
+          "named": true
+        },
+        {
+          "type": "multiConExp",
+          "named": true
+        },
+        {
+          "type": "outExp",
+          "named": true
+        },
+        {
+          "type": "waitExp",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "inst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "COMMENT",
+          "named": true
+        },
+        {
+          "type": "NEWLINE",
+          "named": true
+        },
+        {
+          "type": "NOTE",
+          "named": true
+        },
+        {
+          "type": "opExp",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "instStart",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "NEWLINE",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "intVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "bVar",
+          "named": true
+        },
+        {
+          "type": "hVar",
+          "named": true
+        },
+        {
+          "type": "iVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "ioInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "anInVar",
+          "named": true
+        },
+        {
+          "type": "anOutVar",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "digitalIOVar",
+          "named": true
+        },
+        {
+          "type": "floatVar",
+          "named": true
+        },
+        {
+          "type": "iVar",
+          "named": true
+        },
+        {
+          "type": "numVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "outExp",
+          "named": true
+        },
+        {
+          "type": "positionVarScalar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "irqOffExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "levAssign",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "irqOnExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "diVar",
+          "named": true
+        },
+        {
+          "type": "iVar",
+          "named": true
+        },
+        {
+          "type": "jobOrBackgroundFile",
+          "named": true
+        },
+        {
+          "type": "levAssign",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "jobOrBackgroundFile",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "ID",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "labelExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "STRING",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "levAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "INT",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "lhAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "mhAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "moveInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "INT",
+          "named": true
+        },
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "accAssign",
+          "named": true
+        },
+        {
+          "type": "additionalInst",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "crAssign",
+          "named": true
+        },
+        {
+          "type": "lhAssign",
+          "named": true
+        },
+        {
+          "type": "mhAssign",
+          "named": true
+        },
+        {
+          "type": "positionVar",
+          "named": true
+        },
+        {
+          "type": "rhAssign",
+          "named": true
+        },
+        {
+          "type": "velocityAssign",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "multiConExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "conditionExp",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "numScalarOpExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "copOpExp",
+          "named": true
+        },
+        {
+          "type": "numVar",
+          "named": true
+        },
+        {
+          "type": "positionVarCoordScalar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "numVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "floatVar",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "number",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "FLOAT",
+          "named": true
+        },
+        {
+          "type": "INT",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "opExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "baseInst",
+          "named": true
+        },
+        {
+          "type": "controlInst",
+          "named": true
+        },
+        {
+          "type": "copInst",
+          "named": true
+        },
+        {
+          "type": "ioInst",
+          "named": true
+        },
+        {
+          "type": "moveInst",
+          "named": true
+        },
+        {
+          "type": "operateInst",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "operateExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "numScalarOpExp",
+          "named": true
+        },
+        {
+          "type": "positionVar",
+          "named": true
+        },
+        {
+          "type": "strVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "operateInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "ID",
+          "named": true
+        },
+        {
+          "type": "INT",
+          "named": true
+        },
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "STRING",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "digitalIOVar",
+          "named": true
+        },
+        {
+          "type": "fAssign",
+          "named": true
+        },
+        {
+          "type": "floatVar",
+          "named": true
+        },
+        {
+          "type": "iVar",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "irqOffExp",
+          "named": true
+        },
+        {
+          "type": "irqOnExp",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "positionVar",
+          "named": true
+        },
+        {
+          "type": "strVar",
+          "named": true
+        },
+        {
+          "type": "tAssign",
+          "named": true
+        },
+        {
+          "type": "tfValue",
+          "named": true
+        },
+        {
+          "type": "ufValue",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "outExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "doVar",
+          "named": true
+        },
+        {
+          "type": "goBVar",
+          "named": true
+        },
+        {
+          "type": "goFVar",
+          "named": true
+        },
+        {
+          "type": "goHVar",
+          "named": true
+        },
+        {
+          "type": "goIVar",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "numVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "tDIS",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "paracallExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "jobOrBackgroundFile",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "posGVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "posLVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "positionVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "posGVar",
+          "named": true
+        },
+        {
+          "type": "posLVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "positionVarCoordScalar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "positionVarJointScalar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "positionVarScalar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "positionVarCoordScalar",
+          "named": true
+        },
+        {
+          "type": "positionVarJointScalar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "prog",
     "named": true,
     "root": true,
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "control_statement",
-          "named": true
-        },
-        {
-          "type": "io_statement",
-          "named": true
-        },
-        {
-          "type": "label_definition",
-          "named": true
-        },
-        {
-          "type": "logic_statement",
-          "named": true
-        },
-        {
-          "type": "macro_statement",
-          "named": true
-        },
-        {
-          "type": "motion_statement",
-          "named": true
-        },
-        {
-          "type": "program_footer",
-          "named": true
-        },
-        {
-          "type": "program_header",
-          "named": true
-        },
-        {
-          "type": "socket_statement",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
-    "type": "unary_operation",
-    "named": true,
-    "fields": {
-      "op": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "DEC",
-            "named": false
-          },
-          {
-            "type": "INC",
-            "named": false
-          },
-          {
-            "type": "INT",
-            "named": false
-          }
-        ]
-      },
-      "operand": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      },
-      "source": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "variable",
-            "named": true
-          }
-        ]
-      }
-    }
-  },
-  {
-    "type": "variable",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": false,
       "required": true,
       "types": [
         {
-          "type": "var_b",
+          "type": "inst",
           "named": true
         },
         {
-          "type": "var_gio",
+          "type": "instEnd",
           "named": true
         },
         {
-          "type": "var_i",
-          "named": true
-        },
-        {
-          "type": "var_io",
-          "named": true
-        },
-        {
-          "type": "var_ls",
-          "named": true
-        },
-        {
-          "type": "var_p",
-          "named": true
-        },
-        {
-          "type": "var_pr",
-          "named": true
-        },
-        {
-          "type": "var_r",
-          "named": true
-        },
-        {
-          "type": "var_s",
-          "named": true
-        },
-        {
-          "type": "var_si",
-          "named": true
-        },
-        {
-          "type": "var_sr",
+          "type": "instStart",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "wait_statement",
+    "type": "r2strInst",
     "named": true,
     "fields": {},
     "children": {
@@ -1278,15 +1645,72 @@
       "required": true,
       "types": [
         {
-          "type": "bool_value",
+          "type": "SPACE",
           "named": true
         },
         {
-          "type": "condition_expression",
+          "type": "floatVar",
           "named": true
         },
         {
-          "type": "identifier",
+          "type": "strVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "relationOp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "rhAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "setExtAxisInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "ID",
+          "named": true
+        },
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "numVar",
           "named": true
         },
         {
@@ -1294,22 +1718,458 @@
           "named": true
         },
         {
-          "type": "string_literal",
-          "named": true
-        },
-        {
-          "type": "variable",
+          "type": "positionVar",
           "named": true
         }
       ]
     }
   },
   {
-    "type": "#",
+    "type": "setFrameInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "INT",
+          "named": true
+        },
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "setInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "STRING",
+          "named": true
+        },
+        {
+          "type": "numVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "positionVar",
+          "named": true
+        },
+        {
+          "type": "positionVarScalar",
+          "named": true
+        },
+        {
+          "type": "strVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "setPInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "positionVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "skipLaExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "STRING",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "str2iInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "iVar",
+          "named": true
+        },
+        {
+          "type": "strVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "str2rInst",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "floatVar",
+          "named": true
+        },
+        {
+          "type": "strVar",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "strVar",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "switchExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "NEWLINE",
+          "named": true
+        },
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "caseExp",
+          "named": true
+        },
+        {
+          "type": "numVar",
+          "named": true
+        },
+        {
+          "type": "strVar",
+          "named": true
+        },
+        {
+          "type": "switchOpExp",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "switchOpExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "NEWLINE",
+          "named": true
+        },
+        {
+          "type": "inst",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tDIS",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "tfValue",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "ufValue",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "varIndex",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "varIndex",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "INT",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "velocityAssign",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "numVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "waitExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "assignOp",
+          "named": true
+        },
+        {
+          "type": "digitalIOVar",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "whileExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "INT",
+          "named": true
+        },
+        {
+          "type": "NEWLINE",
+          "named": true
+        },
+        {
+          "type": "SPACE",
+          "named": true
+        },
+        {
+          "type": "intVar",
+          "named": true
+        },
+        {
+          "type": "multiConExp",
+          "named": true
+        },
+        {
+          "type": "whileOpExp",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "whileOpExp",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "NEWLINE",
+          "named": true
+        },
+        {
+          "type": "inst",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "!=",
     "named": false
   },
   {
-    "type": ",",
+    "type": "&",
+    "named": false
+  },
+  {
+    "type": "&&",
+    "named": false
+  },
+  {
+    "type": "(",
+    "named": false
+  },
+  {
+    "type": ")",
+    "named": false
+  },
+  {
+    "type": "*",
+    "named": false
+  },
+  {
+    "type": "+",
+    "named": false
+  },
+  {
+    "type": "-",
+    "named": false
+  },
+  {
+    "type": ".",
+    "named": false
+  },
+  {
+    "type": "/",
+    "named": false
+  },
+  {
+    "type": ":",
     "named": false
   },
   {
@@ -1317,11 +2177,11 @@
     "named": false
   },
   {
-    "type": "<=",
+    "type": "<<",
     "named": false
   },
   {
-    "type": "<>",
+    "type": "<=",
     "named": false
   },
   {
@@ -1341,19 +2201,39 @@
     "named": false
   },
   {
-    "type": "ACC=",
+    "type": ">>",
     "named": false
   },
   {
-    "type": "ADD",
+    "type": "ABS",
     "named": false
   },
   {
-    "type": "AIN",
+    "type": "ACC",
     "named": false
   },
   {
-    "type": "AOUT",
+    "type": "AI",
+    "named": false
+  },
+  {
+    "type": "AND",
+    "named": false
+  },
+  {
+    "type": "ANIN",
+    "named": false
+  },
+  {
+    "type": "ANOUT",
+    "named": false
+  },
+  {
+    "type": "AO",
+    "named": false
+  },
+  {
+    "type": "ARMCHANGE",
     "named": false
   },
   {
@@ -1361,11 +2241,51 @@
     "named": false
   },
   {
+    "type": "ATAN2",
+    "named": false
+  },
+  {
+    "type": "AUTO",
+    "named": false
+  },
+  {
+    "type": "B",
+    "named": false
+  },
+  {
+    "type": "BREAK",
+    "named": false
+  },
+  {
     "type": "CALL",
     "named": false
   },
   {
-    "type": "CNT=",
+    "type": "CASE",
+    "named": false
+  },
+  {
+    "type": "CLEAR",
+    "named": false
+  },
+  {
+    "type": "CNT",
+    "named": false
+  },
+  {
+    "type": "CODE",
+    "named": false
+  },
+  {
+    "type": "COMMENT",
+    "named": true
+  },
+  {
+    "type": "CONDITION",
+    "named": false
+  },
+  {
+    "type": "CONTINUE",
     "named": false
   },
   {
@@ -1373,15 +2293,23 @@
     "named": false
   },
   {
-    "type": "D=",
+    "type": "DEFAULT",
     "named": false
   },
   {
-    "type": "DEC",
+    "type": "DELAY",
     "named": false
   },
   {
-    "type": "DIV",
+    "type": "DI",
+    "named": false
+  },
+  {
+    "type": "DIS",
+    "named": false
+  },
+  {
+    "type": "DO",
     "named": false
   },
   {
@@ -1393,15 +2321,79 @@
     "named": false
   },
   {
+    "type": "ENDFOR",
+    "named": false
+  },
+  {
     "type": "ENDIF",
     "named": false
   },
   {
-    "type": "ET",
+    "type": "ENDSWITCH",
     "named": false
   },
   {
-    "type": "FALSE",
+    "type": "ENDWHILE",
+    "named": false
+  },
+  {
+    "type": "F",
+    "named": false
+  },
+  {
+    "type": "FINE",
+    "named": false
+  },
+  {
+    "type": "FLOAT",
+    "named": true
+  },
+  {
+    "type": "FOR",
+    "named": false
+  },
+  {
+    "type": "FRAME",
+    "named": false
+  },
+  {
+    "type": "GETAT",
+    "named": false
+  },
+  {
+    "type": "GETP",
+    "named": false
+  },
+  {
+    "type": "GIB",
+    "named": false
+  },
+  {
+    "type": "GIF",
+    "named": false
+  },
+  {
+    "type": "GIH",
+    "named": false
+  },
+  {
+    "type": "GII",
+    "named": false
+  },
+  {
+    "type": "GOB",
+    "named": false
+  },
+  {
+    "type": "GOF",
+    "named": false
+  },
+  {
+    "type": "GOH",
+    "named": false
+  },
+  {
+    "type": "GOI",
     "named": false
   },
   {
@@ -1409,19 +2401,39 @@
     "named": false
   },
   {
+    "type": "H",
+    "named": false
+  },
+  {
+    "type": "I",
+    "named": false
+  },
+  {
+    "type": "I2STR",
+    "named": false
+  },
+  {
+    "type": "ID",
+    "named": true
+  },
+  {
     "type": "IF",
     "named": false
   },
   {
-    "type": "INC",
+    "type": "IN",
+    "named": false
+  },
+  {
+    "type": "INDEX",
     "named": false
   },
   {
     "type": "INT",
-    "named": false
+    "named": true
   },
   {
-    "type": "INTERLOCK=",
+    "type": "INV",
     "named": false
   },
   {
@@ -1433,11 +2445,27 @@
     "named": false
   },
   {
-    "type": "JOB",
+    "type": "J1",
     "named": false
   },
   {
-    "type": "L",
+    "type": "J2",
+    "named": false
+  },
+  {
+    "type": "J3",
+    "named": false
+  },
+  {
+    "type": "J4",
+    "named": false
+  },
+  {
+    "type": "JUMP",
+    "named": false
+  },
+  {
+    "type": "JUMPL",
     "named": false
   },
   {
@@ -1445,19 +2473,35 @@
     "named": false
   },
   {
-    "type": "LEV=",
+    "type": "LEFT",
     "named": false
   },
   {
-    "type": "MACRO",
+    "type": "LEV",
+    "named": false
+  },
+  {
+    "type": "LH",
+    "named": false
+  },
+  {
+    "type": "LOG",
+    "named": false
+  },
+  {
+    "type": "MAX",
+    "named": false
+  },
+  {
+    "type": "MH",
+    "named": false
+  },
+  {
+    "type": "MIN",
     "named": false
   },
   {
     "type": "MOVC",
-    "named": false
-  },
-  {
-    "type": "MOVCIRA",
     "named": false
   },
   {
@@ -1469,27 +2513,27 @@
     "named": false
   },
   {
-    "type": "MOVSPI",
+    "type": "MOVS",
     "named": false
   },
   {
-    "type": "MUL",
+    "type": "NEWLINE",
+    "named": true
+  },
+  {
+    "type": "NOP",
     "named": false
   },
   {
-    "type": "N=",
+    "type": "NOT",
     "named": false
   },
   {
-    "type": "OFF",
-    "named": false
+    "type": "NOTE",
+    "named": true
   },
   {
-    "type": "OFFSET=",
-    "named": false
-  },
-  {
-    "type": "ON",
+    "type": "OR",
     "named": false
   },
   {
@@ -1497,43 +2541,59 @@
     "named": false
   },
   {
-    "type": "OUT_P",
+    "type": "P",
     "named": false
   },
   {
-    "type": "OUT_T",
+    "type": "PAUSE",
     "named": false
   },
   {
-    "type": "OVER=",
+    "type": "PORT",
     "named": false
   },
   {
-    "type": "PULSE",
+    "type": "POW",
     "named": false
   },
   {
-    "type": "R=",
+    "type": "PR",
     "named": false
   },
   {
-    "type": "RESUME",
+    "type": "R",
     "named": false
   },
   {
-    "type": "RET",
+    "type": "R2STR",
     "named": false
   },
   {
-    "type": "RTYPE=",
+    "type": "RECORDMOTIONSTART",
     "named": false
   },
   {
-    "type": "SD=",
+    "type": "RECORDMOTIONSTOP",
     "named": false
   },
   {
-    "type": "SELECT",
+    "type": "RH",
+    "named": false
+  },
+  {
+    "type": "RIGHT",
+    "named": false
+  },
+  {
+    "type": "RZ",
+    "named": false
+  },
+  {
+    "type": "S",
+    "named": false
+  },
+  {
+    "type": "SERVERIP",
     "named": false
   },
   {
@@ -1541,7 +2601,32 @@
     "named": false
   },
   {
+    "type": "SETEXTAXIS",
+    "named": false
+  },
+  {
+    "type": "SETFRAME",
+    "named": false
+  },
+  {
+    "type": "SETP",
+    "named": false
+  },
+  {
     "type": "SIN",
+    "named": false
+  },
+  {
+    "type": "SKIP",
+    "named": false
+  },
+  {
+    "type": "SPACE",
+    "named": true,
+    "extra": true
+  },
+  {
+    "type": "SPRINTF",
     "named": false
   },
   {
@@ -1549,11 +2634,67 @@
     "named": false
   },
   {
-    "type": "SUB",
+    "type": "START_BG",
     "named": false
   },
   {
-    "type": "T=",
+    "type": "STEP",
+    "named": false
+  },
+  {
+    "type": "STOP_BG",
+    "named": false
+  },
+  {
+    "type": "STR2I",
+    "named": false
+  },
+  {
+    "type": "STR2R",
+    "named": false
+  },
+  {
+    "type": "STRCMP",
+    "named": false
+  },
+  {
+    "type": "STRFIND",
+    "named": false
+  },
+  {
+    "type": "STRFINDEND",
+    "named": false
+  },
+  {
+    "type": "STRING",
+    "named": true
+  },
+  {
+    "type": "STRLEN",
+    "named": false
+  },
+  {
+    "type": "STRREVERSE",
+    "named": false
+  },
+  {
+    "type": "STRSPLIT",
+    "named": false
+  },
+  {
+    "type": "STRSUB",
+    "named": false
+  },
+  {
+    "type": "SWITCH",
+    "named": false
+  },
+  {
+    "type": "T",
+    "named": false
+  },
+  {
+    "type": "TAN",
     "named": false
   },
   {
@@ -1577,11 +2718,31 @@
     "named": false
   },
   {
-    "type": "THEN",
+    "type": "TIMEOUT",
     "named": false
   },
   {
-    "type": "TRUE",
+    "type": "TIMER START",
+    "named": false
+  },
+  {
+    "type": "TIMER STOP",
+    "named": false
+  },
+  {
+    "type": "TOOL_OFFSET",
+    "named": false
+  },
+  {
+    "type": "TOOL_OFFSET_CONDITION",
+    "named": false
+  },
+  {
+    "type": "TYPE",
+    "named": false
+  },
+  {
+    "type": "UALM",
     "named": false
   },
   {
@@ -1589,19 +2750,15 @@
     "named": false
   },
   {
-    "type": "UF=",
+    "type": "USER_OFFSET",
     "named": false
   },
   {
-    "type": "VC=",
+    "type": "USER_OFFSET_CONDITION",
     "named": false
   },
   {
-    "type": "VJ=",
-    "named": false
-  },
-  {
-    "type": "VL=",
+    "type": "V",
     "named": false
   },
   {
@@ -1613,72 +2770,39 @@
     "named": false
   },
   {
-    "type": "comment",
-    "named": true,
-    "extra": true
+    "type": "X",
+    "named": false
   },
   {
-    "type": "identifier",
+    "type": "Y",
+    "named": false
+  },
+  {
+    "type": "Z",
+    "named": false
+  },
+  {
+    "type": "[",
+    "named": false
+  },
+  {
+    "type": "]",
+    "named": false
+  },
+  {
+    "type": "^",
+    "named": false
+  },
+  {
+    "type": "instEnd",
     "named": true
   },
   {
-    "type": "number",
-    "named": true
+    "type": "|",
+    "named": false
   },
   {
-    "type": "program_footer",
-    "named": true
-  },
-  {
-    "type": "program_header",
-    "named": true
-  },
-  {
-    "type": "string_literal",
-    "named": true
-  },
-  {
-    "type": "var_b",
-    "named": true
-  },
-  {
-    "type": "var_gio",
-    "named": true
-  },
-  {
-    "type": "var_i",
-    "named": true
-  },
-  {
-    "type": "var_io",
-    "named": true
-  },
-  {
-    "type": "var_ls",
-    "named": true
-  },
-  {
-    "type": "var_p",
-    "named": true
-  },
-  {
-    "type": "var_pr",
-    "named": true
-  },
-  {
-    "type": "var_r",
-    "named": true
-  },
-  {
-    "type": "var_s",
-    "named": true
-  },
-  {
-    "type": "var_si",
-    "named": true
-  },
-  {
-    "type": "var_sr",
-    "named": true
+    "type": "||",
+    "named": false
   }
 ]
