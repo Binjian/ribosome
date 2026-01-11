@@ -375,6 +375,10 @@ class SiasunInterpreter:
         v = params.get('V', '?')  # RC5 uses V for both joint and linear
         acc = params.get('ACC', '?')
         
+        # Resolve variable references in velocity
+        v_value = self._resolve_value(v) if v != '?' else 0
+        acc_value = self._resolve_value(acc) if acc != '?' else 0
+        
         # Get target position
         if target in self.position_vars:
             target_pos = self.position_vars[target]
@@ -386,18 +390,22 @@ class SiasunInterpreter:
             offset = self._parse_offset(params['OFFSET'])
             target_pos = target_pos + offset
             
-        self._log(f"MOVJ -> {target} (V={v}, ACC={acc})")
+        self._log(f"MOVJ -> {target} (V={v_value}, ACC={acc_value})")
         self._log(f"  Target: {target_pos}")
         
         # Simulate movement
         self.robot.position = target_pos
-        self.robot.velocity = float(v) if v != '?' else 0
+        self.robot.velocity = v_value
         
     def _exec_movl(self, params: dict) -> None:
         """Execute linear move (RC5 format)"""
         target = params.get('target', 'P?')
         v = params.get('V', '?')  # RC5 uses V for both joint and linear
         acc = params.get('ACC', '?')
+        
+        # Resolve variable references in velocity
+        v_value = self._resolve_value(v) if v != '?' else 0
+        acc_value = self._resolve_value(acc) if acc != '?' else 0
         
         # Get target position
         if target in self.position_vars:
@@ -411,12 +419,12 @@ class SiasunInterpreter:
             target_pos = target_pos + offset
             self._log(f"  Offset applied: {offset}")
             
-        self._log(f"MOVL -> {target} (V={v}, ACC={acc})")
+        self._log(f"MOVL -> {target} (V={v_value}, ACC={acc_value})")
         self._log(f"  Target: {target_pos}")
         
         # Simulate movement
         self.robot.position = target_pos
-        self.robot.velocity = float(v) if v != '?' else 0
+        self.robot.velocity = v_value
         
     def _exec_movc(self, params: dict) -> None:
         """Execute circular move"""
@@ -772,7 +780,14 @@ class SiasunInterpreter:
     def _exec_cop_rc5(self, node) -> None:
         """Execute computation/operation from RC5 grammar"""
         text = self._get_text(node).strip()
-        self._log(f"Operation: {text}")
+        
+        # Check for position component assignment (e.g., PR[20].z = -50)
+        import re
+        pos_comp_match = re.match(r'(P(?:R)?\[\d+\])\.(x|y|z|rx|ry|rz)\s*=', text, re.IGNORECASE)
+        if pos_comp_match:
+            self._log(f"Position component assignment: {text}")
+        else:
+            self._log(f"Operation: {text}")
         
     def _exec_control_rc5(self, node) -> None:
         """Execute control statement from RC5 grammar"""
