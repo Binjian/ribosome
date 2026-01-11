@@ -1,0 +1,27 @@
+root ::= program_header statement* program_footer
+
+program_header ::= "NOP" ws
+
+program_footer ::= "END"
+
+statement ::= ws (motion_statement | assignment_statement | label_definition | comment) ws
+
+motion_statement ::= movj_statement | movl_statement
+
+movj_statement ::= "MOVJ" ws position ws "V" ws "=" ws number ws "ACC" ws "=" ws number
+
+movl_statement ::= "MOVL" ws position ws "V" ws "=" ws number ws "ACC" ws "=" ws number
+
+assignment_statement ::= variable ws "=" ws number
+
+label_definition ::= [A-Z] [0-9]+ ":"
+
+position ::= ("P" | "PR") "[" [0-9]+ "]"
+
+variable ::= ("I" | "R" | "DO" | "DI") "[" [0-9]+ "]"
+
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+
+comment ::= "//" [^\n]* "\n"
+
+ws ::= [ \t\n\r]*
