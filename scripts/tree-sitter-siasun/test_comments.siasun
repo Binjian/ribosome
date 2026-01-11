@@ -1,0 +1,7 @@
+NOP
+// This is a comment
+! This is a note
+SET I[1] 100
+// Another comment
+! Another note
+END

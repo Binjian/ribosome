@@ -1,61 +1,44 @@
 NOP
-
 // I/O Synchronization Demo
 // Demonstrates input waiting and output control
-
-TF #1
-
-SET P1 LPOS    // Work position
-
+SETFRAME TF 1
+SET P[1] P[1]
 // Initialize outputs
-OUT OT#1=OFF   // Gripper
-OUT OT#2=OFF   // Clamp
-OUT OT#3=OFF   // Ready signal
-
+OUT DO[1] 0
+OUT DO[2] 0
+OUT DO[3] 0
 // Signal ready to external device
-OUT OT#3=ON
-
-L10
+OUT DO[3] 1
+LABEL "L10"
 // Wait for start signal from PLC
-WAIT IN#1=ON T=30000
-
+WAIT DI[1] = 1 T = 30000
 // Check safety interlock
-IF IN#5 = OFF L50
-
+IF DI[5] == 0 : GOTO "L50"
 // Acknowledge start
-OUT OT#4=ON
-PULSE OT#4=ON T=500
-
+OUT DO[4] 1
+OUT DO[4] 0
 // Activate clamp
-OUT OT#2=ON
-WAIT IN#2=ON T=5000    // Wait for clamp confirm
-
+OUT DO[2] 1
+WAIT DI[2] = 1 T = 5000
 // Move to work position
-MOVJ P1 VJ=50 ACC=80 CNT=0
-
+MOVJ P[1] V = 50 ACC = 80 CNT = 0
 // Close gripper
-OUT OT#1=ON
-WAIT IN#3=ON T=2000    // Wait for grip confirm
-
+OUT DO[1] 1
+WAIT DI[3] = 1 T = 2000
 // Work cycle complete signal
-OUT OT#5=ON
-
+OUT DO[5] 1
 // Wait for cycle reset
-WAIT IN#1=OFF T=10000
-
+WAIT DI[1] = 0 T = 10000
 // Reset outputs
-OUT OT#5=OFF
-OUT OT#1=OFF
-OUT OT#2=OFF
-
+OUT DO[5] 0
+OUT DO[1] 0
+OUT DO[2] 0
 // Loop back
-GOTO L10
-
-L50
+GOTO "L10"
+LABEL "L50"
 // Safety fault handling
-OUT OT#10=ON   // Fault indicator
-OUT OT#1=OFF
-OUT OT#2=OFF
-OUT OT#3=OFF
-
+OUT DO[10] 1
+OUT DO[1] 0
+OUT DO[2] 0
+OUT DO[3] 0
 END

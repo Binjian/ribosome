@@ -76,7 +76,11 @@
           },
           {
             "type": "PATTERN",
-            "value": ".*"
+            "value": "[^\\r\\n]*"
+          },
+          {
+            "type": "PATTERN",
+            "value": "\\r?\\n"
           }
         ]
       }
@@ -92,7 +96,11 @@
           },
           {
             "type": "PATTERN",
-            "value": ".*"
+            "value": "[^\\r\\n]*"
+          },
+          {
+            "type": "PATTERN",
+            "value": "\\r?\\n"
           }
         ]
       }
