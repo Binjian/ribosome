@@ -142,17 +142,17 @@ class SiasunInterpreter:
         # Robot state
         self.robot = RobotState()
         
-        # Variables
-        self.integer_vars: dict[str, int] = {}      # I1, I2, ...
-        self.real_vars: dict[str, float] = {}       # R1, R2, ...
-        self.position_vars: dict[str, Position] = {}  # P1, P2, ...
-        self.joint_vars: dict[str, JointAngles] = {}  # J1, J2, ...
+        # Variables (RC5 format)
+        self.integer_vars: dict[str, int] = {}      # I[1], I[2], ...
+        self.real_vars: dict[str, float] = {}       # R[1], R[2], ...
+        self.position_vars: dict[str, Position] = {}  # P[1], P[2], ...
+        self.joint_vars: dict[str, JointAngles] = {}  # J[1], J[2], ...
         
-        # I/O state
-        self.digital_outputs: dict[int, bool] = {}   # OT#1, OT#2, ...
-        self.digital_inputs: dict[int, bool] = {}    # IN#1, IN#2, ...
-        self.general_outputs: dict[int, bool] = {}   # GO#1, GO#2, ...
-        self.general_inputs: dict[int, bool] = {}    # GI#1, GI#2, ...
+        # I/O state (RC5 format)
+        self.digital_outputs: dict[int, bool] = {}   # DO[1], DO[2], ...
+        self.digital_inputs: dict[int, bool] = {}    # DI[1], DI[2], ...
+        self.general_outputs: dict[int, bool] = {}   # GO[1], GO[2], ...
+        self.general_inputs: dict[int, bool] = {}    # GI[1], GI[2], ...
         
         # Program state
         self.source_code: bytes = b""
@@ -225,10 +225,14 @@ class SiasunInterpreter:
         except ValueError:
             pass
         
-        # Check if it's a variable reference
-        if value_str.startswith('I') and value_str[1:].isdigit():
+        # Check if it's a variable reference (RC5 format: I[1], R[1])
+        import re
+        int_match = re.match(r'I\[(\d+)\]', value_str)
+        real_match = re.match(r'R\[(\d+)\]', value_str)
+        
+        if int_match:
             return float(self.integer_vars.get(value_str, 0))
-        elif value_str.startswith('R') and value_str[1:].isdigit():
+        elif real_match:
             return self.real_vars.get(value_str, 0.0)
         elif value_str in self.integer_vars:
             return float(self.integer_vars[value_str])
@@ -264,39 +268,44 @@ class SiasunInterpreter:
             self._log("=== Program End ===")
             
     def _execute_statements(self, node) -> None:
-        """Execute all statements in a node"""
+        """Execute all statements in a node (RC5 format)"""
         for child in node.children:
             self._execute_statement(child)
             
     def _execute_statement(self, node) -> None:
-        """Execute a single statement"""
+        """Execute a single statement (RC5 format)"""
         node_type = node.type
         text = self._get_text(node).strip()
         
-        # Skip comments and whitespace
-        if node_type == 'comment' or not text:
+        # Skip whitespace and comments have no execution
+        if node_type in ['COMMENT', 'NOTE', 'SPACE', 'NEWLINE'] or not text:
             return
         
-        # Dispatch based on statement type
+        # RC5 grammar dispatch
         handlers = {
-            'program_header': self._exec_nop,
-            'program_footer': self._exec_end,
-            'motion_statement': self._exec_motion,
-            'io_statement': self._exec_io,
-            'logic_statement': self._exec_logic,
-            'control_statement': self._exec_control,
-            'label_definition': self._exec_label,
-            'macro_statement': self._exec_macro,
+            'instStart': self._exec_nop,
+            'instEnd': self._exec_end,
+            'inst': self._execute_statements,  # Process children
+            'opExp': self._execute_statements,  # Process children
+            'baseInst': self._execute_statements,  # Process children
+            'moveInst': self._exec_motion_rc5,
+            'ioInst': self._exec_io_rc5,
+            'setFrameInst': self._exec_setframe_rc5,
+            'setInst': self._exec_set_rc5,
+            'copInst': self._exec_cop_rc5,
+            'controlInst': self._exec_control_rc5,
         }
         
         handler = handlers.get(node_type)
         if handler:
             handler(node)
-        elif node_type in ('source_file',):
+        elif node_type in ('prog', 'source_file'):
             # Container nodes - process children
             self._execute_statements(node)
         else:
-            self._log(f"Unknown statement type: {node_type} -> {text[:50]}")
+            # Recursively process children for unknown types
+            if hasattr(node, 'children') and node.children:
+                self._execute_statements(node)
     
     # ========================================================================
     # Statement Handlers
@@ -340,25 +349,30 @@ class SiasunInterpreter:
             self._log(f"Motion: {text}")
             
     def _parse_motion_params(self, text: str) -> dict:
-        """Parse motion command parameters"""
+        """Parse motion command parameters (RC5 format: V = 50, ACC = 100)"""
         params = {'raw': text}
         parts = text.split()
         
         if len(parts) > 1:
             params['target'] = parts[1]
         
-        # Parse named parameters (VJ=50, ACC=100, etc.)
-        for part in parts[2:]:
-            if '=' in part:
-                key, value = part.split('=', 1)
-                params[key.upper()] = value
+        # Parse named parameters (V = 50, ACC = 100, etc.)
+        i = 2
+        while i < len(parts):
+            if i + 2 < len(parts) and parts[i + 1] == '=':
+                key = parts[i].upper()
+                value = parts[i + 2]
+                params[key] = value
+                i += 3
+            else:
+                i += 1
                 
         return params
     
     def _exec_movj(self, params: dict) -> None:
-        """Execute joint move"""
+        """Execute joint move (RC5 format)"""
         target = params.get('target', 'P?')
-        vj = params.get('VJ', '?')
+        v = params.get('V', '?')  # RC5 uses V for both joint and linear
         acc = params.get('ACC', '?')
         
         # Get target position
@@ -367,22 +381,22 @@ class SiasunInterpreter:
         else:
             target_pos = Position()  # Simulated
             
-        # Check for OFFSET
+        # Check for OFFSET (note: OFFSET removed in RC5 but keeping for compatibility)
         if 'OFFSET' in params:
             offset = self._parse_offset(params['OFFSET'])
             target_pos = target_pos + offset
             
-        self._log(f"MOVJ -> {target} (VJ={vj}, ACC={acc})")
+        self._log(f"MOVJ -> {target} (V={v}, ACC={acc})")
         self._log(f"  Target: {target_pos}")
         
         # Simulate movement
         self.robot.position = target_pos
-        self.robot.velocity = float(vj) if vj != '?' else 0
+        self.robot.velocity = float(v) if v != '?' else 0
         
     def _exec_movl(self, params: dict) -> None:
-        """Execute linear move"""
+        """Execute linear move (RC5 format)"""
         target = params.get('target', 'P?')
-        vl = params.get('VL', '?')
+        v = params.get('V', '?')  # RC5 uses V for both joint and linear
         acc = params.get('ACC', '?')
         
         # Get target position
@@ -391,18 +405,18 @@ class SiasunInterpreter:
         else:
             target_pos = Position()  # Simulated
             
-        # Check for OFFSET
+        # Check for OFFSET (note: OFFSET removed in RC5 but keeping for compatibility)
         if 'OFFSET' in params:
             offset = self._parse_offset(params['OFFSET'])
             target_pos = target_pos + offset
             self._log(f"  Offset applied: {offset}")
             
-        self._log(f"MOVL -> {target} (VL={vl}, ACC={acc})")
+        self._log(f"MOVL -> {target} (V={v}, ACC={acc})")
         self._log(f"  Target: {target_pos}")
         
         # Simulate movement
         self.robot.position = target_pos
-        self.robot.velocity = float(vl) if vl != '?' else 0
+        self.robot.velocity = float(v) if v != '?' else 0
         
     def _exec_movc(self, params: dict) -> None:
         """Execute circular move"""
@@ -429,28 +443,23 @@ class SiasunInterpreter:
             self._log(f"I/O: {text}")
             
     def _exec_out(self, text: str) -> None:
-        """Execute OUT statement"""
-        # Parse: OUT OT#1=ON or OUT GO#1=OFF
+        """Execute OUT statement (RC5 format: OUT DO[1] 1)"""
         import re
-        match = re.search(r'(OT|GO)#(\d+)\s*=\s*(ON|OFF|\d+)', text, re.IGNORECASE)
+        # RC5 format: OUT DO[1] 1 or OUT GO[1] 0
+        match = re.search(r'(DO|GO)\[(\d+)\]\s+(\d+)', text, re.IGNORECASE)
         if match:
             io_type = match.group(1).upper()
             io_num = int(match.group(2))
-            value = match.group(3).upper()
+            value = int(match.group(3))
             
-            if value == 'ON':
-                state = True
-            elif value == 'OFF':
-                state = False
-            else:
-                state = int(value) != 0
+            state = value != 0
                 
-            if io_type == 'OT':
+            if io_type == 'DO':
                 self.digital_outputs[io_num] = state
             else:
                 self.general_outputs[io_num] = state
                 
-            self._log(f"OUT: {io_type}#{io_num} = {'ON' if state else 'OFF'}")
+            self._log(f"OUT: {io_type}[{io_num}] = {value} ({'ON' if state else 'OFF'})")
         else:
             self._log(f"OUT: {text}")
             
@@ -484,45 +493,42 @@ class SiasunInterpreter:
             self._log(f"Logic: {text}")
             
     def _exec_set(self, parts: list) -> None:
-        """Execute SET statement"""
+        """Execute SET statement (RC5 format: SET I[1] 100)"""
         if len(parts) < 3:
             return
             
         var_name = parts[1]
         value = parts[2]
         
-        # Determine variable type and store
-        if var_name.startswith('I'):
+        # Determine variable type and store (RC5 format: I[1], R[1], P[1])
+        import re
+        if re.match(r'I\[\d+\]', var_name):
             self.integer_vars[var_name] = int(value)
             self._log(f"SET: {var_name} = {value} (integer)")
-        elif var_name.startswith('R'):
+        elif re.match(r'R\[\d+\]', var_name):
             self.real_vars[var_name] = float(value)
             self._log(f"SET: {var_name} = {value} (real)")
-        elif var_name.startswith('P'):
-            if value == 'LPOS':
-                self.position_vars[var_name] = Position(
-                    self.robot.position.x,
-                    self.robot.position.y,
-                    self.robot.position.z,
-                    self.robot.position.rx,
-                    self.robot.position.ry,
-                    self.robot.position.rz
-                )
-                self._log(f"SET: {var_name} = LPOS ({self.robot.position})")
+        elif re.match(r'P\[\d+\]', var_name):
+            # In RC5, positions are set to other positions (no LPOS)
+            if value in self.position_vars:
+                self.position_vars[var_name] = self.position_vars[value]
             else:
                 self.position_vars[var_name] = Position()
-                self._log(f"SET: {var_name} = {value}")
+            self._log(f"SET: {var_name} = {value}")
         else:
             self._log(f"SET: {var_name} = {value}")
             
     def _exec_add(self, parts: list) -> None:
-        """Execute ADD statement"""
+        """Execute ADD/arithmetic statement (RC5 format: I[1] = I[1] + 1)"""
+        # RC5 uses expressions like: I[1] = I[1] + 1
+        # This is now handled in operateExp, but keeping for compatibility
         if len(parts) < 3:
             return
         var_name = parts[1]
         value = self._resolve_value(parts[2])
         
-        if var_name.startswith('R'):
+        import re
+        if re.match(r'R\[\d+\]', var_name):
             if var_name in self.real_vars:
                 self.real_vars[var_name] += value
             else:
@@ -536,13 +542,14 @@ class SiasunInterpreter:
             self._log(f"ADD: {var_name} += {value} -> {self.integer_vars[var_name]}")
             
     def _exec_sub(self, parts: list) -> None:
-        """Execute SUB statement"""
+        """Execute SUB statement (RC5 uses expressions instead)"""
         if len(parts) < 3:
             return
         var_name = parts[1]
         value = self._resolve_value(parts[2])
         
-        if var_name.startswith('R'):
+        import re
+        if re.match(r'R\[\d+\]', var_name):
             if var_name in self.real_vars:
                 self.real_vars[var_name] -= value
                 self._log(f"SUB: {var_name} -= {value} -> {self.real_vars[var_name]}")
@@ -552,13 +559,14 @@ class SiasunInterpreter:
                 self._log(f"SUB: {var_name} -= {value} -> {self.integer_vars[var_name]}")
             
     def _exec_mul(self, parts: list) -> None:
-        """Execute MUL statement: MUL dest operand1 operand2"""
+        """Execute MUL statement (RC5 uses expressions like R[3] = R[2] * I[1])"""
         if len(parts) < 4:
             # Two-operand form: MUL var value (var *= value)
             if len(parts) >= 3:
                 var_name = parts[1]
                 value = self._resolve_value(parts[2])
-                if var_name.startswith('R'):
+                import re
+                if re.match(r'R\[\d+\]', var_name):
                     if var_name in self.real_vars:
                         self.real_vars[var_name] *= value
                         self._log(f"MUL: {var_name} *= {value} -> {self.real_vars[var_name]}")
@@ -674,7 +682,7 @@ class SiasunInterpreter:
         self._log(f"Control: {text}")
         
     def _exec_macro(self, node) -> None:
-        """Execute macro statement (TF, UF, etc.)"""
+        """Execute macro statement (RC5 format: SETFRAME TF 1)"""
         text = self._get_text(node).strip()
         parts = text.split()
         
@@ -683,26 +691,93 @@ class SiasunInterpreter:
             
         cmd = parts[0].upper()
         
-        if cmd == 'TF':
-            # Set tool frame
-            if len(parts) > 1:
-                frame_num = parts[1].replace('#', '')
+        if cmd == 'SETFRAME':
+            # RC5 format: SETFRAME TF 1 or SETFRAME UF 1
+            if len(parts) >= 3:
+                frame_type = parts[1].upper()
+                frame_num = parts[2]
                 try:
-                    self.robot.tool_frame = int(frame_num)
-                    self._log(f"TF: Tool Frame set to #{self.robot.tool_frame}")
+                    if frame_type == 'TF':
+                        self.robot.tool_frame = int(frame_num)
+                        self._log(f"SETFRAME TF {self.robot.tool_frame}")
+                    elif frame_type == 'UF':
+                        self.robot.user_frame = int(frame_num)
+                        self._log(f"SETFRAME UF {self.robot.user_frame}")
                 except ValueError:
-                    self._log(f"TF: {text}")
-        elif cmd == 'UF':
-            # Set user frame
-            if len(parts) > 1:
-                frame_num = parts[1].replace('#', '')
-                try:
-                    self.robot.user_frame = int(frame_num)
-                    self._log(f"UF: User Frame set to #{self.robot.user_frame}")
-                except ValueError:
-                    self._log(f"UF: {text}")
+                    self._log(f"SETFRAME: {text}")
         else:
             self._log(f"Macro: {text}")
+    
+    # ========================================================================
+    # RC5 Statement Handlers (New Grammar)
+    # ========================================================================
+    
+    def _exec_motion_rc5(self, node) -> None:
+        """Execute motion statement from RC5 grammar"""
+        text = self._get_text(node).strip()
+        parts = text.split()
+        
+        if not parts:
+            return
+            
+        cmd = parts[0].upper()
+        params = self._parse_motion_params(text)
+        
+        if cmd == 'MOVJ':
+            self._exec_movj(params)
+        elif cmd == 'MOVL':
+            self._exec_movl(params)
+        elif cmd == 'MOVC':
+            self._exec_movc(params)
+        else:
+            self._log(f"Motion: {text}")
+            
+    def _exec_io_rc5(self, node) -> None:
+        """Execute IO statement from RC5 grammar"""
+        text = self._get_text(node).strip()
+        
+        # Handle OUT statement
+        if text.upper().startswith('OUT'):
+            self._exec_out(text)
+        else:
+            self._log(f"IO: {text}")
+            
+    def _exec_setframe_rc5(self, node) -> None:
+        """Execute SETFRAME from RC5 grammar"""
+        text = self._get_text(node).strip()
+        parts = text.split()
+        
+        if len(parts) >= 3 and parts[0].upper() == 'SETFRAME':
+            frame_type = parts[1].upper()
+            frame_num = parts[2]
+            
+            try:
+                if frame_type == 'TF':
+                    self.robot.tool_frame = int(frame_num)
+                    self._log(f"SETFRAME TF {self.robot.tool_frame}")
+                elif frame_type == 'UF':
+                    self.robot.user_frame = int(frame_num)
+                    self._log(f"SETFRAME UF {self.robot.user_frame}")
+            except ValueError:
+                self._log(f"SETFRAME: {text}")
+                
+    def _exec_set_rc5(self, node) -> None:
+        """Execute SET statement from RC5 grammar"""
+        text = self._get_text(node).strip()
+        parts = text.split()
+        
+        if len(parts) >= 3:
+            self._exec_set(parts)
+            
+    def _exec_cop_rc5(self, node) -> None:
+        """Execute computation/operation from RC5 grammar"""
+        text = self._get_text(node).strip()
+        self._log(f"Operation: {text}")
+        
+    def _exec_control_rc5(self, node) -> None:
+        """Execute control statement from RC5 grammar"""
+        text = self._get_text(node).strip()
+        self._log(f"Control: {text}")
     
     # ========================================================================
     # Utility Methods
@@ -776,29 +851,22 @@ def main():
         filepath = sys.argv[1]
         interpreter.load_file(filepath)
     else:
-        # Use built-in test program
+        # Use built-in test program (RC5 format)
         test_program = """
 NOP
-
 // Set tool frame
-TF #1
-
+SETFRAME TF 1
 // Initialize variables
-SET I1 0
-SET R1 10.5
-SET P1 LPOS
-
+SET I[1] 0
+SET R[1] 10.5
+SET P[1] P[1]
 // Motion test
-MOVL P1 VL=500 ACC=50 CNT=0
-MOVL P1 VL=500 ACC=50 CNT=0 OFFSET=100,0,0,0,0,0
-
+MOVL P[1] V = 500 ACC = 50 CNT = 0
 // I/O test
-OUT OT#1=ON
-
+OUT DO[1] 1
 // Logic test
-ADD I1 1
-IF I1 < 5 L10
-
+I[1] = I[1] + 1
+IF I[1] < 5 : GOTO "L10"
 END
 """
         interpreter.load_source(test_program)
