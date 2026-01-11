@@ -1,59 +1,44 @@
 NOP
-
 // Coordinate System Demo
 // Demonstrates Tool Frame (TF) and User Frame (UF) usage
-
 // Work positions in different frames
-SET P1 LPOS    // Base frame position
-SET P2 LPOS    // User frame 1 position
-SET P3 LPOS    // User frame 2 position
-
+SET P[1] P[1]
+SET P[2] P[2]
+SET P[3] P[3]
 // === BASE FRAME MOVEMENTS ===
-TF #0    // No tool offset
-UF #0    // Base (world) frame
-
-MOVJ P1 VJ=80 ACC=80 CNT=0
-
+SETFRAME TF 0
+SETFRAME UF 0
+MOVJ P[1] V = 80 ACC = 80 CNT = 0
 // Move in base frame coordinates
-MOVL P1 VL=300 ACC=50 CNT=0 OFFSET=100,0,0,0,0,0
-MOVL P1 VL=300 ACC=50 CNT=0 OFFSET=100,100,0,0,0,0
-MOVL P1 VL=300 ACC=50 CNT=0 OFFSET=0,100,0,0,0,0
-MOVL P1 VL=300 ACC=50 CNT=0
-
+MOVL P[1] V = 300 ACC = 50 CNT = 0
+MOVL P[1] V = 300 ACC = 50 CNT = 0
+MOVL P[1] V = 300 ACC = 50 CNT = 0
+MOVL P[1] V = 300 ACC = 50 CNT = 0
 // === USER FRAME 1 (e.g., Table surface) ===
-UF #1    // Switch to user frame 1
-
-MOVJ P2 VJ=80 ACC=80 CNT=0
-
+SETFRAME UF 1
+MOVJ P[2] V = 80 ACC = 80 CNT = 0
 // Same offsets, but relative to user frame 1
-MOVL P2 VL=300 ACC=50 CNT=0 OFFSET=100,0,0,0,0,0
-MOVL P2 VL=300 ACC=50 CNT=0 OFFSET=100,100,0,0,0,0
-MOVL P2 VL=300 ACC=50 CNT=0 OFFSET=0,100,0,0,0,0
-MOVL P2 VL=300 ACC=50 CNT=0
-
+MOVL P[2] V = 300 ACC = 50 CNT = 0
+MOVL P[2] V = 300 ACC = 50 CNT = 0
+MOVL P[2] V = 300 ACC = 50 CNT = 0
+MOVL P[2] V = 300 ACC = 50 CNT = 0
 // === TOOL FRAME DEMO ===
-TF #1    // Gripper tool frame
-
+SETFRAME TF 1
 // Move in tool coordinates
-MOVL P2 VL=200 ACC=30 CNT=0 OFFSET=0,0,50,0,0,0    // Approach in tool Z
-MOVL P2 VL=100 ACC=20 CNT=0                          // Contact
-MOVL P2 VL=200 ACC=30 CNT=0 OFFSET=0,0,50,0,0,0    // Retract in tool Z
-
+MOVL P[2] V = 200 ACC = 30 CNT = 0
+MOVL P[2] V = 100 ACC = 20 CNT = 0
+MOVL P[2] V = 200 ACC = 30 CNT = 0
 // === USER FRAME 2 (e.g., Tilted fixture) ===
-UF #2    // Switch to tilted user frame
-TF #1    // Keep gripper tool frame
-
-MOVJ P3 VJ=80 ACC=80 CNT=0
-
+SETFRAME UF 2
+SETFRAME TF 1
+MOVJ P[3] V = 80 ACC = 80 CNT = 0
 // Movement relative to tilted surface
-MOVL P3 VL=200 ACC=30 CNT=0 OFFSET=50,0,0,0,0,0
-MOVL P3 VL=200 ACC=30 CNT=0 OFFSET=50,50,0,0,0,0
-MOVL P3 VL=200 ACC=30 CNT=0 OFFSET=0,50,0,0,0,0
-MOVL P3 VL=200 ACC=30 CNT=0
-
+MOVL P[3] V = 200 ACC = 30 CNT = 0
+MOVL P[3] V = 200 ACC = 30 CNT = 0
+MOVL P[3] V = 200 ACC = 30 CNT = 0
+MOVL P[3] V = 200 ACC = 30 CNT = 0
 // === RETURN TO BASE ===
-TF #0
-UF #0
-MOVJ P1 VJ=100 ACC=100 CNT=0
-
+SETFRAME TF 0
+SETFRAME UF 0
+MOVJ P[1] V = 100 ACC = 100 CNT = 0
 END

@@ -1,55 +1,37 @@
 NOP
-
 // Pick and Place Operation
 // Moves between pick station and place station
-
-// Set tool frame for gripper
-TF #1
-
+SETFRAME TF 1
 // Define positions
-SET P1 LPOS    // Home position
-SET P2 LPOS    // Pick approach
-SET P3 LPOS    // Pick position
-SET P4 LPOS    // Place approach
-SET P5 LPOS    // Place position
-
+SET P[1] P[1]
+SET P[2] P[2]
+SET P[3] P[3]
+SET P[4] P[4]
+SET P[5] P[5]
 // Initialize gripper (open)
-OUT OT#1=OFF
-
+OUT DO[1] 0
 // Move to home
-MOVJ P1 VJ=100 ACC=100 CNT=0
-
+MOVJ P[1] V = 100 ACC = 100 CNT = 0
 // Approach pick position (fast)
-MOVJ P2 VJ=80 ACC=80 CNT=50
-
+MOVJ P[2] V = 80 ACC = 80 CNT = 50
 // Move down to pick (slow, linear)
-MOVL P3 VL=200 ACC=30 CNT=0
-
+MOVL P[3] V = 200 ACC = 30 CNT = 0
 // Close gripper
-OUT OT#1=ON
-
+OUT DO[1] 1
 // Wait for gripper to close
-WAIT OT#1=ON T=500
-
+WAIT DO[1] = 1 T = 500
 // Lift from pick
-MOVL P2 VL=300 ACC=50 CNT=50
-
+MOVL P[2] V = 300 ACC = 50 CNT = 50
 // Move to place approach
-MOVJ P4 VJ=80 ACC=80 CNT=50
-
+MOVJ P[4] V = 80 ACC = 80 CNT = 50
 // Move down to place
-MOVL P5 VL=200 ACC=30 CNT=0
-
+MOVL P[5] V = 200 ACC = 30 CNT = 0
 // Open gripper
-OUT OT#1=OFF
-
+OUT DO[1] 0
 // Wait for gripper to open
-WAIT OT#1=OFF T=300
-
+WAIT DO[1] = 0 T = 300
 // Retract from place
-MOVL P4 VL=300 ACC=50 CNT=50
-
+MOVL P[4] V = 300 ACC = 50 CNT = 50
 // Return to home
-MOVJ P1 VJ=100 ACC=100 CNT=0
-
+MOVJ P[1] V = 100 ACC = 100 CNT = 0
 END

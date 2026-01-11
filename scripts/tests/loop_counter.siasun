@@ -1,60 +1,44 @@
 NOP
-
 // Loop and Counter Demo
 // Demonstrates arithmetic operations and conditional loops
-
-TF #1
-
-SET P1 LPOS    // Position A
-SET P2 LPOS    // Position B
-
+SETFRAME TF 1
+SET P[1] P[1]
+SET P[2] P[2]
 // Initialize counters
-SET I1 0       // Loop counter
-SET I2 5       // Max iterations
-SET I3 0       // Direction flag (0=forward, 1=backward)
-
+SET I[1] 0
+SET I[2] 5
+SET I[3] 0
 // Initialize real variables
-SET R1 0.0     // Accumulated distance
-SET R2 100.0   // Distance per cycle
-
-L10
+SET R[1] 0.0
+SET R[2] 100.0
+LABEL "L10"
 // Check loop limit
-IF I1 >= I2 L99
-
+IF I[1] >= I[2] : GOTO "L99"
 // Calculate current offset
-MUL R3 R2 I1
-
+R[3] = R[2] * I[1]
 // Move based on direction
-IF I3 = 1 L20
-
+IF I[3] == 1 : GOTO "L20"
 // Forward movement
-MOVL P1 VL=500 ACC=50 CNT=0
-MOVL P2 VL=500 ACC=50 CNT=0
-GOTO L30
-
-L20
+MOVL P[1] V = 500 ACC = 50 CNT = 0
+MOVL P[2] V = 500 ACC = 50 CNT = 0
+GOTO "L30"
+LABEL "L20"
 // Backward movement
-MOVL P2 VL=500 ACC=50 CNT=0
-MOVL P1 VL=500 ACC=50 CNT=0
-
-L30
+MOVL P[2] V = 500 ACC = 50 CNT = 0
+MOVL P[1] V = 500 ACC = 50 CNT = 0
+LABEL "L30"
 // Update accumulator
-ADD R1 R2
-
+R[1] = R[1] + R[2]
 // Increment counter
-ADD I1 1
-
+I[1] = I[1] + 1
 // Toggle direction
-IF I3 = 0 L40
-SET I3 0
-GOTO L10
-
-L40
-SET I3 1
-GOTO L10
-
-L99
+IF I[3] == 0 : GOTO "L40"
+SET I[3] 0
+GOTO "L10"
+LABEL "L40"
+SET I[3] 1
+GOTO "L10"
+LABEL "L99"
 // Final position
-MOVJ P1 VJ=100 ACC=100 CNT=0
-
+MOVJ P[1] V = 100 ACC = 100 CNT = 0
 END

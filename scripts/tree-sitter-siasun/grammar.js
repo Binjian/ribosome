@@ -33,9 +33,9 @@ module.exports = grammar({
     instStart: ($) => seq("NOP", $.NEWLINE),
     instEnd: ($) => "END",
 
-    // Comments and notes
-    COMMENT: ($) => token(seq("// ", /.*/)),
-    NOTE: ($) => token(seq("! ", /.*/)),
+    // Comments and notes - include newline like in Job.g4
+    COMMENT: ($) => token(seq("// ", /[^\r\n]*/, /\r?\n/)),
+    NOTE: ($) => token(seq("! ", /[^\r\n]*/, /\r?\n/)),
     NEWLINE: ($) => token(/\r?\n/),
     SPACE: ($) => token(choice(" ", "\t")),
 
