@@ -1,34 +1,34 @@
 NOP
-// Circular Arc Welding Path
-// Welds a circular arc using MOVC command
+! Circular Arc Welding Path
+! Welds a circular arc using MOVC command
 SETFRAME TF 2
-// Arc parameters
+! Arc parameters
 SET R[1] 50.0
 SET R[2] 180.0
-// Positions
+! Positions
 SET P[1] P[1]
 SET P[2] P[2]
 SET P[3] P[3]
 SET P[4] P[4]
-// Welding parameters
+! Welding parameters
 SET I[1] 200
 SET I[2] 22
-// Approach weld start
+! Approach weld start
 MOVJ P[4] V = 50 ACC = 80 CNT = 0
 MOVL P[1] V = 100 ACC = 30 CNT = 0
-// Start arc (welding ON)
+! Start arc (welding ON)
 OUT DO[5] 1
 OUT DO[6] 1
-// Wait for arc establish
+! Wait for arc establish
 WAIT DI[10] = 1 T = 2000
-// Weld circular arc
-// MOVC moves through via point (P[2]) to end point (P[3])
+! Weld circular arc
+! MOVC moves through via point (P[2]) to end point (P[3])
 MOVC P[2] V = 80 ACC = 20 CNT = 0
-// Stop welding
+! Stop welding
 OUT DO[5] 0
 OUT DO[6] 0
-// Retract from weld
+! Retract from weld
 MOVL P[4] V = 100 ACC = 30 CNT = 0
-// Return home
+! Return home
 MOVJ P[1] V = 80 ACC = 80 CNT = 0
 END

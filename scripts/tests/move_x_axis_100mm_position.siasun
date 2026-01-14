@@ -1,10 +1,10 @@
 NOP
 SETFRAME TF 1
 SET P[1] P[1]
-// Move to start position
+! Move to start position
 MOVL P[1] V = 500 ACC = 50 CNT = 0
-// Define target 100mm away in tool X
+! Define target 100mm away in tool X
 SET P[2] P[1]
-// Add offset manually if supported
+! Add offset manually if supported
 MOVL P[2] V = 500 ACC = 50 CNT = 0
 END

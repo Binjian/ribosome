@@ -1,37 +1,37 @@
 NOP
-// Pick and Place Operation
-// Moves between pick station and place station
+! Pick and Place Operation
+! Moves between pick station and place station
 SETFRAME TF 1
-// Define positions
+! Define positions
 SET P[1] P[1]
 SET P[2] P[2]
 SET P[3] P[3]
 SET P[4] P[4]
 SET P[5] P[5]
-// Initialize gripper (open)
+! Initialize gripper (open)
 OUT DO[1] 0
-// Move to home
+! Move to home
 MOVJ P[1] V = 100 ACC = 100 CNT = 0
-// Approach pick position (fast)
+! Approach pick position (fast)
 MOVJ P[2] V = 80 ACC = 80 CNT = 50
-// Move down to pick (slow, linear)
+! Move down to pick (slow, linear)
 MOVL P[3] V = 200 ACC = 30 CNT = 0
-// Close gripper
+! Close gripper
 OUT DO[1] 1
-// Wait for gripper to close
+! Wait for gripper to close
 WAIT DO[1] = 1 T = 500
-// Lift from pick
+! Lift from pick
 MOVL P[2] V = 300 ACC = 50 CNT = 50
-// Move to place approach
+! Move to place approach
 MOVJ P[4] V = 80 ACC = 80 CNT = 50
-// Move down to place
+! Move down to place
 MOVL P[5] V = 200 ACC = 30 CNT = 0
-// Open gripper
+! Open gripper
 OUT DO[1] 0
-// Wait for gripper to open
+! Wait for gripper to open
 WAIT DO[1] = 0 T = 300
-// Retract from place
+! Retract from place
 MOVL P[4] V = 300 ACC = 50 CNT = 50
-// Return to home
+! Return to home
 MOVJ P[1] V = 100 ACC = 100 CNT = 0
 END

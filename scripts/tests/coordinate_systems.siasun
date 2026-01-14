@@ -1,43 +1,43 @@
 NOP
-// Coordinate System Demo
-// Demonstrates Tool Frame (TF) and User Frame (UF) usage
-// Work positions in different frames
+! Coordinate System Demo
+! Demonstrates Tool Frame (TF) and User Frame (UF) usage
+! Work positions in different frames
 SET P[1] P[1]
 SET P[2] P[2]
 SET P[3] P[3]
-// === BASE FRAME MOVEMENTS ===
+! === BASE FRAME MOVEMENTS ===
 SETFRAME TF 0
 SETFRAME UF 0
 MOVJ P[1] V = 80 ACC = 80 CNT = 0
-// Move in base frame coordinates
+! Move in base frame coordinates
 MOVL P[1] V = 300 ACC = 50 CNT = 0
 MOVL P[1] V = 300 ACC = 50 CNT = 0
 MOVL P[1] V = 300 ACC = 50 CNT = 0
 MOVL P[1] V = 300 ACC = 50 CNT = 0
-// === USER FRAME 1 (e.g., Table surface) ===
+! === USER FRAME 1 (e.g., Table surface) ===
 SETFRAME UF 1
 MOVJ P[2] V = 80 ACC = 80 CNT = 0
-// Same offsets, but relative to user frame 1
+! Same offsets, but relative to user frame 1
 MOVL P[2] V = 300 ACC = 50 CNT = 0
 MOVL P[2] V = 300 ACC = 50 CNT = 0
 MOVL P[2] V = 300 ACC = 50 CNT = 0
 MOVL P[2] V = 300 ACC = 50 CNT = 0
-// === TOOL FRAME DEMO ===
+! === TOOL FRAME DEMO ===
 SETFRAME TF 1
-// Move in tool coordinates
+! Move in tool coordinates
 MOVL P[2] V = 200 ACC = 30 CNT = 0
 MOVL P[2] V = 100 ACC = 20 CNT = 0
 MOVL P[2] V = 200 ACC = 30 CNT = 0
-// === USER FRAME 2 (e.g., Tilted fixture) ===
+! === USER FRAME 2 (e.g., Tilted fixture) ===
 SETFRAME UF 2
 SETFRAME TF 1
 MOVJ P[3] V = 80 ACC = 80 CNT = 0
-// Movement relative to tilted surface
+! Movement relative to tilted surface
 MOVL P[3] V = 200 ACC = 30 CNT = 0
 MOVL P[3] V = 200 ACC = 30 CNT = 0
 MOVL P[3] V = 200 ACC = 30 CNT = 0
 MOVL P[3] V = 200 ACC = 30 CNT = 0
-// === RETURN TO BASE ===
+! === RETURN TO BASE ===
 SETFRAME TF 0
 SETFRAME UF 0
 MOVJ P[1] V = 100 ACC = 100 CNT = 0

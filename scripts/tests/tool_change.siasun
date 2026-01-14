@@ -1,45 +1,45 @@
 NOP
-// Automatic Tool Change Sequence
-// Demonstrates tool frame switching and tool changer I/O
-// Initial tool frame (no tool)
+! Automatic Tool Change Sequence
+! Demonstrates tool frame switching and tool changer I/O
+! Initial tool frame (no tool)
 SETFRAME TF 0
-// Tool changer positions
+! Tool changer positions
 SET P[1] P[1]
 SET P[2] P[2]
 SET P[3] P[3]
 SET P[4] P[4]
 SET P[5] P[5]
-// Current tool (0=none, 1-3=tool number)
+! Current tool (0=none, 1-3=tool number)
 SET I[1] 0
-// === PICK TOOL 1 ===
-// Move to tool 1 dock approach
+! === PICK TOOL 1 ===
+! Move to tool 1 dock approach
 MOVJ P[2] V = 50 ACC = 80 CNT = 0
-// Move into dock
+! Move into dock
 MOVL P[2] V = 100 ACC = 30 CNT = 0
-// Lock tool
+! Lock tool
 OUT DO[1] 1
 WAIT DI[1] = 1 T = 2000
-// Set tool frame
+! Set tool frame
 SETFRAME TF 1
 SET I[1] 1
-// Retract with tool
+! Retract with tool
 MOVL P[2] V = 100 ACC = 30 CNT = 0
-// Move to work position
+! Move to work position
 MOVJ P[5] V = 80 ACC = 80 CNT = 0
-// ... Perform work with Tool 1 ...
-// === RETURN TOOL 1 ===
-// Move to dock approach
+! ... Perform work with Tool 1 ...
+! === RETURN TOOL 1 ===
+! Move to dock approach
 MOVJ P[2] V = 50 ACC = 80 CNT = 0
-// Insert into dock
+! Insert into dock
 MOVL P[2] V = 100 ACC = 30 CNT = 0
-// Unlock tool
+! Unlock tool
 OUT DO[1] 0
 WAIT DI[1] = 0 T = 2000
-// Clear tool frame
+! Clear tool frame
 SETFRAME TF 0
 SET I[1] 0
-// Retract without tool
+! Retract without tool
 MOVL P[2] V = 100 ACC = 30 CNT = 0
-// Return home
+! Return home
 MOVJ P[1] V = 100 ACC = 100 CNT = 0
 END
