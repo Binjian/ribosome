@@ -1,0 +1,135 @@
+#JOB
+NAME = aaa.txt
+#INFO
+OWNER =
+AXISNUM = 4
+EXTAXISNUM = 0
+CREATETIME = 2025-12-27_10:06:58
+MODIFYTIME = 2025-12-29_17:14:04
+LOCKED = FALSE
+BACKGROUND = FALSE
+HIDDEN = FALSE
+COMMENT = 
+#EXTPARAM
+#INST
+NOP
+! 调用工具坐标系3
+SETFRAME TF 3
+! 输出信号初始化
+OUT DO[3] 0
+WAIT DO[3] = 0 T = -1
+OUT DO[4] 0
+WAIT DO[4] = 0 T = -1
+OUT GOH[4] 0
+WAIT GOH[4] = 0 T = -1
+OUT GOH[5] 0
+WAIT GOH[5] = 0 T = -1
+I[1] = 1
+! 等待条件去待机位
+WAIT DI[97] = 1 T = -1
+! 工作任务判断
+LABEL "xh"
+I[3] = 1
+! 待机位过渡点速度R20
+R[20] = 500
+! 取放料速度R21
+R[21] = 500
+! 待机位PR14
+MOVL PR[14] V = R[20] ACC = 100 CNT = 0
+! 等待条件去取料位
+WAIT DI[98] = 1 T = -1
+! 取料过渡点PR15
+MOVL PR[15] V = R[20] ACC = 100 CNT = 0
+IF I[3] == 1
+! 取料
+DELAY T = 1
+! 计算偏移指令
+CALL jisuan.txt
+! 取料上方位PR20
+MOVL PR[20] V = R[21] ACC = 100 CNT = 0
+! 取料位PR21
+MOVL PR[21] V = R[21] ACC = 100 CNT = 0
+! 取料位输出512给PLC
+OUT GOH[4] 2
+WAIT GOH[4] = 2 T = -1
+! 吸盘DO3开
+OUT DO[3] 1
+WAIT DO[3] = 1 T = -1
+DELAY T = 1.0
+! 等待气压到位DI3
+WAIT DI[3] = 1 T = -1
+! 取料后返回取料上方位PR20
+MOVL PR[20] V = R[21] ACC = 100 CNT = 0
+! 取料位输出0给PLC
+OUT GOH[4] 0
+WAIT GOH[4] = 0 T = -1
+! 取料完成输出256给PLC
+OUT GOH[5] 1
+WAIT GOH[5] = 1 T = -1
+! I[1]计数加1
+I[1] = I[1] + 1
+IF I[1] == 11
+I[1] = 1
+ENDIF
+! 取料过渡点PR15
+MOVL PR[15] V = R[20] ACC = 100 CNT = 0
+! 待机位PR14
+MOVL PR[14] V = R[20] ACC = 100 CNT = 0
+! 取料完成输出0给PLC
+OUT GOH[5] 0
+WAIT GOH[5] = 0 T = -1
+! 旋转气缸原位DO2开
+OUT DO[2] 1
+WAIT DO[2] = 1 T = -1
+! 旋转气缸到位DO1关
+OUT DO[1] 0
+WAIT DO[1] = 0 T = -1
+ENDIF
+! 等待条件去放料位
+WAIT DI[99] = 1 T = -1
+! 放料
+I[3] = 2
+IF I[3] == 2
+PR[22] = PR[19]
+PR[22].z = -50
+! 放料上方位PR22
+MOVJ PR[22] V = 100 ACC = 100 CNT = 0
+! 放料位PR19
+MOVL PR[19] V = R[21] ACC = 100 CNT = 0
+! 放料位输出1024给PLC
+OUT GOH[4] 4
+WAIT GOH[4] = 4 T = -1
+! 吸真空DO3关
+OUT DO[3] 0
+WAIT DO[3] = 0 T = -1
+! 破真空DO4关
+OUT DO[4] 1
+WAIT DO[4] = 1 T = -1
+DELAY T = 1.0
+! 放料上方位PR22
+MOVJ PR[22] V = 100 ACC = 100 CNT = 0
+! 放料位输出0给PLC
+OUT GOH[4] 0
+WAIT GOH[4] = 0 T = -1
+! 放料完成输出768给PLC
+OUT GOH[5] 3
+WAIT GOH[5] = 3 T = -1
+ENDIF
+! 等待条件去待机位
+WAIT DI[97] = 1 T = -1
+! 返回待机位PR14
+MOVJ PR[14] V = 100 ACC = 100 CNT = 0
+! 放料完成输出768给PLC
+OUT GOH[5] 0
+WAIT GOH[5] = 0 T = -1
+! 破真空DO4关
+OUT DO[4] 0
+WAIT DO[4] = 0 T = -1
+DELAY T = 0.1
+GOTO "xh"
+END
+#PARAM
+
+
+
+

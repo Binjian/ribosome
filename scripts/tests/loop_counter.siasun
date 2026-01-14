@@ -1,37 +1,37 @@
 NOP
-// Loop and Counter Demo
-// Demonstrates arithmetic operations and conditional loops
+! Loop and Counter Demo
+! Demonstrates arithmetic operations and conditional loops
 SETFRAME TF 1
 SET P[1] P[1]
 SET P[2] P[2]
-// Initialize counters
+! Initialize counters
 SET I[1] 0
 SET I[2] 5
 SET I[3] 0
-// Initialize real variables
+! Initialize real variables
 SET R[1] 0.0
 SET R[2] 100.0
 LABEL "L10"
-// Check loop limit
+! Check loop limit
 IF I[1] >= I[2] : GOTO "L99"
-// Calculate current offset
+! Calculate current offset
 R[3] = R[2] * I[1]
-// Move based on direction
+! Move based on direction
 IF I[3] == 1 : GOTO "L20"
-// Forward movement
+! Forward movement
 MOVL P[1] V = 500 ACC = 50 CNT = 0
 MOVL P[2] V = 500 ACC = 50 CNT = 0
 GOTO "L30"
 LABEL "L20"
-// Backward movement
+! Backward movement
 MOVL P[2] V = 500 ACC = 50 CNT = 0
 MOVL P[1] V = 500 ACC = 50 CNT = 0
 LABEL "L30"
-// Update accumulator
+! Update accumulator
 R[1] = R[1] + R[2]
-// Increment counter
+! Increment counter
 I[1] = I[1] + 1
-// Toggle direction
+! Toggle direction
 IF I[3] == 0 : GOTO "L40"
 SET I[3] 0
 GOTO "L10"
@@ -39,6 +39,6 @@ LABEL "L40"
 SET I[3] 1
 GOTO "L10"
 LABEL "L99"
-// Final position
+! Final position
 MOVJ P[1] V = 100 ACC = 100 CNT = 0
 END

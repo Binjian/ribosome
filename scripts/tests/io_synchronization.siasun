@@ -1,42 +1,42 @@
 NOP
-// I/O Synchronization Demo
-// Demonstrates input waiting and output control
+! I/O Synchronization Demo
+! Demonstrates input waiting and output control
 SETFRAME TF 1
 SET P[1] P[1]
-// Initialize outputs
+! Initialize outputs
 OUT DO[1] 0
 OUT DO[2] 0
 OUT DO[3] 0
-// Signal ready to external device
+! Signal ready to external device
 OUT DO[3] 1
 LABEL "L10"
-// Wait for start signal from PLC
+! Wait for start signal from PLC
 WAIT DI[1] = 1 T = 30000
-// Check safety interlock
+! Check safety interlock
 IF DI[5] == 0 : GOTO "L50"
-// Acknowledge start
+! Acknowledge start
 OUT DO[4] 1
 OUT DO[4] 0
-// Activate clamp
+! Activate clamp
 OUT DO[2] 1
 WAIT DI[2] = 1 T = 5000
-// Move to work position
+! Move to work position
 MOVJ P[1] V = 50 ACC = 80 CNT = 0
-// Close gripper
+! Close gripper
 OUT DO[1] 1
 WAIT DI[3] = 1 T = 2000
-// Work cycle complete signal
+! Work cycle complete signal
 OUT DO[5] 1
-// Wait for cycle reset
+! Wait for cycle reset
 WAIT DI[1] = 0 T = 10000
-// Reset outputs
+! Reset outputs
 OUT DO[5] 0
 OUT DO[1] 0
 OUT DO[2] 0
-// Loop back
+! Loop back
 GOTO "L10"
 LABEL "L50"
-// Safety fault handling
+! Safety fault handling
 OUT DO[10] 1
 OUT DO[1] 0
 OUT DO[2] 0

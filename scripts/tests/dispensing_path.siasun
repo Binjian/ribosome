@@ -1,50 +1,50 @@
 NOP
-// Adhesive Dispensing Path
-// Rectangular bead pattern with controlled speed
+! Adhesive Dispensing Path
+! Rectangular bead pattern with controlled speed
 SETFRAME TF 3
-// Dispenser control outputs
-// DO[1] = Dispenser ON/OFF
-// DO[2] = Purge
-// DO[3] = Pressure boost
-// Path corners
+! Dispenser control outputs
+! DO[1] = Dispenser ON/OFF
+! DO[2] = Purge
+! DO[3] = Pressure boost
+! Path corners
 SET P[1] P[1]
 SET P[2] P[2]
 SET P[3] P[3]
 SET P[4] P[4]
-// Approach height
+! Approach height
 SET R[1] 30.0
-// Dispense parameters
+! Dispense parameters
 SET I[1] 80
 SET I[2] 200
-// === SETUP ===
-// Purge dispenser
+! === SETUP ===
+! Purge dispenser
 OUT DO[2] 1
 WAIT DI[1] = 1 T = 1000
 OUT DO[2] 0
-// Move to start position (above corner 1)
+! Move to start position (above corner 1)
 MOVJ P[1] V = 50 ACC = 80 CNT = 0
-// Lower to dispense height
+! Lower to dispense height
 MOVL P[1] V = 100 ACC = 30 CNT = 0
-// === START DISPENSE ===
+! === START DISPENSE ===
 OUT DO[1] 1
-// Dispense along rectangle
-// Side 1: P[1] -> P[2]
+! Dispense along rectangle
+! Side 1: P[1] -> P[2]
 MOVL P[2] V = 80 ACC = 20 CNT = 0
-// Side 2: P[2] -> P[3]
+! Side 2: P[2] -> P[3]
 MOVL P[3] V = 80 ACC = 20 CNT = 0
-// Side 3: P[3] -> P[4]
+! Side 3: P[3] -> P[4]
 MOVL P[4] V = 80 ACC = 20 CNT = 0
-// Side 4: P[4] -> P[1] (close loop)
+! Side 4: P[4] -> P[1] (close loop)
 MOVL P[1] V = 80 ACC = 20 CNT = 0
-// Slight overlap for seal
+! Slight overlap for seal
 MOVL P[1] V = 80 ACC = 20 CNT = 0
-// === STOP DISPENSE ===
+! === STOP DISPENSE ===
 OUT DO[1] 0
-// Suck-back to prevent drip
+! Suck-back to prevent drip
 OUT DO[3] 1
 OUT DO[3] 0
-// Lift from work
+! Lift from work
 MOVL P[1] V = 200 ACC = 50 CNT = 0
-// Return to safe position
+! Return to safe position
 MOVJ P[1] V = 80 ACC = 80 CNT = 0
 END

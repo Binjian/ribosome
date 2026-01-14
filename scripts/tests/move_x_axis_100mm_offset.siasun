@@ -1,16 +1,16 @@
 NOP
-// Set tool frame (TF#1) for tool coordinate movements
+! Set tool frame (TF#1) for tool coordinate movements
 SETFRAME TF 1
-// Define current position as reference
+! Define current position as reference
 SET P[1] P[1]
-// Calculate target position: move 100mm along X-axis
-// Using SHIFT to offset position in tool coordinates
+! Calculate target position: move 100mm along X-axis
+! Using SHIFT to offset position in tool coordinates
 MOVL P[1] V = 500 ACC = 50 CNT = 0
-// Move 100mm along tool X-axis using relative positioning
-// OFFSET creates a shifted position in tool frame
+! Move 100mm along tool X-axis using relative positioning
+! OFFSET creates a shifted position in tool frame
 MOVL P[1] V = 500 ACC = 50 CNT = 0
-// Alternative: Define positions explicitly
-// P[2] = P[1] + (100mm in X-axis of tool frame)
+! Alternative: Define positions explicitly
+! P[2] = P[1] + (100mm in X-axis of tool frame)
 SET P[2] P[2]
 MOVL P[2] V = 500 ACC = 50 CNT = 0
 END

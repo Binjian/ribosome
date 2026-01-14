@@ -1,52 +1,52 @@
 NOP
-// 3x3 Palletizing Pattern
-// Places 9 items in a grid pattern
+! 3x3 Palletizing Pattern
+! Places 9 items in a grid pattern
 SETFRAME TF 1
 SETFRAME UF 1
-// Counter variables
+! Counter variables
 SET I[1] 0
 SET I[2] 0
 SET I[3] 0
-// Grid spacing (mm)
+! Grid spacing (mm)
 SET R[1] 100.0
 SET R[2] 100.0
-// Base positions
+! Base positions
 SET P[1] P[1]
 SET P[2] P[2]
 SET P[10] P[10]
-// Open gripper
+! Open gripper
 OUT DO[1] 0
 LABEL "L10"
-// Check if all 9 pieces done
+! Check if all 9 pieces done
 IF I[3] >= 9 : GOTO "L99"
-// === PICK SEQUENCE ===
+! === PICK SEQUENCE ===
 MOVJ P[1] V = 80 ACC = 80 CNT = 0
 MOVL P[1] V = 300 ACC = 50 CNT = 0
 OUT DO[1] 1
 MOVL P[1] V = 300 ACC = 50 CNT = 0
-// === CALCULATE PLACE OFFSET ===
-// X offset = I[2] * R[1] (column)
-// Y offset = I[1] * R[2] (row)
+! === CALCULATE PLACE OFFSET ===
+! X offset = I[2] * R[1] (column)
+! Y offset = I[1] * R[2] (row)
 SET R[3] 0.0
 SET R[4] 0.0
 R[3] = I[2] * R[1]
 R[4] = I[1] * R[2]
-// === PLACE SEQUENCE ===
-// Move to current grid position with offset
+! === PLACE SEQUENCE ===
+! Move to current grid position with offset
 MOVJ P[2] V = 80 ACC = 80 CNT = 0
 MOVL P[2] V = 200 ACC = 30 CNT = 0
 OUT DO[1] 0
 MOVL P[2] V = 300 ACC = 50 CNT = 0
-// === UPDATE COUNTERS ===
+! === UPDATE COUNTERS ===
 I[2] = I[2] + 1
 I[3] = I[3] + 1
-// Check if row complete
+! Check if row complete
 IF I[2] < 3 : GOTO "L10"
-// Move to next row
+! Move to next row
 SET I[2] 0
 I[1] = I[1] + 1
 GOTO "L10"
 LABEL "L99"
-// Return home
+! Return home
 MOVJ P[1] V = 100 ACC = 100 CNT = 0
 END

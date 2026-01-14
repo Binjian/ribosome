@@ -1,64 +1,64 @@
 NOP
-// Error Handling and Recovery Demo
-// Demonstrates interrupt handling and error recovery
+! Error Handling and Recovery Demo
+! Demonstrates interrupt handling and error recovery
 SETFRAME TF 1
 SET P[1] P[1]
 SET P[2] P[2]
 SET P[3] P[3]
-// Status flags
+! Status flags
 SET I[1] 0
 SET I[2] 0
 SET I[3] 3
-// Initialize
+! Initialize
 OUT DO[1] 0
 OUT DO[2] 1
-// Enable interrupts
+! Enable interrupts
 IRQON LEV = 1 DI[10] == 1 INTERUPT_JOB
 LABEL "L10"
-// Main work cycle
+! Main work cycle
 IF I[1] != 0 : GOTO "L50"
-// Approach work position
+! Approach work position
 MOVJ P[2] V = 80 ACC = 80 CNT = 0
-// Check sensor before work
+! Check sensor before work
 IF DI[1] == 0 : GOTO "L40"
-// Perform work
+! Perform work
 OUT DO[3] 1
 MOVL P[2] V = 200 ACC = 30 CNT = 0
 MOVL P[2] V = 200 ACC = 30 CNT = 0
 OUT DO[3] 0
-// Work complete
+! Work complete
 GOTO "L90"
 LABEL "L40"
-// Part not detected error
+! Part not detected error
 SET I[1] 1
 I[2] = I[2] + 1
 IF I[2] > I[3] : GOTO "L50"
-// Retry
+! Retry
 MOVJ P[1] V = 50 ACC = 80 CNT = 0
 SET I[1] 0
 GOTO "L10"
 LABEL "L50"
-// Error state
+! Error state
 OUT DO[1] 1
 OUT DO[2] 0
-// Move to safe position
+! Move to safe position
 MOVJ P[3] V = 30 ACC = 50 CNT = 0
-// Wait for reset
+! Wait for reset
 WAIT DI[5] = 1 T = 60000
-// Clear error
+! Clear error
 SET I[1] 0
 SET I[2] 0
 OUT DO[1] 0
 OUT DO[2] 1
 GOTO "L10"
 LABEL "L80"
-// Emergency stop handler
+! Emergency stop handler
 OUT DO[1] 1
 OUT DO[2] 0
 OUT DO[3] 0
 SET I[1] 99
 PAUSE
 LABEL "L90"
-// Cycle complete
+! Cycle complete
 MOVJ P[1] V = 100 ACC = 100 CNT = 0
 END
