@@ -1,7 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "ribosome"
-version = "0.1.0"
-description = "Add your description here"
+name = "cell-ribosome"
+dynamic = ["version"]
+description = "text generator with llm magic"
 readme = "README.md"
-requires-python = ">=3.12"
-dependencies = []
+requires-python = ">=3.7"
+license = {text = "Apache-2.0"}
+authors = [{name = "binjian@ubt", email = "binjian.xin@gmail.com"}]
+keywords = ['nbdev', 'jupyter', 'notebook', 'python']
+classifiers = ["Natural Language :: English", "Intended Audience :: Developers", "Development Status :: 3 - Alpha", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3 :: Only"]
+dependencies = ['fastcore', 'pandas', 'jupyterlab', 'nbdev', 'gradio', 'black', 'mypy', 'IProgress', 'tqdm', '\\', 'python-dotenv', 'scrapy', 'llama_index', 'chromadb', 'openai', 'google-genai', '\\', 'langchain', 'langchain_community', 'ollama', 'pymupdf', '\\', 'langchain-ollama', 'langchain-chroma', 'langdetect', '\\', 'langchain-openai', '\\', 'odfdo', 'pypandoc', 'marker']
+
+[project.urls]
+Repository = "https://github.com/binjian.xin/cell-ribosome"
+Documentation = "https://binjian.xin.github.io/cell-ribosome"
+
+[project.entry-points.nbdev]
+ribosome = "ribosome._modidx:d"
+
+[tool.setuptools.dynamic]
+version = {attr = "ribosome.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["ribosome"]
+
+[tool.nbdev]
+clear_all = true
+jupyter_hooks = true
