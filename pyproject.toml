@@ -47,9 +47,11 @@ dependencies = [
     'odfdo',
     'pypandoc',
     'marker',
+    'markdown',
     'pydantic',
     'dotenv',
     'openai',
+    'json-cfg',
 ]
 
 [project.urls]
