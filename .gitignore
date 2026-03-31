@@ -185,3 +185,4 @@ cython_debug/
 /res/
 /.vscode/
 /cell_ribosome/
+/_proc/*.md
