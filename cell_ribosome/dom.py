@@ -5,7 +5,7 @@ __all__ = ['OLLAMA_API_KEY', 'DASHSCOPE_API_KEY', 'image_link_pattern', 'openai_
            'msg_queue', 'resp_queue', 'lock', 'ResponseStatus', 'get_text_summary_response',
            'get_image_summary_response', 'get_text_summary_response_async', 'get_image_summary_response_async',
            'get_text_summary_response_openai_async', 'get_image_summary_response_openai_async',
-           'get_summary_response_async', 'get_image_summary_async', 'AnalysisStatus', 'DOM',
+           'get_summary_response_async', 'get_image_summary_async', 'AnalysisStatus', 'with_async_context', 'DOM',
            'analyze_one_document_async', 'embed_one_document_async']
 
 # %% ../nbs/01.core.dom.ipynb #17235612
@@ -1219,6 +1219,461 @@ async def textualize(self: DOM, action: Optional[Callable] = None) -> None:
     ast_dict['blocks'] = blocks
     await self._finalize_summary_ast_async(ast_dict, blocks)
     return
+    async def get_leaf_summary_async(node:str, min_len:int) -> str: # If the string length is less than 200, return the node as is
+        if len(node) < min_len:
+            return node
+        # If the node is not an image link, return a summary of the text using unified function
+        response_content = await get_summary_response_async(self.openai_client, node, model='qwen-plus-2025-07-28', role="user", lang='zh')
+        if response_content:
+            return response_content
+        else:
+            # If the response is empty, return the original node
+            return node
+
+    async def get_list_summary_async(root: list) -> str:
+        """
+        Given a list of strings, return a summary of the list.
+        If the list is empty, return an empty string.
+        If the list has only one element, return the summary of that element.
+        If the list has more than one element, return a summary of the concatenated elements.
+        """
+        list_summary = []
+        for n in root:
+            if isinstance(n, str):
+                # If the element is a string, get its summary
+                summary = await get_leaf_summary_async(n, min_len=self.leaf_min_len)
+            elif isinstance(n, int) or isinstance(n, float):
+                # If the element is a number, get its summary
+                summary = await get_leaf_summary_async(str(n), min_len=self.leaf_min_len)
+            elif isinstance(n, dict):
+                # If the dict has a 's' key, use it as the summary
+                summary = n.get('s', '')
+            elif isinstance(n, list):
+                # If the element is a list, get its summary
+                summary = await get_list_summary_async(n)
+            elif n is None:
+                # If the element is None, skip it
+                summary = ""
+            else:
+                raise ValueError(f"Unsupported element type: {type(n)} in {n}")
+            list_summary.append(summary)
+            
+        # Concatenate all elements and summarize
+        # concatenated = " ".join(list_summary)
+        # response = get_text_summary_response(concatenated, model="gemma3:27b", role="user", lang='zh')
+        # if response.message.content:
+        #     return response.message.content
+        # else:
+        #     # If the response is empty, raise an exception
+        #     raise ValueError("Summary response is empty. Please check the input data.")
+        return await get_leaf_summary_async(" ".join(list_summary), min_len=self.leaf_min_len)
+
+    async def summary_nodewline_main(action: Optional[Callable] = None) -> None:
+        """
+        Main function to walk the AST and summarize nodes.
+        This function will be called by the walk method.
+        """
+        if not self.ast_json:
+            raise ValueError("raw_json content is empty. Cannot walk the AST and summarize.")
+        if action is None:
+            action = self.__class__.identity
+
+        config_ast = jsoncfg.load_config(str(self.ast_json_file))
+        ast_dict = json.loads(self.ast_json)
+        assert isinstance(config_ast, ConfigJSONObject), f"AST should be a dictionary, got {type(config_ast)}"
+        config_blocks = config_ast['blocks']
+        blocks = ast_dict['blocks']
+
+        _ , blocks = await summary_node_pair_async(config_blocks, blocks)
+        ast_dict['blocks'] = blocks
+        if ast_dict.get('title') is None:
+            # If the title is not set, use the file name as the title
+            if self.title is None:
+                self.title = str(self.root_path)
+        ast_dict['title'] = self.title  # Add the title to the AST
+        ast_dict['file_path'] = str(self.file_path)  # Add the file path to the AST
+
+        assert isinstance(blocks, list), f"Expected a list of blocks, got {type(blocks)}"
+        dict_summary = [b['s'] for b in blocks if isinstance(b, dict) and 's' in b]
+        dict_summary = [ast_dict['title']] + dict_summary  # Add the title to the summary list
+        # the summary of the document from the summaries in the list of blocks
+        if not ast_dict['blocks'] or dict_summary == []:
+            # If the blocks are empty, set the summary to an empty string
+            ast_dict['summary'] = ""
+            # If the summary is empty, set the AST JSON to an empty string
+            self.ast_json = json.dumps(ast_dict, ensure_ascii=False).encode("utf-8").decode("utf-8")
+        else:
+            # If the blocks are not empty, set the summary to the concatenated summaries
+            doc_summary = await get_leaf_summary_async(" ".join(dict_summary), min_len=self.leaf_min_len)
+            ast_dict['summary'] = doc_summary
+            # Convert the summarized AST back to JSON
+            self.ast_json = json.dumps(ast_dict, ensure_ascii=False).encode("utf-8").decode("utf-8")
+
+    async def summary_node_pair_async(config_node: ConfigNode, 
+                                    node: dict | list | str | int | float | bool | None) \
+                                    -> tuple[ConfigNode, dict | list | str | int | float | bool | None]:
+        '''
+        Given a string node, add key,value pair: node['s'] = node_summary, and return the node 
+        '''
+        if isinstance(node, dict):
+            assert isinstance(config_node, ConfigJSONObject), f"Expected ConfigJSONObject, got {type(config_node)}\n" \
+                f"config_node at line: {jsoncfg.node_location(config_node).line}"
+            try:
+                t = node["t"]
+            except KeyError:
+                raise ValueError(f"Node does not have a 't' key: {node}")
+            if t == "Image":  # Image summary, the Image node is as defined in the pandoc AST
+                summary = []
+                # Get the image caption
+                if isinstance(node['c'][1], list):
+                    for item in node['c'][1]:
+                        assert isinstance(item, dict), f"Expected dict in image caption list, got {type(item)} in {item}\n" \
+                                            f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                            f"On line: {jsoncfg.node_location(config_node).line}"
+                        # If the caption item is a nested structure, extract the text content
+                        if isinstance(item.get('c'), str):
+                            # summary.append(item['c'].strip())
+                            pass
+                        else:
+                            assert isinstance(item.get('c'), list), f"Expected list in image caption item, got {type(item.get('c'))} in {item}\n" \
+                                            f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                            f"On line: {jsoncfg.node_location(config_node).line}"
+                            assert item.get('c') is not None, f"Image caption item is empty: {item}\n"
+                            for chd in item.get('c'):  # type ignore
+                                if isinstance(chd.get('c'), str):
+                                    # summary.append(chd['c'].strip())
+                                    pass
+                                else:
+                                    raise ValueError(f"Allow only one level of caption formatting {type(chd.get('c'))} in {chd}\n" \
+                                            f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                            f"On line: {jsoncfg.node_location(config_node).line}")
+                            
+                else:
+                    raise ValueError(f"Invalid image caption format: {node['c'][1]}\n" \
+                                    f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                    f"On line: {jsoncfg.node_location(config_node).line}")
+                # Get the image link and summarize the image
+                try:
+                    # summary.append(node['c'][0])  # The first element are defined to be attributes of the image rendering, i.e. content-irrelevant.
+                    # If the node is an image, get its link
+                    image_link = self.root_path / node['c'][2][0]  # Assuming the image link is in the third element of the list
+                    image_link = str(image_link)
+                    if image_link and re.search(image_link_pattern, image_link):  # re.match leads to empty match if there's spaces in the path!
+                        # If the node is an image link, get its summary using unified function
+                        response_content = await get_image_summary_async(
+                            client=self.ollama_client,
+                            image_link=image_link,
+                            model="gemma3:27b",
+                            role="user",
+                            lang='zh'
+                            )
+                        # summary.append(response.message.content)
+                        node["s"] = response_content
+                    else:
+                        # If the node is not an image link, summarize its content
+                        raise ValueError(f"Invalid image link: {image_link}")
+                    # Get the summary of the image caption
+
+                except (IndexError, KeyError):
+                    # Handle cases where the image link is not in the expected format
+                    raise ValueError(f"Invalid image node structure: {node}\n" \
+                                    f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                    f"On line: {jsoncfg.node_location(config_node).line}")
+                # The second element is the image title
+                # summary.append(node['c'][2][1])  # The second element is the image title
+
+                # try:
+                #     response_txt = await get_text_summary_response_async(
+                #         client=self.llm_client,
+                #         content=" ".join(summary),
+                #         model="gemma3:27b",
+                #         role="user",
+                #         lang='zh'
+                #     )
+                #     node["s"] = response_txt.message.content
+                # except Exception as e:
+                #     raise ValueError(f"Error summarizing image node: {node}\n" \
+                #                     f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                #                     f"On line: {jsoncfg.node_location(config_node).line}\n" \
+                #                     f"Error: {e}")
+
+                print(f"Summarize image: {image_link} on line {jsoncfg.node_location(config_node).line}")
+            elif t == "Cite" or t == "AlignDefault" or t == "ColWidth" :  # Quoted node will be ignored
+                node["s"] = ""  # Set the summary to an empty string
+            else: # TextBlock summary
+                c = node.get("c", None)
+                if not c:
+                    node["s"] = ""
+                else:
+                    dict_summary = []
+                    for (ckey,cvalue), (key, value) in zip(config_node, node.items()): # get summary of the values (content)
+                        if key == "t":
+                            continue
+                        if isinstance(cvalue, ConfigJSONArray):  # get the summary of the string list
+                            assert isinstance(value, list), f"Expected a list for key {key}, got {type(value)} in {value}\n" \
+                                f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                f"key {ckey} On line: {jsoncfg.node_location(cvalue).line}"
+                            if value == [] or cvalue is None:
+                                # If the list is empty, skip it
+                                continue
+                            # If the value is a list, summarize each element
+                            node[key] = []
+                            # config_node = []
+                            for citem, item in zip(cvalue, value):
+                                try:
+                                    _, child = await summary_node_pair_async(citem, item)
+                                    node[key].append(child)
+                                except Exception as e:
+                                    raise ValueError(f"Error summarizing list item: {item}\n" \
+                                                    f"ConfigNode: {citem} of type {type(citem)}.\n" \
+                                                    f"On line: {jsoncfg.node_location(citem).line}\n" \
+                                                    f"Error: {e}")
+                                # config_node.append(config_child)
+                            dict_summary.append(await get_list_summary_async(value))
+                        elif isinstance(cvalue, ConfigJSONObject):
+                            assert isinstance(value, dict), f"Expected a dict for key {key}, got {type(value)} in {value}\n" \
+                                f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                f"key {ckey} On line: {jsoncfg.node_location(cvalue).line}"
+                            try:
+                                config_child, child = await summary_node_pair_async(cvalue, value)  # insert the value['s']
+                            except Exception as e:
+                                raise ValueError(f"Error summarizing dict item: {value}\n" \
+                                                f"ConfigNode: {cvalue} of type {type(cvalue)}.\n" \
+                                                f"On line: {jsoncfg.node_location(cvalue).line}\n" \
+                                                f"Error: {e}")
+                            assert isinstance(child,dict) and 's' in child, f"Expected dict with 's' key, got {child}\n" \
+                                f"ConfigNode: {config_child} of type {type(config_child)}.\n" \
+                                f"On line: {jsoncfg.node_location(config_child).line}"
+                            dict_summary.append(child['s'])
+
+                        elif value is None or value == "":
+                            # If the value is None, skip it
+                            continue
+                        elif isinstance(cvalue, ConfigJSONScalar):
+                            assert isinstance(value, (str, int, float)), f"Expected a scalar for key {key}, got {type(value)} in {value}\n" \
+                                f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                f"key {ckey} On line: {jsoncfg.node_location(cvalue).line}"
+                            # If the value is a scalar, summarize it
+                            if isinstance(value, str):
+                                value = value.strip()
+                            dict_summary.append(await get_leaf_summary_async(str(value),min_len=self.leaf_min_len))
+                    # get the summary of the node
+                    if dict_summary:  # type: ignore
+                        # If there are summaries, concatenate them
+                        node["s"] = await get_leaf_summary_async(" ".join(dict_summary),min_len=self.leaf_min_len)
+                        # node["s"] = get_text_summary_response(
+                        #     " ".join(dict_summary), model="gemma3:27b", role="user", lang='zh'
+                        # ).message.content
+                    else:
+                        # If no summaries, set to empty string
+                        node["s"] = ""
+
+                # if t is table
+                if t == "Table":
+                    print(f"{self.file_path} Summarize table: {self.table_count} on line {jsoncfg.node_location(config_node).line}")
+                    self.table_count += 1
+                elif t == "Section":
+                    print(f"{self.file_path} Summarize section: {self.section_count} on line {jsoncfg.node_location(config_node).line}")
+                    self.section_count += 1
+
+        elif isinstance(node, list):
+            assert isinstance(config_node, ConfigJSONArray), f"Expected ConfigJSONArray, got {type(config_node)}" \
+                f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                f"On line: {jsoncfg.node_location(config_node).line}"
+            new_node = []
+            for citem, item in zip(config_node, node):
+                if isinstance(item, (str, int, float, bool)):
+                    child = str(item).strip()
+                elif isinstance(item, (dict, list)):
+                    try:
+                        _, child = await summary_node_pair_async(citem, item)
+                    except Exception as e:
+                        raise ValueError(f"Error summarizing list item: {item}\n" \
+                                        f"ConfigNode: {citem} of type {type(citem)}.\n" \
+                                        f"On line: {jsoncfg.node_location(citem).line}\n" \
+                                        f"Error: {e}")
+                # config_node.append(config_child)
+                else: # item is None
+                    child = item
+                new_node.append(child)
+            node = new_node
+        elif isinstance(node, (str, int, float, bool)):
+            assert isinstance(config_node, ConfigJSONScalar), f"Expected ConfigJSONScalar, got {type(config_node)}" \
+                f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                f"On line: {jsoncfg.node_location(config_node).line}"
+            try:
+                node_summary = await get_leaf_summary_async(str(node), min_len=self.leaf_min_len)
+                node = node_summary
+            except Exception as e:
+                raise ValueError(f"Error summarizing node: {node}\n" \
+                                f"ConfigNode: {config_node} of type {type(config_node)}.\n" \
+                                f"On line: {jsoncfg.node_location(config_node).line}\n" \
+                                f"Error: {e}")
+        else:
+            raise ValueError(f"Unsupported node type: {type(node)} in {node}\n" \
+                            f"Unsupported ConfigNode: {config_node} of type {type(config_node)}." \
+                            f"On line: {jsoncfg.node_location(config_node).line}")  
+
+        return config_node, node
+
+    async def summary_node_main(action: Optional[Callable] = None) -> None:
+        """
+        Main function to walk the AST and summarize nodes.
+        This function will be called by the walk method.
+        """
+        if not self.ast_json:
+            raise ValueError("raw_json content is empty. Cannot walk the AST and summarize.")
+        if action is None:
+            action = self.__class__.identity
+
+        ast = json.loads(self.ast_json)
+        blocks = ast.get("blocks", [])
+
+        ast['blocks'] = await summary_node_async(blocks)
+        if ast.get('title') is None:
+            # If the title is not set, use the file name as the title
+            if self.title is None:
+                self.title = str(self.root_path)
+        ast['title'] = self.title  # Add the title to the AST
+        ast['file_path'] = str(self.file_path)  # Add the file path to the AST
+
+        assert isinstance(blocks, list), f"Expected a list of blocks, got {type(blocks)}"
+        dict_summary = [b['s'] for b in blocks if isinstance(b, dict) and 's' in b]
+        dict_summary = [ast['title']] + dict_summary  # Add the title to the summary list
+        # the summary of the document from the summaries in the list of blocks
+        if not ast['blocks'] or dict_summary == []:
+            # If the blocks are empty, set the summary to an empty string
+            ast['summary'] = ""
+            # If the summary is empty, set the AST JSON to an empty string
+            self.ast_json = json.dumps(ast, ensure_ascii=False).encode("utf-8").decode("utf-8")
+        else:
+            # If the blocks are not empty, set the summary to the concatenated summaries
+            doc_summary = await get_leaf_summary_async(" ".join(dict_summary), min_len=self.leaf_min_len)
+            ast['summary'] = doc_summary
+            # Convert the summarized AST back to JSON
+            self.ast_json = json.dumps(ast, ensure_ascii=False).encode("utf-8").decode("utf-8")
+        
+    async def summary_node_async(node: dict | list) -> dict | list:
+        '''
+        Given a string node, add key,value pair: node['s'] = node_summary, and return the node 
+        '''
+        if isinstance(node, dict):
+            try:
+                t = node["t"]
+            except KeyError:
+                raise ValueError(f"Node does not have a 't' key: {node}")
+            if t == "Image":  # Image summary, the Image node is as defined in the pandoc AST
+                summary = []
+                if (not node['c'][1] == []) and (node['c'][1][0] is not None) and (node['c'][1][0].get('c') is not None):
+                    summary.append(node['c'][1][0]['c'])  # The content of the second element is the image caption
+                try:
+                    # summary.append(node['c'][0])  # The first element are defined to be attributes of the image rendering, i.e. content-irrelevant.
+                    # If the node is an image, get its link
+                    image_link = self.modelroot_path / node['c'][2][0]  # Assuming the image link is in the third element of the list
+                    image_link = str(image_link)
+                    if image_link and re.search(image_link_pattern, image_link):  # re.match leads to empty match if there's spaces in the path!
+                        # If the node is an image link, get its summary
+                        response = await get_image_summary_response_async(
+                            client=self.ollama_client,
+                            image_link=image_link,
+                            model="gemma3:27b",
+                            role="user",
+                            lang='zh'
+                            )
+                        summary.append(response.message.content)
+                    else:
+                        # If the node is not an image link, summarize its content
+                        raise ValueError(f"Invalid image link: {image_link}")
+                    # Get the summary of the image caption
+
+                except (IndexError, KeyError):
+                    # Handle cases where the image link is not in the expected format
+                    raise ValueError(f"Invalid image node structure: {node}")
+                # The second element is the image title
+                summary.append(node['c'][2][1])  # The second element is the image title
+
+                response_txt = await get_text_summary_response_async(
+                    client=self.openai_client,
+                    content=" ".join(summary),
+                    model="gemma3:27b",
+                    role="user",
+                    lang='zh'
+                )
+                node["s"] = response_txt.message.content
+
+                print(f"Summarize image: {image_link}")
+            elif t == "Cite" or t == "AlignDefault" or t == "ColWidth" :  # Quoted node will be ignored
+                node["s"] = ""  # Set the summary to an empty string
+            else: # TextBlock summary
+                c = node.get("c", None)
+                if not c:
+                    node["s"] = ""
+                else:
+                    dict_summary = []
+                    for key, value in node.items(): # get summary of the values (content)
+                        if key == "t":
+                            continue
+                        if isinstance(value, list):  # get the summary of the string list
+                            if value == []:
+                                # If the list is empty, skip it
+                                continue
+                            # If the value is a list, summarize each element
+                            node[key] = [
+                                await summary_node_async(child)
+                                if isinstance(child, (dict,list))
+                                else child
+                                for child in value
+                            ]
+                            dict_summary.append(await get_list_summary_async(value))
+                        elif isinstance(value, dict):
+                            child = await summary_node_async(value)  # insert the value['s']
+                            assert isinstance(child, dict) and 's' in child, f"Expected dict with 's' key, got {child}"
+                            dict_summary.append(child['s'])
+
+                        elif value is None or value == "":
+                            # If the value is None, skip it
+                            continue
+                        else:
+                            if not isinstance(value, str):
+                                # If the value is not a string, convert it to a string
+                                value = str(value)
+                            dict_summary.append(await get_leaf_summary_async(value,min_len=self.leaf_min_len))
+                    # get the summary of the node
+                    if dict_summary:  # type: ignore
+                        # If there are summaries, concatenate them
+                        node["s"] = await get_leaf_summary_async(" ".join(dict_summary),min_len=self.leaf_min_len)
+                        # node["s"] = get_text_summary_response(
+                        #     " ".join(dict_summary), model="gemma3:27b", role="user", lang='zh'
+                        # ).message.content
+                    else:
+                        # If no summaries, set to empty string
+                        node["s"] = ""
+
+                # if t is table
+                if t == "Table":
+                    print(f"{self.file_path} Summarize table: {self.table_count}")
+                    self.table_count += 1
+                elif t == "Section":
+                    print(f"{self.file_path} Summarize section: {self.section_count} section depth {node['c'][0]['c'][0]}")
+                    self.section_count += 1
+
+        elif isinstance(node, list):
+            node = [
+                await summary_node_async(child) if isinstance(child, (dict,list)) else child
+                for child in node
+            ]
+        else:
+            assert isinstance(node, str), f"Expected a string node, got {type(node)}, on json line"
+            # If the node is a string, get its summary
+            node_summary = await get_leaf_summary_async(node, min_len=self.leaf_min_len)
+            node = node_summary
+
+        return node
+
+    # Run the summary_nodewline_main function asynchronously
+    # asyncio.run(summary_nodewline_main(action))
+    await summary_nodewline_main(action)
+    return 
 
 
 # %% ../nbs/01.core.dom.ipynb #02e63d20
