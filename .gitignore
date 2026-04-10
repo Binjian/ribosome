@@ -184,5 +184,4 @@ cython_debug/
 /ollama_logs.text
 /res/
 /.vscode/
-/cell_ribosome/
 /_proc/
