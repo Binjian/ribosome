@@ -48,9 +48,7 @@ from openai import OpenAI, AsyncOpenAI
 from dotenv import load_dotenv
 load_dotenv()
 OLLAMA_API_KEY= os.getenv('OLLAMA_API_KEY')
-print(OLLAMA_API_KEY)
 DASHSCOPE_API_KEY= os.getenv('DASHSCOPE_API_KEY')
-print(DASHSCOPE_API_KEY)
 
 # %% ../nbs/01.core.dom.ipynb #ac94f2d9
 def get_text_summary_response(content: str, model:str="gemma3-27b", role:str="user", lang: str="zh") -> ChatResponse:
