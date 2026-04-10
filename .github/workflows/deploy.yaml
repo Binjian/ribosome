@@ -6,7 +6,7 @@ permissions:
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "dom_module" ]
   workflow_dispatch:
 jobs:
   deploy:
