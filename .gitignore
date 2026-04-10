@@ -184,3 +184,6 @@ cython_debug/
 /ollama_logs.text
 /res/
 /.vscode/
+/ChromaDash 2.0.0.58/
+/chromadb/
+/db_1/
