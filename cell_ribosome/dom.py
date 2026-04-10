@@ -855,7 +855,7 @@ async def embed(self: DOM, action: Optional[Callable] = None, db_path: Optional[
     ast['e'] = response.embedding  # type: ignore
     cur_object_path = [ast['i']]  # Initialize the current object path with the AST ID
     ast['m'] = {
-        'obj_path': cur_object_path,
+        'obj_path': list(cur_object_path),
         'embed_model': 'bge-m3',  # type: ignore
     }
 
@@ -899,7 +899,7 @@ async def embed(self: DOM, action: Optional[Callable] = None, db_path: Optional[
         node['e'] = response.embedding  # type: ignore
         # Add meta information
         node['m'] = {
-            'obj_path': cur_object_path,  # type: ignore
+            'obj_path': list(cur_object_path),  # type: ignore
             'embed_model' : response.model,  # type: ignore
         }
         collection.add(
