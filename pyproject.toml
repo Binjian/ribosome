@@ -9,7 +9,7 @@ description = "text generator with llm magic"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
-authors = [{ name = "binjian@ubt", email = "binjian.xin@gmail.com" }]
+authors = [{ name = "x", email = "binjian.xin@gmail.com" }]
 keywords = ['nbdev', 'jupyter', 'notebook', 'python']
 classifiers = [
     "Natural Language :: English",
@@ -43,8 +43,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/binjian.xin/ribosome"
-Documentation = "https://binjian.xin.github.io/ribosome"
+Repository = "https://github.com/binjian/ribosome"
+Documentation = "https://binjian.github.io/ribosome"
 
 [project.entry-points.nbdev]
 ribosome = "ribosome._modidx:d"
