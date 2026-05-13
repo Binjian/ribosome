@@ -185,3 +185,4 @@ cython_debug/
 /res/
 /.vscode/
 /_proc/
+/chroma/
