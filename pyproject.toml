@@ -58,3 +58,6 @@ include = ["ribosome"]
 [tool.nbdev]
 clear_all = true
 jupyter_hooks = true
+allowed_metadata_keys = ["authors", "description", "keywords", "license", "readme", "requires-python", "version"]
+allowed_cell_metadata_keys = ["tags", "aliases", "exports", "hide_input", "hide_output", "hide_cell"]
+clean_ids = true
