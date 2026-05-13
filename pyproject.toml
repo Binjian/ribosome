@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cell-ribosome"
+name = "ribosome"
 dynamic = ["version"]
 description = "text generator with llm magic"
 readme = "README.md"
@@ -55,8 +55,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/binjian.xin/cell-ribosome"
-Documentation = "https://binjian.xin.github.io/cell-ribosome"
+Repository = "https://github.com/binjian.xin/ribosome"
+Documentation = "https://binjian.xin.github.io/ribosome"
 
 [project.entry-points.nbdev]
 ribosome = "ribosome._modidx:d"
