@@ -2,8 +2,8 @@ project:
   output-dir: _docs
 
 website:
-  title: "cell-ribosome"
-  site-url: "https://binjian.xin.github.io/cell-ribosome"
+  title: "ribosome"
+  site-url: "https://binjian.github.io/ribosome"
   description: "text generator with llm magic"
   repo-branch: main
-  repo-url: "https://github.com/binjian.xin/cell-ribosome"
+  repo-url: "https://github.com/binjian/ribosome"

@@ -2,5 +2,8 @@ website:
   sidebar:
     contents:
       - index.ipynb
-      - 00_core.ipynb
-      - 01.core.dom.ipynb
+      - 00.core.ipynb
+      - 01.core.dom.summary.ipynb
+      - 01.core.dom.utils.ipynb
+      - 01.core.domclass.ipynb
+      - 02.process.semantics.ipynb
