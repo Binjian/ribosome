@@ -1,0 +1,37 @@
+image: robtheoceanographer/nbdev2:2.3.13
+
+# Cache modules in between jobs
+cache:
+  key: $CI_COMMIT_REF_SLUG
+
+clean:
+  stage: build
+  script:
+    - echo "Check we are starting with clean git checkout"
+    - if [ -n "$(git status -uno -s)" ]; then echo "git status is not clean"; false; fi
+    - echo "Trying to strip out notebooks"
+    - nbdev_clean
+    - echo "Check that strip out was unnecessary"
+    - git status -s # display the status to see which nbs need cleaning up
+    - if [ -n "$(git status -uno -s)" ]; then echo -e "!!! Detected unstripped out notebooks\n!!!Remember to run nbdev_install_hooks"; false; fi
+
+test:
+  stage: test
+  script:
+    - echo "Doing the testing here..."
+    - nbdev_install
+    - nbdev_test
+
+pages:
+  stage: deploy
+  script:
+    - pwd
+    - nbdev_install
+    - nbdev_docs
+    - cp -r _docs/ public/
+    - ls
+#    - bash -c ' -d public &>/dev/null' &
+#    - bash -c 'python -m http.server 8888 -d public &>/dev/null' &
+  artifacts:
+    paths:
+      - public
