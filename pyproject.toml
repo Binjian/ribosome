@@ -41,6 +41,7 @@ dependencies = [
     'openai',
     'json-cfg',
     "pre-commit>=4.6.0",
+    "mermaid-py>=0.8.4",
 ]
 
 [project.urls]
