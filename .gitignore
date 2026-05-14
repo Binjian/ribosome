@@ -186,3 +186,4 @@ cython_debug/
 /.vscode/
 /_proc/
 /chroma/
+/nbs/chroma/
