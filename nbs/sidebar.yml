@@ -3,7 +3,10 @@ website:
     contents:
       - index.ipynb
       - 00.core.ipynb
+      - 01.core.dom.embedding.ipynb
+      - 01.core.dom.reorg.ipynb
       - 01.core.dom.summary.ipynb
+      - 01.core.dom.tree.ipynb
       - 01.core.dom.utils.ipynb
       - 01.core.domclass.ipynb
       - 02.process.semantics.ipynb
