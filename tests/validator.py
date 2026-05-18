@@ -1,50 +1,36 @@
 import json
-import re
 import sys
 import traceback
 
-def run_notebook(path):
-    print(f"Validating {path}...")
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            nb = json.load(f)
-    except Exception as e:
-        print(f"FAILED to parse JSON: {e}")
-        return False
-
+def validate_notebook(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        nb = json.load(f)
+    
     namespace = {}
-    cell_idx = 0
+    code_cell_num = 0
     for cell in nb.get('cells', []):
         if cell.get('cell_type') == 'code':
-            cell_idx += 1
-            code_lines = cell.get('source', [])
-            cleaned_lines = []
-            for line in code_lines:
-                # Strip magics and shell escapes
-                if line.strip().startswith('%') or line.strip().startswith('!'):
-                    continue
-                cleaned_lines.append(line)
-            
-            code = "".join(cleaned_lines)
+            code_cell_num += 1
+            source = "".join(cell.get('source', []))
+            lines = []
+            for line in source.splitlines():
+                stripped = line.strip()
+                if not stripped.startswith('%') and not stripped.startswith('!'):
+                    lines.append(line)
+            code = "\n".join(lines)
             if not code.strip():
                 continue
-                
+            
             try:
                 exec(code, namespace)
             except Exception:
-                print(f"FAILED at cell {cell_idx}")
-                print(traceback.format_exc(limit=3))
-                return False
-    
-    print("PASSED")
-    return True
+                print(f"FAIL: Cell {code_cell_num}")
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                # Get the last line of the exception message
+                msg = traceback.format_exception_only(exc_type, exc_value)[-1].strip()
+                print(msg)
+                return
+    print("PASS")
 
 if __name__ == "__main__":
-    results = {}
-    for nb_path in sys.argv[1:]:
-        results[nb_path] = run_notebook(nb_path)
-    
-    if all(results.values()):
-        sys.exit(0)
-    else:
-        sys.exit(1)
+    validate_notebook(sys.argv[1])
