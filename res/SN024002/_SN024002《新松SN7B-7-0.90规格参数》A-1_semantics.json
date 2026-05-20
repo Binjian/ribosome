@@ -1,0 +1,162 @@
+{
+  "pandoc-api-version": [
+    1,
+    23,
+    1
+  ],
+  "meta": {},
+  "blocks": [
+    {
+      "t": "Section",
+      "c": [
+        {
+          "t": "Header",
+          "c": [
+            1,
+            [
+              "<!-- Slide number: 1 -->",
+              [],
+              []
+            ],
+            [
+              {
+                "t": "Str",
+                "c": "<!-- Slide number: 1 -->",
+                "s": "Str <!-- Slide number: 1 -->"
+              }
+            ]
+          ],
+          "s": "Header 1 <!-- Slide number: 1 -->   Str <!-- Slide number: 1 -->"
+        },
+        {
+          "t": "Content",
+          "c": [
+            {
+              "t": "Para",
+              "c": [
+                {
+                  "t": "Str",
+                  "c": "SN7B-7/0.90",
+                  "s": "Str SN7B-7/0.90"
+                },
+                {
+                  "t": "SoftBreak",
+                  "s": "SoftBreak"
+                },
+                {
+                  "t": "Str",
+                  "c": "规格参数介绍",
+                  "s": "Str 规格参数介绍"
+                }
+              ],
+              "s": "Para Str SN7B-7/0.90 SoftBreak Str 规格参数介绍"
+            }
+          ],
+          "s": "Content Para Str SN7B-7/0.90 SoftBreak Str 规格参数介绍"
+        }
+      ],
+      "s": "Section Header 1 <!-- Slide number: 1 -->   Str <!-- Slide number: 1 --> Content Para Str SN7B-7/0.90 SoftBreak Str 规格参数介绍"
+    },
+    {
+      "t": "Section",
+      "c": [
+        {
+          "t": "Header",
+          "c": [
+            1,
+            [
+              "<!-- Slide number: 9 -->",
+              [],
+              []
+            ],
+            [
+              {
+                "t": "Str",
+                "c": "<!-- Slide number: 9 -->",
+                "s": "Str <!-- Slide number: 9 -->"
+              }
+            ]
+          ],
+          "s": "Header 1 <!-- Slide number: 9 -->   Str <!-- Slide number: 9 -->"
+        },
+        {
+          "t": "Content",
+          "c": [
+            {
+              "t": "Para",
+              "c": [
+                {
+                  "t": "Str",
+                  "c": "负载曲线",
+                  "s": "Str 负载曲线"
+                }
+              ],
+              "s": "Para Str 负载曲线"
+            },
+            {
+              "t": "Figure",
+              "c": [
+                [
+                  "",
+                  [],
+                  []
+                ],
+                [
+                  null,
+                  [
+                    {
+                      "t": "Plain",
+                      "c": [
+                        {
+                          "t": "Str",
+                          "c": "img",
+                          "s": "Str img"
+                        }
+                      ],
+                      "s": "Plain Str img"
+                    }
+                  ]
+                ],
+                [
+                  {
+                    "t": "Plain",
+                    "c": [
+                      {
+                        "t": "Image",
+                        "c": [
+                          [
+                            "",
+                            [],
+                            []
+                          ],
+                          [
+                            {
+                              "t": "Str",
+                              "c": "img"
+                            }
+                          ],
+                          [
+                            "img/img_20.png",
+                            ""
+                          ]
+                        ],
+                        "s": "该图像展示了一个桌面型SCARA机器人手臂，具备约300毫米的X/Y/Z轴工作范围和2-7公斤的负载能力。机器人配备矩形底座以提供稳定性。虽然无法从图像中明确确定其自由度，但至少有三个旋转轴。\n"
+                      }
+                    ],
+                    "s": "Plain 该图像展示了一个桌面型SCARA机器人手臂，具备约300毫米的X/Y/Z轴工作范围和2-7公斤的负载能力。机器人配备矩形底座以提供稳定性。虽然无法从图像中明确确定其自由度，但至少有三个旋转轴。\n"
+                  }
+                ]
+              ],
+              "s": "Figure     Plain Str img Plain 该图像展示了一个桌面型SCARA机器人手臂，具备约300毫米的X/Y/Z轴工作范围和2-7公斤的负载能力。机器人配备矩形底座以提供稳定性。虽然无法从图像中明确确定其自由度，但至少有三个旋转轴。\n"
+            }
+          ],
+          "s": "Content Para Str 负载曲线 Figure     Plain Str img Plain 该图像展示了一个桌面型SCARA机器人手臂，具备约300毫米的X/Y/Z轴工作范围和2-7公斤的负载能力。机器人配备矩形底座以提供稳定性。虽然无法从图像中明确确定其自由度，但至少有三个旋转轴。\n"
+        }
+      ],
+      "s": "Section 该字符串描述了幻灯片 9 上的内容，展示了一个桌面型 SCARA 机器人手臂。该机器人拥有约 300mm 的工作范围和 2-7kg 的负载能力，配备矩形底座以增强稳定性，拥有至少三个旋转轴。\n"
+    }
+  ],
+  "title": "SN024002《新松SN7B-7-0.90规格参数》A-1",
+  "file_path": "../res/SN024002/SN024002《新松SN7B-7-0.90规格参数》A-1.md",
+  "summary": "这份文档（SN024002）是新松SN7B-7-0.90桌面型SCARA机器人手臂的规格参数介绍。该机器人工作范围约为300mm，负载能力为2-7kg，并具有矩形底座和至少三个旋转轴，以提高稳定性和灵活性。\n"
+}
