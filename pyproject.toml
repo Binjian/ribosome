@@ -43,6 +43,7 @@ dependencies = [
     "pre-commit>=4.6.0",
     "mermaid-py>=0.8.4",
     "git-python>=1.0.3",
+    "pytest>=9.0.3",
 ]
 
 [project.urls]
