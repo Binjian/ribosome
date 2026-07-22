@@ -49,6 +49,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [ "ipywidgets", "nbdev-numpy", "nbdev-stdlib", "pandas", "matplotlib", "black", "svg.py", "nbclassic",
     "pysymbol_llm", "llms-txt", "sphinx", "plum-dispatch", "ollama" ]
+ocr-layout = ["glmocr[selfhosted]>=0.1.5"]
 
 [project.urls]
 Repository = "https://github.com/binjian/ribosome"
