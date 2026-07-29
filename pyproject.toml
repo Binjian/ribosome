@@ -27,7 +27,7 @@ dependencies = [
     'mypy',
     'IProgress',
     'tqdm',
-    'python-dotenv',
+    "python-dotenv",
     'chromadb',
     'openai',
     'ollama',
@@ -45,6 +45,7 @@ dependencies = [
     "pre-commit>=4.6.0",
     "mermaid-py>=0.8.4",
     "pytest>=9.0.3",
+    "markitdown[all]>=0.1.5",
 ]
 [project.optional-dependencies]
 dev = [ "ipywidgets", "nbdev-numpy", "nbdev-stdlib", "pandas", "matplotlib", "black", "svg.py", "nbclassic",
