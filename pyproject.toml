@@ -25,7 +25,7 @@ dependencies = [
     'nbdev',
     'gradio',
     'mypy',
-    'IProgress',
+    'ipywidgets',
     'tqdm',
     "python-dotenv",
     'chromadb',
