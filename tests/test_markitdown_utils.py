@@ -261,14 +261,17 @@ def test_inkscape_converter_normalizes_mislabeled_emf(tmp_path, monkeypatch):
 
     async def fake_run_subprocess(command):
         commands.append(command)
-        temporary_png = Path(
-            next(
-                argument.removeprefix("--export-filename=")
-                for argument in command
-                if argument.startswith("--export-filename=")
+        if command[0] == "inkscape":
+            temporary_png = Path(
+                next(
+                    argument.removeprefix("--export-filename=")
+                    for argument in command
+                    if argument.startswith("--export-filename=")
+                )
             )
-        )
-        temporary_png.write_bytes(b"png")
+            temporary_png.write_bytes(b"png")
+        else:
+            Path(command[-1]).write_bytes(b"opaque png")
         return b"", b""
 
     monkeypatch.setattr(win._utils, "_run_subprocess", fake_run_subprocess)
@@ -282,4 +285,26 @@ def test_inkscape_converter_normalizes_mislabeled_emf(tmp_path, monkeypatch):
     )
 
     assert Path(commands[0][1]).suffix == ".emf"
-    assert target.read_bytes() == b"png"
+    assert commands[1][0] == "magick"
+    assert commands[1][2:6] == ["-background", "white", "-alpha", "off"]
+    assert target.read_bytes() == b"opaque png"
+
+
+def test_metafile_fallback_forces_opaque_output(tmp_path, monkeypatch):
+    source = tmp_path / "drawing.emf"
+    source.write_bytes(b"emf")
+    target = tmp_path / "drawing.png"
+    commands = []
+
+    monkeypatch.setattr(win.shutil, "which", lambda _: None)
+
+    async def fake_run_subprocess(command):
+        commands.append(command)
+        return b"", b""
+
+    monkeypatch.setattr(win._utils, "_run_subprocess", fake_run_subprocess)
+
+    asyncio.run(win._convert_metafile_to_png(source, target))
+
+    assert commands[0][0] == "magick"
+    assert commands[0][6:10] == ["-background", "white", "-alpha", "off"]
