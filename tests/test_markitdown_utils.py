@@ -1,9 +1,32 @@
 import asyncio
 import base64
 import inspect
+import sys
 from pathlib import Path
 
 from ribosome.preprocessing.parsing.ms_office.markitdown import utils, win
+
+
+def test_subprocess_runner_falls_back_when_event_loop_transport_is_unsupported(
+    monkeypatch,
+):
+    async def unsupported_subprocess_transport(*_args, **_kwargs):
+        raise NotImplementedError
+
+    monkeypatch.setattr(
+        asyncio,
+        "create_subprocess_exec",
+        unsupported_subprocess_transport,
+    )
+
+    stdout, stderr = asyncio.run(
+        utils._run_subprocess(
+            [sys.executable, "-c", "print('selector-compatible')"]
+        )
+    )
+
+    assert stdout.strip() == b"selector-compatible"
+    assert stderr == b""
 
 
 def test_convert_office_to_md_sanitizes_output_path_components(tmp_path, monkeypatch):
