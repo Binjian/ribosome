@@ -290,6 +290,19 @@ def test_inkscape_converter_normalizes_mislabeled_emf(tmp_path, monkeypatch):
     assert target.read_bytes() == b"opaque png"
 
 
+def test_find_inkscape_in_standard_windows_install_folder(tmp_path, monkeypatch):
+    program_files = tmp_path / "Program Files"
+    inkscape = program_files / "Inkscape" / "bin" / "inkscape.exe"
+    inkscape.parent.mkdir(parents=True)
+    inkscape.write_bytes(b"")
+
+    monkeypatch.setattr(win.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("ProgramFiles", str(program_files))
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+
+    assert win._find_inkscape() == str(inkscape)
+
+
 def test_metafile_fallback_forces_opaque_output(tmp_path, monkeypatch):
     source = tmp_path / "drawing.emf"
     source.write_bytes(b"emf")
@@ -297,6 +310,8 @@ def test_metafile_fallback_forces_opaque_output(tmp_path, monkeypatch):
     commands = []
 
     monkeypatch.setattr(win.shutil, "which", lambda _: None)
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "missing"))
+    monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "also-missing"))
 
     async def fake_run_subprocess(command):
         commands.append(command)
