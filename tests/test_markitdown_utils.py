@@ -202,6 +202,10 @@ def test_windows_vector_converter_handles_markdown_html_and_svg(
     svg_file = image_folder / "logo.svg"
     for image_file in (wmf_file, emf_file, svg_file):
         image_file.write_bytes(b"vector")
+    original_images = {
+        image_file: image_file.read_bytes()
+        for image_file in (wmf_file, emf_file, svg_file)
+    }
 
     markdown_file = tmp_path / "vectors.md"
     markdown_file.write_text(
@@ -218,10 +222,12 @@ def test_windows_vector_converter_handles_markdown_html_and_svg(
 
     async def fake_magick(source: Path, target: Path) -> None:
         converted_paths.append((source, target))
+        source.write_bytes(b"changed by converter")
         target.write_bytes(b"converted")
 
     async def fake_metafile(source: Path, target: Path) -> None:
         converted_paths.append((source, target))
+        source.write_bytes(b"changed by converter")
         target.write_bytes(b"converted")
 
     monkeypatch.setattr(win, "_magick_convert", fake_magick)
@@ -234,6 +240,10 @@ def test_windows_vector_converter_handles_markdown_html_and_svg(
     assert "img/drawing.png" in rewritten
     assert "img/schematic.png" in rewritten
     assert 'src="img/logo.png"' in rewritten
+    assert {
+        image_file: image_file.read_bytes()
+        for image_file in original_images
+    } == original_images
     assert converted_paths == [
         (wmf_file, image_folder / "drawing.png"),
         (emf_file, image_folder / "schematic.png"),
