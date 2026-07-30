@@ -1,3 +1,6 @@
+import asyncio
+import base64
+import inspect
 from pathlib import Path
 
 from ribosome.preprocessing.parsing.ms_office.markitdown import utils, win
@@ -9,13 +12,20 @@ def test_convert_office_to_md_sanitizes_output_path_components(tmp_path, monkeyp
     source = office_root / "sample file .docx"
     source.write_bytes(b"fake office content")
 
-    def fake_run_markitdown(source_path: Path, target_path: Path) -> None:
+    async def fake_run_markitdown(source_path: Path, target_path: Path) -> None:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text("# ok", encoding="utf-8")
 
     monkeypatch.setattr(utils, "_run_markitdown", fake_run_markitdown)
 
-    report = utils.convert_office_to_md(office_root, tmp_path / "out", overwrite=True, show_progress=False)
+    report = asyncio.run(
+        utils.convert_office_to_md(
+            office_root,
+            tmp_path / "out",
+            overwrite=True,
+            show_progress=False,
+        )
+    )
 
     assert len(report["converted"]) == 1
     markdown_path = report["converted"][0]
@@ -37,19 +47,123 @@ def test_windows_image_conversion_ignores_dot_prefixed_folders(
 
     gif_files = []
     vector_files = []
-    monkeypatch.setattr(
-        win,
-        "convert_md_gif2png_win",
-        lambda markdown_file, _image_folder: gif_files.append(markdown_file) or -1,
-    )
-    monkeypatch.setattr(
-        win,
-        "extract_md_html_images_win",
-        lambda markdown_file: vector_files.append(markdown_file) or -1,
-    )
+    async def fake_gif(markdown_file, _image_folder):
+        gif_files.append(markdown_file)
+        return -1
 
-    win.convert_gif2png_from_md(root, show_progress=False)
-    win.convert_html_wmf_emf_image_from_md(root, show_progress=False)
+    async def fake_vector(markdown_file):
+        vector_files.append(markdown_file)
+        return -1
+
+    monkeypatch.setattr(win, "convert_md_gif2png_win", fake_gif)
+    monkeypatch.setattr(win, "extract_md_html_images_win", fake_vector)
+
+    async def run_conversions():
+        await win.convert_gif2png_from_md(root, show_progress=False)
+        await win.convert_html_wmf_emf_image_from_md(root, show_progress=False)
+
+    asyncio.run(run_conversions())
 
     assert gif_files == [visible.resolve()]
     assert vector_files == [visible.resolve()]
+
+
+def test_office_conversion_runs_with_bounded_concurrency(tmp_path, monkeypatch):
+    office_root = tmp_path / "office"
+    office_root.mkdir()
+    for index in range(4):
+        (office_root / f"sample-{index}.docx").write_bytes(b"fake")
+
+    active = 0
+    peak = 0
+
+    async def fake_run_markitdown(_source: Path, target: Path) -> None:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await asyncio.sleep(0.02)
+            target.write_text("# ok", encoding="utf-8")
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(utils, "_run_markitdown", fake_run_markitdown)
+    report = asyncio.run(
+        utils.convert_office_to_md(
+            office_root,
+            tmp_path / "out",
+            overwrite=True,
+            show_progress=False,
+            max_concurrency=2,
+        )
+    )
+
+    assert peak == 2
+    assert len(report["converted"]) == 4
+
+
+def test_shared_processing_apis_are_async():
+    for function in (
+        utils.get_office_files_root,
+        utils.extract_mpo_frames,
+        utils.convert_office_to_md,
+        utils.extract_base64_images,
+        utils.extract_base64_from_md,
+        utils.process_office_files,
+        win.convert_md_gif2png_win,
+        win.convert_gif2png_from_md,
+        win.extract_md_html_images_win,
+        win.convert_html_wmf_emf_image_from_md,
+    ):
+        assert inspect.iscoroutinefunction(function)
+
+
+def test_extract_base64_images_is_awaitable(tmp_path):
+    markdown_file = tmp_path / "document.md"
+    payload = base64.b64encode(b"image-bytes").decode("ascii")
+    markdown_file.write_text(
+        f"![robot](data:image/png;base64,{payload})",
+        encoding="utf-8",
+    )
+
+    extracted = asyncio.run(utils.extract_base64_images(markdown_file))
+
+    image_file = tmp_path / "img" / "0001_robot.png"
+    assert extracted == 1
+    assert image_file.read_bytes() == b"image-bytes"
+    assert "img/0001_robot.png" in markdown_file.read_text(encoding="utf-8")
+
+
+def test_windows_single_file_image_converters_are_awaitable(tmp_path, monkeypatch):
+    gif_file = tmp_path / "robot.gif"
+    vector_file = tmp_path / "diagram.wmf"
+    gif_file.write_bytes(b"gif")
+    vector_file.write_bytes(b"wmf")
+    gif_markdown = tmp_path / "gif.md"
+    vector_markdown = tmp_path / "vector.md"
+    gif_markdown.write_text("![robot](robot.gif)", encoding="utf-8")
+    vector_markdown.write_text(
+        '<img src="diagram.wmf">',
+        encoding="utf-8",
+    )
+    converted_paths = []
+
+    async def fake_magick(source: Path, target: Path) -> None:
+        converted_paths.append((source, target))
+        target.write_bytes(b"converted")
+
+    monkeypatch.setattr(win, "_magick_convert", fake_magick)
+
+    async def run_conversions():
+        gif_count = await win.convert_md_gif2png_win(gif_markdown)
+        vector_count = await win.extract_md_html_images_win(vector_markdown)
+        return gif_count, vector_count
+
+    assert asyncio.run(run_conversions()) == (1, 1)
+    assert "robot.png" in gif_markdown.read_text(encoding="utf-8")
+    assert "diagram.png" in vector_markdown.read_text(encoding="utf-8")
+    assert [target.suffix for _, target in converted_paths] == [
+        ".png",
+        ".svg",
+        ".png",
+    ]
