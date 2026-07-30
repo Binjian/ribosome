@@ -5,19 +5,20 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
+
+import chromadb
 
 os.environ.setdefault("DASHSCOPE_API_KEY", "test-key")
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cell_ribosome.dom import DOM
+from ribosome.core.dom.model import DOMClass as DOM
 
 
 class FakeEmbedResponse:
     def __init__(self, text: str):
-        self.embedding = [float(len(text or ""))]
+        self.embeddings = [[float(len(text or ""))]]
         self.model = "fake-embed-model"
 
 
@@ -58,7 +59,7 @@ class DOMBehaviorTests(unittest.TestCase):
         self.md_file.write_text("# title\n", encoding="utf-8")
 
     def make_dom(self) -> DOM:
-        dom = DOM(self.md_file)
+        dom = DOM(self.md_file, db_client=chromadb.EphemeralClient())
         object.__setattr__(dom, "ollama_client", FakeOllamaClient())
         original_min_len = type(dom).leaf_min_len
         self.addCleanup(setattr, type(dom), "leaf_min_len", original_min_len)
@@ -103,8 +104,8 @@ class DOMBehaviorTests(unittest.TestCase):
         async def fake_image_summary(client, image_link, model="unused", role="user", lang="zh"):
             return f"IMG<{Path(image_link).name}>"
 
-        with patch("cell_ribosome.dom.get_summary_response_async", side_effect=fake_text_summary), patch(
-            "cell_ribosome.dom.get_image_summary_async", side_effect=fake_image_summary
+        with patch("ribosome.core.dom.summary.get_summary_response_async", side_effect=fake_text_summary), patch(
+            "ribosome.core.dom.summary.get_image_summary_async", side_effect=fake_image_summary
         ):
             asyncio.run(dom.textualize())
 
@@ -141,14 +142,14 @@ class DOMBehaviorTests(unittest.TestCase):
         async def boom(*args, **kwargs):
             raise RuntimeError("backend exploded")
 
-        with patch("cell_ribosome.dom.get_summary_response_async", side_effect=boom):
+        with patch("ribosome.core.dom.summary.get_summary_response_async", side_effect=boom):
             with self.assertRaises(ValueError) as ctx:
                 asyncio.run(dom.textualize())
 
         self.assertIn("Error summarizing node", str(ctx.exception))
         self.assertIn("backend exploded", str(ctx.exception))
 
-    def test_embed_uses_parent_stack_for_sibling_and_nested_nodes(self):
+    def test_embed_doc_embeds_document_and_supported_nodes(self):
         dom = self.make_dom()
         semantics = {
             "summary": "document summary",
@@ -175,22 +176,25 @@ class DOMBehaviorTests(unittest.TestCase):
 
         collection = FakeCollection()
 
-        with patch("cell_ribosome.dom.PersistentClient", side_effect=lambda *args, **kwargs: SimpleNamespace()), patch(
-            "cell_ribosome.dom.chromadb.EphemeralClient", side_effect=lambda: FakeDbClient(collection)
+        with patch(
+            "ribosome.core.dom.model.PersistentClient",
+            return_value=FakeDbClient(collection),
         ):
-            asyncio.run(dom.embed(db_path=self.root / "db"))
+            asyncio.run(dom.embed_doc(db_path=self.root / "db"))
 
         self.assertEqual(len(collection.records), 4)
-        root_path = collection.records[0]["metadatas"][0]["obj_path"]
-        section_one_path = collection.records[1]["metadatas"][0]["obj_path"]
-        table_path = collection.records[2]["metadatas"][0]["obj_path"]
-        section_two_path = collection.records[3]["metadatas"][0]["obj_path"]
-
-        self.assertEqual(len(root_path), 1)
-        self.assertEqual(section_one_path, root_path)
-        self.assertEqual(len(table_path), 2)
-        self.assertEqual(table_path[0], root_path[0])
-        self.assertEqual(section_two_path, root_path)
+        self.assertEqual(
+            collection.records[0]["metadatas"],
+            [{"embed_model": dom.ollama_model}],
+        )
+        self.assertEqual(
+            [record["documents"][0] for record in collection.records],
+            ["document summary", "table one", "section one", "section two"],
+        )
+        self.assertEqual(
+            len({record["ids"][0] for record in collection.records}),
+            4,
+        )
 
 
 if __name__ == "__main__":
