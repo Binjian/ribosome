@@ -190,3 +190,49 @@ def test_windows_single_file_image_converters_are_awaitable(tmp_path, monkeypatc
         ".svg",
         ".png",
     ]
+
+
+def test_windows_vector_converter_handles_markdown_html_and_svg(
+    tmp_path, monkeypatch
+):
+    image_folder = tmp_path / "img"
+    image_folder.mkdir()
+    wmf_file = image_folder / "drawing.wmf"
+    emf_file = image_folder / "schematic.emf"
+    svg_file = image_folder / "logo.svg"
+    for image_file in (wmf_file, emf_file, svg_file):
+        image_file.write_bytes(b"vector")
+
+    markdown_file = tmp_path / "vectors.md"
+    markdown_file.write_text(
+        "\n".join(
+            (
+                "![](img/drawing.wmf)",
+                "![schematic](img/schematic.emf)",
+                '<img class="figure" src="img/logo.svg">',
+            )
+        ),
+        encoding="utf-8",
+    )
+    converted_paths = []
+
+    async def fake_magick(source: Path, target: Path) -> None:
+        converted_paths.append((source, target))
+        target.write_bytes(b"converted")
+
+    monkeypatch.setattr(win, "_magick_convert", fake_magick)
+
+    converted = asyncio.run(win.extract_md_html_images_win(markdown_file))
+
+    assert converted == 3
+    rewritten = markdown_file.read_text(encoding="utf-8")
+    assert "img/drawing.png" in rewritten
+    assert "img/schematic.png" in rewritten
+    assert 'src="img/logo.png"' in rewritten
+    assert converted_paths == [
+        (wmf_file, image_folder / "drawing.svg"),
+        (wmf_file, image_folder / "drawing.png"),
+        (emf_file, image_folder / "schematic.svg"),
+        (emf_file, image_folder / "schematic.png"),
+        (svg_file, image_folder / "logo.png"),
+    ]
