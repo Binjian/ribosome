@@ -176,6 +176,7 @@ def test_windows_single_file_image_converters_are_awaitable(tmp_path, monkeypatc
         target.write_bytes(b"converted")
 
     monkeypatch.setattr(win, "_magick_convert", fake_magick)
+    monkeypatch.setattr(win, "_convert_metafile_to_png", fake_magick)
 
     async def run_conversions():
         gif_count = await win.convert_md_gif2png_win(gif_markdown)
@@ -187,7 +188,6 @@ def test_windows_single_file_image_converters_are_awaitable(tmp_path, monkeypatc
     assert "diagram.png" in vector_markdown.read_text(encoding="utf-8")
     assert [target.suffix for _, target in converted_paths] == [
         ".png",
-        ".svg",
         ".png",
     ]
 
@@ -220,7 +220,12 @@ def test_windows_vector_converter_handles_markdown_html_and_svg(
         converted_paths.append((source, target))
         target.write_bytes(b"converted")
 
+    async def fake_metafile(source: Path, target: Path) -> None:
+        converted_paths.append((source, target))
+        target.write_bytes(b"converted")
+
     monkeypatch.setattr(win, "_magick_convert", fake_magick)
+    monkeypatch.setattr(win, "_convert_metafile_to_png", fake_metafile)
 
     converted = asyncio.run(win.extract_md_html_images_win(markdown_file))
 
@@ -230,9 +235,41 @@ def test_windows_vector_converter_handles_markdown_html_and_svg(
     assert "img/schematic.png" in rewritten
     assert 'src="img/logo.png"' in rewritten
     assert converted_paths == [
-        (wmf_file, image_folder / "drawing.svg"),
         (wmf_file, image_folder / "drawing.png"),
-        (emf_file, image_folder / "schematic.svg"),
         (emf_file, image_folder / "schematic.png"),
         (svg_file, image_folder / "logo.png"),
     ]
+
+
+def test_inkscape_converter_normalizes_mislabeled_emf(tmp_path, monkeypatch):
+    source = tmp_path / "drawing.wmf"
+    emf_header = bytearray(44)
+    emf_header[40:44] = b" EMF"
+    source.write_bytes(emf_header)
+    target = tmp_path / "drawing.png"
+    commands = []
+
+    async def fake_run_subprocess(command):
+        commands.append(command)
+        temporary_png = Path(
+            next(
+                argument.removeprefix("--export-filename=")
+                for argument in command
+                if argument.startswith("--export-filename=")
+            )
+        )
+        temporary_png.write_bytes(b"png")
+        return b"", b""
+
+    monkeypatch.setattr(win._utils, "_run_subprocess", fake_run_subprocess)
+
+    asyncio.run(
+        win._inkscape_convert_metafile(
+            "inkscape",
+            source,
+            target,
+        )
+    )
+
+    assert Path(commands[0][1]).suffix == ".emf"
+    assert target.read_bytes() == b"png"
