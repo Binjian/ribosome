@@ -1,0 +1,13 @@
+repos:
+- repo: local
+  hooks:
+  - id: nbdev-clean
+    name: nbdev-clean
+    entry: .venv/bin/nbdev-clean
+    language: system
+    pass_filenames: false
+  - id: nbdev-export
+    name: nbdev-export
+    entry: .venv/bin/nbdev-export
+    language: system
+    pass_filenames: false
