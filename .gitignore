@@ -182,7 +182,7 @@ cython_debug/
 /.python-version
 /log/
 /ollama_logs.text
-/res/
+/assets/
 /.vscode/
 /_proc/
 /chroma/
