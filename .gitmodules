@@ -1,0 +1,3 @@
+[submodule "vendor/ts4code"]
+	path = vendor/ts4code
+	url = git@gitlab.com:siasunx1/ts4code.git
