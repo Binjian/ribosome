@@ -72,6 +72,10 @@ allowed_metadata_keys = ["authors", "description", "keywords", "license", "readm
 allowed_cell_metadata_keys = ["tags", "aliases", "exports", "hide_input", "hide_output", "hide_cell"]
 clean_ids = true
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["vendor"]
+
 [tool.ruff]
 src = ["src"]  # Helpful for recognizing first-party imports.
 indent-width = 4
