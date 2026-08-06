@@ -30,7 +30,7 @@ dependencies = [
     "python-dotenv",
     'chromadb',
     'openai',
-    'ollama',
+    "ollama",
     'pymupdf',
     'Pillow',
     'odfdo',
@@ -46,6 +46,11 @@ dependencies = [
     "mermaid-py>=0.8.4",
     "pytest>=9.0.3",
     "markitdown[all]>=0.1.5",
+    "python-pptx>=1.0.2",
+    "requests>=2.34.0",
+    "numpy>=2.5.1,<3",
+    "tree-sitter>=0.26.0,<0.27",
+    "tree-sitter-siasun",
 ]
 [project.optional-dependencies]
 dev = [ "ipywidgets", "nbdev-numpy", "nbdev-stdlib", "pandas", "matplotlib", "black", "svg.py", "nbclassic",
@@ -55,6 +60,9 @@ ocr-layout = ["glmocr[selfhosted]>=0.1.5"]
 [project.urls]
 Repository = "https://github.com/binjian/ribosome"
 Documentation = "https://binjian.github.io/ribosome"
+
+[tool.uv.sources]
+tree-sitter-siasun = { path = "vendor/ts4code/tree-sitter-siasun" }
 
 [project.entry-points.nbdev]
 ribosome = "ribosome._modidx:d"
