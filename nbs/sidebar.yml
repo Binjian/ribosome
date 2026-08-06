@@ -11,3 +11,11 @@ website:
       - 01.core.dom.utils.ipynb
       - 01.system.utils.ipynb
       - 02.process.semantics.ipynb
+      - 03.preprocessing.ocr.audit_repair.ipynb
+      - 03.preprocessing.ocr.baidu_unlimited.ipynb
+      - 03.preprocessing.ocr.dashscope.ipynb
+      - 03.preprocessing.ocr.glm.ipynb
+      - 03.preprocessing.ocr.utils.ipynb
+      - 03.preprocessing.parsing.ms_office.markitdown.linux.ipynb
+      - 03.preprocessing.parsing.ms_office.markitdown.utils.ipynb
+      - 03.preprocessing.parsing.ms_office.markitdown.win.ipynb
