@@ -5037,7 +5037,7 @@ requires-dist = [
     { name = "svg-py", marker = "extra == 'dev'" },
     { name = "tqdm" },
     { name = "tree-sitter", specifier = ">=0.26.0,<0.27" },
-    { name = "tree-sitter-siasun", directory = "vendor/ts4code/tree-sitter-siasun" },
+    { name = "tree-sitter-siasun", directory = "vendor/ts4code/vendor/tree-sitter-siasun" },
 ]
 provides-extras = ["dev", "ocr-layout"]
 
@@ -5712,7 +5712,7 @@ wheels = [
 [[package]]
 name = "tree-sitter-siasun"
 version = "0.1.0"
-source = { directory = "vendor/ts4code/tree-sitter-siasun" }
+source = { directory = "vendor/ts4code/vendor/tree-sitter-siasun" }
 
 [package.metadata]
 requires-dist = [{ name = "tree-sitter", marker = "extra == 'core'", specifier = ">=0.25,<0.26" }]

@@ -62,7 +62,7 @@ Repository = "https://github.com/binjian/ribosome"
 Documentation = "https://binjian.github.io/ribosome"
 
 [tool.uv.sources]
-tree-sitter-siasun = { path = "vendor/ts4code/tree-sitter-siasun" }
+tree-sitter-siasun = { path = "vendor/ts4code/vendor/tree-sitter-siasun" }
 
 [project.entry-points.nbdev]
 ribosome = "ribosome._modidx:d"
