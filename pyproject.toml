@@ -50,7 +50,7 @@ dependencies = [
     "requests>=2.34.0",
     "numpy>=2.5.1,<3",
     "tree-sitter>=0.26.0,<0.27",
-    "tree-sitter-siasun",
+    "ts4code",
 ]
 [project.optional-dependencies]
 dev = [ "ipywidgets", "nbdev-numpy", "nbdev-stdlib", "pandas", "matplotlib", "black", "svg.py", "nbclassic",
@@ -62,7 +62,7 @@ Repository = "https://github.com/binjian/ribosome"
 Documentation = "https://binjian.github.io/ribosome"
 
 [tool.uv.sources]
-tree-sitter-siasun = { path = "vendor/ts4code/vendor/tree-sitter-siasun" }
+ts4code = { path = "vendor/ts4code" }
 
 [project.entry-points.nbdev]
 ribosome = "ribosome._modidx:d"
