@@ -21,8 +21,6 @@ classifiers = [
 dependencies = [
     'fastcore',
     'pandas',
-    'jupyterlab',
-    'nbdev',
     'gradio',
     'mypy',
     'ipywidgets',
@@ -39,18 +37,13 @@ dependencies = [
     'markdown',
     'pydantic',
     'dotenv',
-    'openai',
     'json-cfg',
     "git-python",
     "pre-commit>=4.6.0",
     "mermaid-py>=0.8.4",
     "pytest>=9.0.3",
     "markitdown[all]>=0.1.5",
-    "python-pptx>=1.0.2",
-    "requests>=2.34.0",
-    "numpy>=2.5.1,<3",
-    "tree-sitter>=0.26.0,<0.27",
-    "ts4code",
+    "ts4code[notebook,slides]",
 ]
 [project.optional-dependencies]
 dev = [ "ipywidgets", "nbdev-numpy", "nbdev-stdlib", "pandas", "matplotlib", "black", "svg.py", "nbclassic",
