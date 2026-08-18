@@ -44,6 +44,15 @@ package manager specific guidelines on
 [conda](https://anaconda.org/Binjian/ribosome) and
 [pypi](https://pypi.org/project/ribosome/) respectively.
 
+## Layout-aware OCR RAG
+
+For OCR-processed PDF bundles, start with
+[layout-bundle ingestion](nbs/03.preprocessing.ocr.layout_bundle.ipynb)
+and then use the
+[hybrid retrieval pipeline](nbs/04.retrieval.layout_rag.ipynb). The full
+design, implementation boundary, and production guidance are in the
+[layout-aware OCR RAG strategy](docs/layout-aware-ocr-rag-strategy.md).
+
 ## Document Object Model
 
 The `ribosome` package provides a Document Object Model (DOM) for

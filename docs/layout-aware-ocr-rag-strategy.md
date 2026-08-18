@@ -381,13 +381,13 @@ The UI should deep-link to the page and highlight the cited bboxes. A citation m
 
 ## Repository integration
 
-The existing pipeline provides useful Markdown parsing and section reorganization, but its embedding path is not sufficient for layout-aware OCR RAG:
+Before the adapter implemented below, the existing DOM pipeline provided useful Markdown parsing and section reorganization, but its embedding path was not sufficient for layout-aware OCR RAG:
 
 - [`DOMClass`](../ribosome/core/dom/model.py) parses Markdown through Pandoc and builds summarized semantic trees.
 - [`embed()`](../ribosome/core/dom/embedding.py) embeds document and node summaries.
 - Current Chroma metadata contains only `embed_model`.
 - The persistent collection is a generic `mitochondria` collection.
-- Exact retrieval, hybrid indexing, reranking, citation assembly, and OCR-quality filtering are not implemented.
+- That generic path does not itself implement exact retrieval, hybrid indexing, reranking, citation assembly, or OCR-quality filtering.
 - The same `ollama_model` setting is used for tasks that should have separate generation, vision, and embedding models.
 
 Add a dedicated layout-bundle adapter before the current DOM/embedding layer. Reuse section reorganization and optional parent summarization, but keep exact region evidence and sidecar provenance in the new retrieval records.
@@ -407,6 +407,72 @@ HybridRetriever
 EvidenceExpander
 CitationAssembler
 ```
+
+## Implemented repository API
+
+The strategy is implemented in two notebook-first modules:
+
+- [`03.preprocessing.ocr.layout_bundle.ipynb`](../nbs/03.preprocessing.ocr.layout_bundle.ipynb) exports `ribosome.preprocessing.ocr.layout_bundle`. It provides strict bundle validation, stable hashing and IDs, Markdown/JSON joining, OCR audit gates, native-PDF reconciliation, numbered hierarchy construction, table normalization, typed chunks, page rendering, and crop discovery.
+- [`04.retrieval.layout_rag.ipynb`](../nbs/04.retrieval.layout_rag.ipynb) exports `ribosome.retrieval.layout_rag`. It provides the canonical SQLite graph, FTS5 and exact alias indexes, separate optional Chroma child/parent collections, reciprocal-rank fusion, injectable visual retrieval and reranking, parent/neighbor expansion, citations, and retrieval metrics.
+
+Current implementation boundary:
+
+| Phase | Status | Included now |
+| --- | --- | --- |
+| 1. Canonical ingestion and repair | Implemented | Strict pairing/validation, stable IDs and hashes, marker joins, audit flags, native-PDF reconciliation, quarantine, and reference-document repairs. |
+| 2. Hierarchical hybrid retrieval | Implemented | Hierarchy and typed chunks, SQLite FTS/exact retrieval, optional explicit-vector Chroma indexes, rank fusion, parent expansion, versioned upserts, and citations. |
+| 3. Tables and visual retrieval | Adapter implemented | Table row groups, crop discovery, PDF page rendering, and visual-candidate fusion are included; a particular ColPali/vision model and its index are intentionally deployment choices. |
+| 4. Evaluation and tuning | Foundation implemented | Recall, MRR, and abstention metrics are included; the representative labelled dataset, ablation runs, answer grading, and UI remain application work. |
+
+The normal offline path needs no embedding service. The example uses top-level `await` as supported by Jupyter; a synchronous script can wrap the indexing call with `asyncio.run(...)`:
+
+```python
+from ribosome.preprocessing.ocr.layout_bundle import ingest_layout_bundle
+from ribosome.retrieval.layout_rag import (
+    HybridIndexer,
+    HybridRetriever,
+    SQLiteRetrievalRecordStore,
+)
+
+result = ingest_layout_bundle(
+    "document.layout.json",
+    markdown_path="document.md",
+    pdf_path="document.pdf",  # explicit path overrides obsolete sidecar paths
+)
+
+store = SQLiteRetrievalRecordStore("layout-rag.sqlite3")
+await HybridIndexer(store).index(result)
+evidence = HybridRetriever(store).retrieve_evidence(
+    "MOVJ P[1] V=10 ACC=100 CNT=100"
+)
+```
+
+Dense indexing remains explicit and cannot silently download Chroma's default embedding model:
+
+```python
+import chromadb
+from ollama import AsyncClient
+from ribosome.retrieval.layout_rag import ChromaDenseIndex, OllamaEmbeddingProvider
+
+dense = ChromaDenseIndex(
+    chromadb.PersistentClient(path="chroma/layout-rag"),
+    embedding_model="bge-m3",
+)
+embedder = OllamaEmbeddingProvider(AsyncClient(), model="bge-m3")
+await HybridIndexer(store, dense).index(result, embedder=embedder)
+
+query_vector = (await embedder(["MOVJ 的参数范围是什么？"]))[0]
+evidence = HybridRetriever(store, dense_index=dense).retrieve_evidence(
+    "MOVJ 的参数范围是什么？",
+    query_embedding=query_vector,
+)
+```
+
+`embedding_model` is required because it identifies the vector space. Chroma collection names include a digest of the raw pipeline version and embedding-model identity, and every query also filters those metadata fields. Per-document dense replacement snapshots and restores the prior Chroma records if an upsert/delete fails; the enclosing SQLite transaction is rolled back at the same time. A rollback failure is surfaced as an error instead of being silently accepted.
+
+For visual retrieval, `PDFPageRenderer` materializes missing page images and `collect_region_visual_assets()` returns table/figure crops. Supply a visual candidate function to `HybridRetriever`; the repository intentionally does not impose a particular ColPali or vision model.
+
+Production indexing excludes quarantined, boilerplate, nested-figure, and TOC children by default. Native-PDF repairs can make a suspicious region indexable again, but the original OCR text and all audit flags remain stored with the canonical region and citations.
 
 ## Implementation phases
 

@@ -64,7 +64,7 @@ ribosome = "ribosome._modidx:d"
 version = { attr = "ribosome.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["ribosome"]
+include = ["ribosome*"]
 
 [tool.nbdev]
 clear_all = true

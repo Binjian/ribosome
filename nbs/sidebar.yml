@@ -12,6 +12,7 @@ website:
       - 01.system.utils.ipynb
       - 02.process.semantics.ipynb
       - 03.preprocessing.ocr.audit_repair.ipynb
+      - 03.preprocessing.ocr.layout_bundle.ipynb
       - 03.preprocessing.ocr.baidu_unlimited.ipynb
       - 03.preprocessing.ocr.dashscope.ipynb
       - 03.preprocessing.ocr.glm.ipynb
@@ -19,3 +20,4 @@ website:
       - 03.preprocessing.parsing.ms_office.markitdown.linux.ipynb
       - 03.preprocessing.parsing.ms_office.markitdown.utils.ipynb
       - 03.preprocessing.parsing.ms_office.markitdown.win.ipynb
+      - 04.retrieval.layout_rag.ipynb
