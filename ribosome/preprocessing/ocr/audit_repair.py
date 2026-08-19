@@ -8,9 +8,9 @@ __all__ = ['OCRQualityIssueKind', 'OCRFixScope', 'OCRFixAction', 'OCRSplitRecogn
            'OCRRepairAttemptStatus', 'OCRRepairStopReason', 'OCRRepairHandler', 'OCRRegionQualityIssue',
            'OCRFileQualityReport', 'audit_layout_ocr_file', 'audit_layout_ocr_results', 'collect_ocr_repair_queue',
            'OCRFixProposal', 'propose_ocr_repairs', 'build_ocr_repair_plan', 'OCRSplitTile', 'OCRSplitFragment',
-           'split_layout_region_image', 'stitch_split_ocr_content', 'split_and_retry_layout_regions',
-           'OCRRepairAttempt', 'OCRRepairRoundResult', 'OCRRepairLoopResult', 'stage_layout_ocr_repairs',
-           'execute_ocr_repair_round', 'execute_ocr_repairs_until_stable']
+           'split_layout_region_image', 'stitch_split_ocr_content', 'split_and_stitch_layout_regions',
+           'split_and_retry_layout_regions', 'OCRRepairAttempt', 'OCRRepairRoundResult', 'OCRRepairLoopResult',
+           'stage_layout_ocr_repairs', 'execute_ocr_repair_round', 'execute_ocr_repairs_until_stable']
 
 # %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #79d87b4a
 import asyncio
@@ -566,6 +566,7 @@ OCRFixAction = Literal[
     "resume_document",
     "rerun_layout_detection",
     "regenerate_crop",
+    "split_and_stitch",
     "split_and_retry",
     "discard_and_reprocess",
     "adjust_crop_and_retry",
@@ -706,8 +707,8 @@ def _region_fix_strategy(
         )
     ):
         return (
-            "split_and_retry",
-            "Split the oversized or truncated region and retry it in smaller units.",
+            "split_and_stitch",
+            "Split the oversized or truncated region and stitch validated OCR tiles.",
             (
                 "Prefer aligned native PDF text when a reliable text layer exists.",
                 "Otherwise tile the crop with overlap along rows or reading order.",
@@ -921,7 +922,7 @@ def split_layout_region_image(
 ) -> tuple[OCRSplitTile, ...]:
     """Split a tall OCR crop near low-ink rows while retaining overlap."""
     if image.width <= 0 or image.height <= 1:
-        raise ValueError("split-and-retry requires a non-empty image")
+        raise ValueError("split-and-stitch requires a non-empty image")
     if tile_height <= 1:
         raise ValueError("tile_height must be greater than one")
     if overlap < 0 or overlap >= tile_height:
@@ -961,7 +962,7 @@ def split_layout_region_image(
             else min(image.height, boundaries[index] + overlap - half_overlap)
         )
         if bottom <= top:
-            raise ValueError("split-and-retry produced an empty tile")
+            raise ValueError("split-and-stitch produced an empty tile")
         tiles.append(
             OCRSplitTile(
                 index=index,
@@ -1014,13 +1015,13 @@ def stitch_split_ocr_content(
     """Stitch overlapping OCR fragments and remove duplicate boundary units."""
     cleaned = [str(fragment).strip() for fragment in fragments if str(fragment).strip()]
     if not cleaned:
-        raise ValueError("split-and-retry returned no usable OCR fragments")
+        raise ValueError("split-and-stitch returned no usable OCR fragments")
 
     if task_type == "table":
         fragment_rows = [tuple(_TABLE_ROW_RE.findall(fragment)) for fragment in cleaned]
         if any(not rows for rows in fragment_rows):
             raise ValueError(
-                "split-and-retry table fragments must contain complete HTML rows"
+                "split-and-stitch table fragments must contain complete HTML rows"
             )
         rows: list[str] = []
         for incoming in fragment_rows:
@@ -1035,7 +1036,7 @@ def stitch_split_ocr_content(
         units.extend(incoming[_split_units_overlap(units, incoming) :])
     stitched = "\n".join(units).strip()
     if not stitched:
-        raise ValueError("split-and-retry produced empty stitched content")
+        raise ValueError("split-and-stitch produced empty stitched content")
     return stitched
 
 
@@ -1095,7 +1096,7 @@ def _split_repair_region(
     }
     page = pages.get(int(proposal.page_number or 0))
     if page is None:
-        raise ValueError(f"split-and-retry page is missing for {proposal}")
+        raise ValueError(f"split-and-stitch page is missing for {proposal}")
     region = next(
         (
             item
@@ -1106,11 +1107,11 @@ def _split_repair_region(
         None,
     )
     if region is None:
-        raise ValueError(f"split-and-retry region is missing for {proposal}")
+        raise ValueError(f"split-and-stitch region is missing for {proposal}")
     return page, region
 
 
-async def split_and_retry_layout_regions(
+async def split_and_stitch_layout_regions(
     report: OCRFileQualityReport,
     proposals: Sequence[OCRFixProposal],
     recognize_tile: OCRSplitRecognizer,
@@ -1124,10 +1125,11 @@ async def split_and_retry_layout_regions(
     selected = [
         proposal
         for proposal in proposals
-        if proposal.scope == "region" and proposal.action == "split_and_retry"
+        if proposal.scope == "region"
+        and proposal.action in {"split_and_stitch", "split_and_retry"}
     ]
     if not selected:
-        raise ValueError("split-and-retry handler received no matching proposal")
+        raise ValueError("split-and-stitch handler received no matching proposal")
 
     sidecar_path = report.sidecar_path.expanduser().resolve()
     layout = json.loads(sidecar_path.read_text(encoding="utf-8"))
@@ -1140,7 +1142,7 @@ async def split_and_retry_layout_regions(
         page, region = _split_repair_region(layout, proposal)
         crop_path = proposal.asset_path
         if crop_path is None or not crop_path.is_file():
-            raise FileNotFoundError(f"split-and-retry crop is unavailable for {proposal}")
+            raise FileNotFoundError(f"split-and-stitch crop is unavailable for {proposal}")
         with Image.open(crop_path) as opened:
             crop = opened.convert("RGB")
         tiles = split_layout_region_image(
@@ -1204,7 +1206,7 @@ async def split_and_retry_layout_regions(
         )
         if candidate_reasons:
             raise ValueError(
-                "stitched split-and-retry output failed validation: "
+                "stitched split-and-stitch output failed validation: "
                 + "; ".join(candidate_reasons)
             )
 
@@ -1282,11 +1284,33 @@ async def split_and_retry_layout_regions(
     unresolved = [key for key in repaired_keys if key in remaining_keys]
     if unresolved:
         raise RuntimeError(
-            f"split-and-retry output remains in the repair queue: {unresolved}"
+            f"split-and-stitch output remains in the repair queue: {unresolved}"
         )
     return (
-        f"split-and-retry repaired {len(repaired_keys)} region(s) "
+        f"split-and-stitch repaired {len(repaired_keys)} region(s) "
         f"using {repaired_tile_count} tile(s)"
+    )
+
+
+async def split_and_retry_layout_regions(
+    report: OCRFileQualityReport,
+    proposals: Sequence[OCRFixProposal],
+    recognize_tile: OCRSplitRecognizer,
+    render_markdown: OCRSplitMarkdownRenderer,
+    *,
+    tile_height: int = 1400,
+    overlap: int = 96,
+    boundary_search: int = 128,
+) -> str:
+    """Compatibility alias for :func:`split_and_stitch_layout_regions`."""
+    return await split_and_stitch_layout_regions(
+        report,
+        proposals,
+        recognize_tile,
+        render_markdown,
+        tile_height=tile_height,
+        overlap=overlap,
+        boundary_search=boundary_search,
     )
 
 # %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #76db5d53
