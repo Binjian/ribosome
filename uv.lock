@@ -4945,14 +4945,11 @@ dependencies = [
     { name = "gradio" },
     { name = "ipywidgets" },
     { name = "json-cfg" },
-    { name = "jupyterlab" },
     { name = "markdown" },
     { name = "marker" },
     { name = "markitdown", extra = ["all"] },
     { name = "mermaid-py" },
     { name = "mypy" },
-    { name = "nbdev" },
-    { name = "numpy" },
     { name = "odfdo" },
     { name = "ollama" },
     { name = "openai" },
@@ -4964,11 +4961,8 @@ dependencies = [
     { name = "pypandoc" },
     { name = "pytest" },
     { name = "python-dotenv" },
-    { name = "python-pptx" },
-    { name = "requests" },
     { name = "tqdm" },
-    { name = "tree-sitter" },
-    { name = "ts4code" },
+    { name = "ts4code", extra = ["notebook", "slides"] },
 ]
 
 [package.optional-dependencies]
@@ -5003,7 +4997,6 @@ requires-dist = [
     { name = "ipywidgets" },
     { name = "ipywidgets", marker = "extra == 'dev'" },
     { name = "json-cfg" },
-    { name = "jupyterlab" },
     { name = "llms-txt", marker = "extra == 'dev'" },
     { name = "markdown" },
     { name = "marker" },
@@ -5012,10 +5005,8 @@ requires-dist = [
     { name = "mermaid-py", specifier = ">=0.8.4" },
     { name = "mypy" },
     { name = "nbclassic", marker = "extra == 'dev'" },
-    { name = "nbdev" },
     { name = "nbdev-numpy", marker = "extra == 'dev'" },
     { name = "nbdev-stdlib", marker = "extra == 'dev'" },
-    { name = "numpy", specifier = ">=2.5.1,<3" },
     { name = "odfdo" },
     { name = "ollama" },
     { name = "ollama", marker = "extra == 'dev'" },
@@ -5031,13 +5022,10 @@ requires-dist = [
     { name = "pysymbol-llm", marker = "extra == 'dev'" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "python-dotenv" },
-    { name = "python-pptx", specifier = ">=1.0.2" },
-    { name = "requests", specifier = ">=2.34.0" },
     { name = "sphinx", marker = "extra == 'dev'" },
     { name = "svg-py", marker = "extra == 'dev'" },
     { name = "tqdm" },
-    { name = "tree-sitter", specifier = ">=0.26.0,<0.27" },
-    { name = "ts4code", directory = "vendor/ts4code" },
+    { name = "ts4code", extras = ["notebook", "slides"], directory = "vendor/ts4code" },
 ]
 provides-extras = ["dev", "ocr-layout"]
 
@@ -5713,10 +5701,12 @@ wheels = [
 name = "tree-sitter-siasun"
 version = "0.1.0"
 source = { directory = "vendor/ts4code/vendor/tree-sitter-siasun" }
+dependencies = [
+    { name = "tree-sitter" },
+]
 
 [package.metadata]
-requires-dist = [{ name = "tree-sitter", marker = "extra == 'core'", specifier = ">=0.25,<0.26" }]
-provides-extras = ["core"]
+requires-dist = [{ name = "tree-sitter", specifier = ">=0.26.0,<0.27" }]
 
 [[package]]
 name = "triton"
@@ -5739,8 +5729,18 @@ source = { directory = "vendor/ts4code" }
 dependencies = [
     { name = "nbdev" },
     { name = "numpy" },
-    { name = "tree-sitter" },
     { name = "tree-sitter-siasun" },
+]
+
+[package.optional-dependencies]
+notebook = [
+    { name = "jupyterlab" },
+    { name = "ollama" },
+    { name = "openai" },
+    { name = "requests" },
+]
+slides = [
+    { name = "python-pptx" },
 ]
 
 [package.metadata]
@@ -5752,7 +5752,6 @@ requires-dist = [
     { name = "openai", marker = "extra == 'notebook'" },
     { name = "python-pptx", marker = "extra == 'slides'", specifier = ">=1.0" },
     { name = "requests", marker = "extra == 'notebook'" },
-    { name = "tree-sitter", specifier = ">=0.26.0,<0.27" },
     { name = "tree-sitter-siasun", directory = "vendor/ts4code/vendor/tree-sitter-siasun" },
 ]
 provides-extras = ["notebook", "slides"]
