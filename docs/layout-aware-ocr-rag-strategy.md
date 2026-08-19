@@ -68,7 +68,6 @@ The 731 Markdown `layout-region` markers match the JSON records on page, index, 
 - OCR confusions affect exact identifiers, including `IO`, `STRLEN`, `STRREVERSE`, `SETP`, and `OUT_T`.
 - The document title, footer code, and company name repeat on nearly every page.
 - Most detected headings are flattened to Markdown level two. Section hierarchy must be inferred from numbering rather than Markdown heading depth alone.
-- The layout sidecar still records an obsolete `/res/` source path. Stable identity must not depend on absolute paths.
 - `embed_page_image` was disabled. Full-page visual retrieval must render the available source PDF rather than expecting page images in the asset bundle.
 
 The source PDF is tagged and has a usable native text layer. Native extraction correctly recovers content on pages where OCR failed or hallucinated, so source reconciliation should precede embedding.
