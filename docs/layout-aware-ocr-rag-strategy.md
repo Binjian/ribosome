@@ -61,14 +61,27 @@ The 731 Markdown `layout-region` markers match the JSON records on page, index, 
 ### Known quality risks
 
 - Page 53's main `IF OP AND/OR OP` table failed after reaching the OCR output-token limit.
-- Page 61 contains a long, repetitive `WAIT` hallucination despite being marked `completed`.
-- Page 66 contains English evaluator leakage before valid instruction text.
-- Page 70 contains a failed footnote region.
-- Failed page-number regions on pages 5, 7, and 9 are harmless because page identity already exists in metadata.
+- Page 61, region 7 contains an unremoved model control token, `<|det|>`, and must be treated as untrusted.
+- Page 66, region 2 contains English OCR-evaluator leakage before valid instruction text.
+- Recovered regions on pages 5, 7, 8, and 70 require verification against their crops or the native PDF text.
+- Page 9, region 5 still has no usable OCR text after a contextual retry; its original region image was preserved.
 - OCR confusions affect exact identifiers, including `IO`, `STRLEN`, `STRREVERSE`, `SETP`, and `OUT_T`.
 - The document title, footer code, and company name repeat on nearly every page.
 - Most detected headings are flattened to Markdown level two. Section hierarchy must be inferred from numbering rather than Markdown heading depth alone.
 - `embed_page_image` was disabled. Full-page visual retrieval must render the available source PDF rather than expecting page images in the asset bundle.
+
+### Latest repair-loop result
+
+Notebook cell `In [11]` returned `no_progress`: a repair round completed and re-audited the document, but the number of detected issues did not decrease. The loop therefore stopped early rather than consuming all three configured rounds. Its third output contains ten unresolved proposals, classified below by repair action.
+
+| Classification / action | Count | Reasons | Fixing the issues |
+| --- | ---: | --- | --- |
+| `resume_document` | 2 | The document status is `partial`, and page 53 remains incomplete. These are two audit findings for the same document-level condition. | Resume from the durable checkpoint, process unfinished page 53 while preserving completed regions, publish the updated sidecar, and re-audit it. |
+| `verify_recovery` | 4 | Regions on pages 5, 7, 8, and 70 were recovered by retrying empty OCR results with expanded, aspect-ratio-padded page context. The recovered text is not yet trusted. | Compare every result with its region crop and aligned native PDF text. Accept it only when semantic and structural checks agree; otherwise requeue the original crop for OCR. |
+| `resume_region` | 1 | Page 9, region 5 returned no usable text after a contextual retry, so its original region image was preserved. | Inspect whether the region is meaningful. If it is, improve the crop, resolution, or contrast and retry it without overwriting completed neighbors; otherwise record an intentional discard. |
+| `split_and_stitch` | 1 | Page 53, region 4 reached the Unlimited-OCR output-token limit before completion. | Prefer reliable, spatially aligned native PDF text when available. Otherwise split the crop into overlapping tiles, OCR each tile, stitch them in reading order, and validate the combined structure and content. |
+| `discard_and_reprocess` | 2 | Page 61, region 7 contains the leaked control token `<\|det\|>`. Page 66, region 2 contains OCR-evaluator commentary rather than clean document content. | Quarantine both outputs, reprocess their original crops or use aligned native PDF text—preferably with adjusted prompts or an alternate model—and accept only output that passes leakage, repetition, and markup checks. |
+| **Total** | **10** | Eight region-level proposals and two document-level findings remain. | Resolve the token-limit and corrupted-output cases, verify recovered regions, and then rerun the quality audit and repair loop. |
 
 The source PDF is tagged and has a usable native text layer. Native extraction correctly recovers content on pages where OCR failed or hallucinated, so source reconciliation should precede embedding.
 
