@@ -29,6 +29,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence, cast
 
 from PIL import Image
+from tqdm.auto import tqdm
 
 
 # %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #a012f6d8
@@ -1589,6 +1590,8 @@ async def execute_ocr_repair_round(
     *,
     proposals: Sequence[OCRFixProposal] | None = None,
     dry_run: bool = False,
+    show_progress: bool = True,
+    _progress_position: int = 0,
 ) -> OCRRepairRoundResult:
     """Execute registered proposal handlers once, then re-audit queued files.
 
@@ -1599,7 +1602,8 @@ async def execute_ocr_repair_round(
 
     Actions without a registered handler are explicitly marked ``skipped`` and
     remain in ``remaining_proposals`` after the recheck. ``dry_run`` performs the
-    full dispatch preview and audit without invoking any handler.
+    full dispatch preview and audit without invoking any handler. Set
+    ``show_progress=False`` to suppress the per-file progress bar.
     """
     reports = sorted(
         ocr_repair_queue, key=lambda report: str(report.sidecar_path).casefold()
@@ -1616,7 +1620,17 @@ async def execute_ocr_repair_round(
             proposals_by_sidecar[sidecar].append(proposal)
 
     attempts: list[OCRRepairAttempt] = []
+    report_progress = tqdm(
+        total=len(reports),
+        desc="OCR repair files",
+        unit="file",
+        position=_progress_position,
+        leave=False,
+        dynamic_ncols=True,
+        disable=not show_progress,
+    )
     for report in reports:
+        report_progress.set_postfix_str(report.sidecar_path.name, refresh=True)
         report_proposals = proposals_by_sidecar[report.sidecar_path.resolve()]
         groups, unsupported = _handler_groups(report_proposals, handlers)
         if unsupported:
@@ -1670,6 +1684,8 @@ async def execute_ocr_repair_round(
                         message=message or "Repair handler completed.",
                     )
                 )
+        report_progress.update(1)
+    report_progress.close()
 
     rechecked_reports = tuple(
         audit_layout_ocr_file(report.sidecar_path) for report in reports
@@ -1695,8 +1711,13 @@ async def execute_ocr_repairs_until_stable(
     max_rounds: int = 3,
     dry_run: bool = False,
     include_partial_checkpoints: bool = False,
+    show_progress: bool = True,
 ) -> OCRRepairLoopResult:
-    """Execute, re-audit, and requeue repairs until clean or safely stopped."""
+    """Execute, re-audit, and requeue repairs until clean or safely stopped.
+
+    Unless ``show_progress`` is false, display nested bars for repair rounds and
+    the files handled by the current round.
+    """
     if max_rounds <= 0:
         raise ValueError("max_rounds must be greater than zero")
     queue = tuple(
@@ -1710,14 +1731,35 @@ async def execute_ocr_repairs_until_stable(
 
     rounds: list[OCRRepairRoundResult] = []
     stop_reason: OCRRepairStopReason = "max_rounds"
-    for _ in range(max_rounds):
+    round_progress = tqdm(
+        total=max_rounds,
+        desc="OCR repair rounds",
+        unit="round",
+        position=0,
+        dynamic_ncols=True,
+        disable=not show_progress,
+    )
+    for round_number in range(1, max_rounds + 1):
+        round_progress.set_postfix(
+            round=round_number,
+            queued=len(queue),
+            refresh=True,
+        )
         round_result = await execute_ocr_repair_round(
             queue,
             handlers,
             dry_run=dry_run,
+            show_progress=show_progress,
+            _progress_position=1,
         )
         rounds.append(round_result)
         queue = round_result.remaining_queue
+        round_progress.update(1)
+        round_progress.set_postfix(
+            queued=len(queue),
+            issues=f"{round_result.issues_before}->{round_result.issues_after}",
+            refresh=True,
+        )
         if round_result.clean:
             stop_reason = "clean"
             break
@@ -1741,6 +1783,12 @@ async def execute_ocr_repairs_until_stable(
             stop_reason = "no_progress"
             break
 
+    round_progress.set_postfix(
+        stop=stop_reason,
+        queued=len(queue),
+        refresh=True,
+    )
+    round_progress.close()
     remaining_proposals = tuple(propose_ocr_repairs(queue))
     return OCRRepairLoopResult(
         rounds=tuple(rounds),
