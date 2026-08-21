@@ -932,7 +932,7 @@ def split_layout_region_image(
         raise ValueError("boundary_search must be non-negative")
 
     usable_height = max(1, tile_height - overlap)
-    tile_count = max(2, math.ceil((image.height - overlap) / usable_height))
+    tile_count = max(1, math.ceil((image.height - overlap) / usable_height))
     tile_count = min(tile_count, image.height)
     nominal_height = image.height / tile_count
     scores = _split_boundary_scores(image)
@@ -1112,6 +1112,65 @@ def _split_repair_region(
     return page, region
 
 
+async def _recognize_adaptive_split_tile(
+    tile: OCRSplitTile,
+    proposal: OCRFixProposal,
+    recognize_tile: OCRSplitRecognizer,
+    *,
+    overlap: int,
+    boundary_search: int,
+    min_tile_height: int,
+    max_split_depth: int,
+    depth: int = 0,
+) -> tuple[tuple[OCRSplitTile, OCRSplitFragment, int], ...]:
+    """Recursively shrink only tiles that still exhaust the output budget."""
+    fragment = await recognize_tile(tile.image, proposal, tile)
+    if fragment.finish_reason != "length":
+        return ((tile, fragment, depth),)
+    if depth >= max_split_depth or tile.image.height <= min_tile_height:
+        raise ValueError(
+            f"split tile y={tile.top}:{tile.bottom} still reached its "
+            f"output-token limit at depth {depth}"
+        )
+
+    child_tile_height = max(
+        min_tile_height,
+        math.ceil((tile.image.height + overlap) / 2),
+    )
+    child_tile_height = min(child_tile_height, tile.image.height - 1)
+    children = split_layout_region_image(
+        tile.image,
+        tile_height=child_tile_height,
+        overlap=overlap,
+        boundary_search=boundary_search,
+    )
+    positioned_children = tuple(
+        OCRSplitTile(
+            index=child.index,
+            top=tile.top + child.top,
+            bottom=tile.top + child.bottom,
+            image=child.image,
+        )
+        for child in children
+    )
+    nested = await asyncio.gather(
+        *(
+            _recognize_adaptive_split_tile(
+                child,
+                proposal,
+                recognize_tile,
+                overlap=overlap,
+                boundary_search=boundary_search,
+                min_tile_height=min_tile_height,
+                max_split_depth=max_split_depth,
+                depth=depth + 1,
+            )
+            for child in positioned_children
+        )
+    )
+    return tuple(item for group in nested for item in group)
+
+
 async def split_and_stitch_layout_regions(
     report: OCRFileQualityReport,
     proposals: Sequence[OCRFixProposal],
@@ -1121,8 +1180,14 @@ async def split_and_stitch_layout_regions(
     tile_height: int = 1400,
     overlap: int = 96,
     boundary_search: int = 128,
+    min_tile_height: int = 320,
+    max_split_depth: int = 4,
 ) -> str:
-    """Repair token-limited regions using validated overlapping OCR tiles."""
+    """Repair token-limited regions with adaptive validated OCR tiles."""
+    if min_tile_height <= overlap:
+        raise ValueError("min_tile_height must be greater than overlap")
+    if max_split_depth < 0:
+        raise ValueError("max_split_depth must be non-negative")
     selected = [
         proposal
         for proposal in proposals
@@ -1153,18 +1218,30 @@ async def split_and_stitch_layout_regions(
             boundary_search=boundary_search,
         )
 
-        fragments = list(
-            await asyncio.gather(
-                *(recognize_tile(tile.image, proposal, tile) for tile in tiles)
+        recognized_groups = await asyncio.gather(
+            *(
+                _recognize_adaptive_split_tile(
+                    tile,
+                    proposal,
+                    recognize_tile,
+                    overlap=overlap,
+                    boundary_search=boundary_search,
+                    min_tile_height=min_tile_height,
+                    max_split_depth=max_split_depth,
+                )
+                for tile in tiles
             )
         )
+        recognized = [item for group in recognized_groups for item in group]
+        tiles = tuple(
+            OCRSplitTile(index=index, top=tile.top, bottom=tile.bottom, image=tile.image)
+            for index, (tile, _, _) in enumerate(recognized)
+        )
+        fragments = [fragment for _, fragment, _ in recognized]
+        split_depths = [depth for _, _, depth in recognized]
         for tile, fragment in zip(tiles, fragments):
             if not fragment.content.strip():
                 raise ValueError(f"split tile {tile.index} returned no usable OCR content")
-            if fragment.finish_reason == "length":
-                raise ValueError(
-                    f"split tile {tile.index} still reached its output-token limit"
-                )
             fragment_record = {
                 "status": "completed",
                 "task_type": proposal.task_type or region.get("task_type"),
@@ -1230,21 +1307,24 @@ async def split_and_stitch_layout_regions(
             region.pop(key, None)
         region.update(candidate)
         region["split_repair"] = {
-            "version": 1,
+            "version": 2,
             "tile_height": tile_height,
             "overlap": overlap,
             "boundary_search": boundary_search,
+            "min_tile_height": min_tile_height,
+            "max_split_depth": max_split_depth,
             "tiles": [
                 {
                     "index": tile.index,
                     "top": tile.top,
                     "bottom": tile.bottom,
+                    "split_depth": split_depth,
                     "finish_reason": fragment.finish_reason,
                     "response_id": fragment.metadata.get("response_id"),
                     "usage": dict(fragment.metadata.get("usage") or {}),
                     "elapsed_s": fragment.metadata.get("elapsed_s"),
                 }
-                for tile, fragment in zip(tiles, fragments)
+                for tile, fragment, split_depth in zip(tiles, fragments, split_depths)
             ],
         }
         page["status"] = (
@@ -1302,6 +1382,8 @@ async def split_and_retry_layout_regions(
     tile_height: int = 1400,
     overlap: int = 96,
     boundary_search: int = 128,
+    min_tile_height: int = 320,
+    max_split_depth: int = 4,
 ) -> str:
     """Compatibility alias for :func:`split_and_stitch_layout_regions`."""
     return await split_and_stitch_layout_regions(
@@ -1312,6 +1394,8 @@ async def split_and_retry_layout_regions(
         tile_height=tile_height,
         overlap=overlap,
         boundary_search=boundary_search,
+        min_tile_height=min_tile_height,
+        max_split_depth=max_split_depth,
     )
 
 # %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #76db5d53
