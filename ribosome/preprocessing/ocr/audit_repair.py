@@ -1380,6 +1380,11 @@ def _repair_issue_count(reports: Sequence[OCRFileQualityReport]) -> int:
     )
 
 
+def _repair_progress_counts(values: Sequence[str]) -> str:
+    counts = Counter(values)
+    return ", ".join(f"{value}={count}" for value, count in sorted(counts.items()))
+
+
 def _handler_groups(
     proposals: Sequence[OCRFixProposal],
     handlers: Mapping[OCRFixAction, OCRRepairHandler],
@@ -1591,7 +1596,9 @@ async def execute_ocr_repair_round(
     proposals: Sequence[OCRFixProposal] | None = None,
     dry_run: bool = False,
     show_progress: bool = True,
+    stream_reports: bool = True,
     _progress_position: int = 0,
+    _round_number: int | None = None,
 ) -> OCRRepairRoundResult:
     """Execute registered proposal handlers once, then re-audit queued files.
 
@@ -1603,7 +1610,8 @@ async def execute_ocr_repair_round(
     Actions without a registered handler are explicitly marked ``skipped`` and
     remain in ``remaining_proposals`` after the recheck. ``dry_run`` performs the
     full dispatch preview and audit without invoking any handler. Set
-    ``show_progress=False`` to suppress the per-file progress bar.
+    ``show_progress=False`` to suppress the per-file progress bar. Set
+    ``stream_reports=False`` to suppress persistent per-file result lines.
     """
     reports = sorted(
         ocr_repair_queue, key=lambda report: str(report.sidecar_path).casefold()
@@ -1629,7 +1637,8 @@ async def execute_ocr_repair_round(
         dynamic_ncols=True,
         disable=not show_progress,
     )
-    for report in reports:
+    for report_number, report in enumerate(reports, start=1):
+        attempt_start = len(attempts)
         report_progress.set_postfix_str(report.sidecar_path.name, refresh=True)
         report_proposals = proposals_by_sidecar[report.sidecar_path.resolve()]
         groups, unsupported = _handler_groups(report_proposals, handlers)
@@ -1685,6 +1694,43 @@ async def execute_ocr_repair_round(
                     )
                 )
         report_progress.update(1)
+        if stream_reports:
+            report_attempts = attempts[attempt_start:]
+            attempt_counts = _repair_progress_counts(
+                [attempt.status for attempt in report_attempts]
+            )
+            try:
+                live_report = audit_layout_ocr_file(report.sidecar_path)
+                live_proposals = propose_ocr_repairs([live_report])
+            except Exception as error:
+                tqdm.write(
+                    f"[OCR repair file {report_number}/{len(reports)}] "
+                    f"{report.sidecar_path.name}: live audit failed: "
+                    f"{type(error).__name__}: {error}"
+                )
+            else:
+                issues_before = _repair_issue_count([report])
+                issues_after = _repair_issue_count([live_report])
+                progress_state = (
+                    "progress"
+                    if issues_after < issues_before
+                    else "no_progress"
+                    if issues_after == issues_before
+                    else "regressed"
+                )
+                remaining_counts = _repair_progress_counts(
+                    [proposal.action for proposal in live_proposals]
+                )
+                round_label = (
+                    f" round {_round_number}" if _round_number is not None else ""
+                )
+                tqdm.write(
+                    f"[OCR repair{round_label} file {report_number}/{len(reports)} "
+                    f"{progress_state}] {report.sidecar_path.name}: "
+                    f"attempts={attempt_counts or 'none'}; "
+                    f"issues={issues_before}->{issues_after}; "
+                    f"remaining={remaining_counts or 'none'}"
+                )
     report_progress.close()
 
     rechecked_reports = tuple(
@@ -1712,11 +1758,13 @@ async def execute_ocr_repairs_until_stable(
     dry_run: bool = False,
     include_partial_checkpoints: bool = False,
     show_progress: bool = True,
+    stream_reports: bool = True,
 ) -> OCRRepairLoopResult:
     """Execute, re-audit, and requeue repairs until clean or safely stopped.
 
     Unless ``show_progress`` is false, display nested bars for repair rounds and
-    the files handled by the current round.
+    the files handled by the current round. Unless ``stream_reports`` is false,
+    also emit a persistent result line as each file finishes.
     """
     if max_rounds <= 0:
         raise ValueError("max_rounds must be greater than zero")
@@ -1750,7 +1798,9 @@ async def execute_ocr_repairs_until_stable(
             handlers,
             dry_run=dry_run,
             show_progress=show_progress,
+            stream_reports=stream_reports,
             _progress_position=1,
+            _round_number=round_number,
         )
         rounds.append(round_result)
         queue = round_result.remaining_queue
@@ -1790,6 +1840,11 @@ async def execute_ocr_repairs_until_stable(
     )
     round_progress.close()
     remaining_proposals = tuple(propose_ocr_repairs(queue))
+    if stream_reports:
+        tqdm.write(
+            f"[OCR repair stop={stop_reason}] rounds={len(rounds)}/{max_rounds}; "
+            f"queued={len(queue)}; remaining={len(remaining_proposals)}"
+        )
     return OCRRepairLoopResult(
         rounds=tuple(rounds),
         remaining_queue=queue,
