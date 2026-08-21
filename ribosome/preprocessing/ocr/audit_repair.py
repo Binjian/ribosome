@@ -906,7 +906,7 @@ def _split_boundary_scores(image: Image.Image) -> list[int]:
         grayscale = grayscale.resize(
             (probe_width, grayscale.height), Image.Resampling.BILINEAR
         )
-    pixels = list(grayscale.getdata())
+    pixels = list(grayscale.get_flattened_data())
     return [
         sum(255 - value for value in pixels[offset : offset + probe_width])
         for offset in range(0, len(pixels), probe_width)
