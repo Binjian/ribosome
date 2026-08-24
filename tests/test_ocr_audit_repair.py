@@ -6,6 +6,7 @@ import fitz
 from PIL import Image
 from ribosome.preprocessing.ocr.audit_repair import (
     OCRFileQualityReport,
+    OCR_NATIVE_TEXT_REPAIR_ACTIONS,
     OCRRegionQualityIssue,
     OCRSplitFragment,
     audit_layout_ocr_file,
@@ -104,6 +105,15 @@ def test_recovered_token_limit_is_verified_instead_of_split():
     assert [proposal.action for proposal in propose_ocr_repairs([report])] == [
         "verify_recovery"
     ]
+
+
+def test_native_text_dispatch_includes_split_repairs():
+    assert set(OCR_NATIVE_TEXT_REPAIR_ACTIONS) == {
+        "verify_recovery",
+        "discard_and_reprocess",
+        "split_and_stitch",
+        "split_and_retry",
+    }
 
 
 def test_invalid_split_tile_is_subdivided_before_stitching(tmp_path):
