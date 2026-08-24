@@ -10,7 +10,8 @@ __all__ = ['OCRQualityIssueKind', 'OCRFixScope', 'OCRFixAction', 'OCRSplitRecogn
            'OCRFixProposal', 'propose_ocr_repairs', 'build_ocr_repair_plan', 'OCRSplitTile', 'OCRSplitFragment',
            'split_layout_region_image', 'stitch_split_ocr_content', 'split_and_stitch_layout_regions',
            'split_and_retry_layout_regions', 'OCRRepairAttempt', 'OCRRepairRoundResult', 'OCRRepairLoopResult',
-           'stage_layout_ocr_repairs', 'execute_ocr_repair_round', 'execute_ocr_repairs_until_stable']
+           'repair_layout_regions_from_native_pdf', 'stage_layout_ocr_repairs', 'execute_ocr_repair_round',
+           'execute_ocr_repairs_until_stable']
 
 # %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #79d87b4a
 import asyncio
@@ -740,6 +741,7 @@ def _region_fix_strategy(
         marker in lowered
         for marker in (
             "no usable ocr content",
+            "no usable text",
             "empty response",
             "empty after post-processing",
         )
@@ -1198,9 +1200,10 @@ async def split_and_stitch_layout_regions(
         raise ValueError("split-and-stitch handler received no matching proposal")
 
     sidecar_path = report.sidecar_path.expanduser().resolve()
-    layout = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    state_path = _layout_repair_state_path(sidecar_path)
+    layout = json.loads(state_path.read_text(encoding="utf-8"))
     if not isinstance(layout, dict):
-        raise ValueError(f"layout sidecar root must be an object: {sidecar_path}")
+        raise ValueError(f"layout repair state must be an object: {state_path}")
 
     repaired_keys: list[tuple[int, int]] = []
     repaired_tile_count = 0
@@ -1344,20 +1347,10 @@ async def split_and_stitch_layout_regions(
         )
         repaired_tile_count += len(tiles)
 
-    layout["status"] = (
-        "processed"
-        if all(
-            isinstance(page, dict) and page.get("status") == "completed"
-            for page in layout.get("pages", [])
-        )
-        else "partial"
+    _refresh_layout_repair_status(layout)
+    _publish_layout_repair_state(
+        sidecar_path, state_path, layout, render_markdown
     )
-    if layout["status"] == "processed":
-        layout.pop("repair_checkpoint", None)
-
-    markdown_path = _repair_markdown_path(sidecar_path)
-    markdown = render_markdown(layout)
-    _publish_split_repair_pair(sidecar_path, markdown_path, layout, markdown)
     rechecked = audit_layout_ocr_file(sidecar_path)
     remaining_keys = {
         (issue.page_number, issue.region_index) for issue in rechecked.region_issues
@@ -1499,13 +1492,54 @@ _OCR_TERMINAL_REGION_STATUSES = frozenset(
     {"completed", "preserved", "recovered"}
 )
 _OCR_SELECTIVE_REPROCESS_ACTIONS = frozenset(
-    {"adjust_crop_and_retry", "discard_and_reprocess", "regenerate_crop"}
+    {
+        "adjust_crop_and_retry",
+        "discard_and_reprocess",
+        "regenerate_crop",
+        "resume_region",
+    }
 )
 
 
 def _repair_markdown_path(sidecar_path: Path) -> Path:
     name = sidecar_path.name.removesuffix(".layout.json") + ".md"
     return sidecar_path.with_name(name)
+
+
+def _layout_repair_state_path(sidecar_path: Path) -> Path:
+    target = _repair_markdown_path(sidecar_path)
+    checkpoint = (
+        target.parent / f".{target.stem}.layout-work" / "checkpoint.json"
+    )
+    return checkpoint if checkpoint.is_file() else sidecar_path
+
+
+def _refresh_layout_repair_status(layout: dict[str, Any]) -> None:
+    for page in layout.get("pages", []):
+        if not isinstance(page, dict):
+            continue
+        page["status"] = (
+            "completed"
+            if all(
+                isinstance(region, dict)
+                and region.get("status") in _OCR_TERMINAL_REGION_STATUSES
+                and not region.get("error")
+                for region in page.get("regions", [])
+            )
+            else "partial"
+        )
+        if page["status"] == "completed":
+            page["error"] = None
+    layout["status"] = (
+        "processed"
+        if all(
+            isinstance(page, dict) and page.get("status") == "completed"
+            for page in layout.get("pages", [])
+        )
+        else "partial"
+    )
+    if layout["status"] == "processed":
+        layout.pop("repair_checkpoint", None)
 
 
 def _write_repair_json(path: Path, payload: dict[str, Any]) -> None:
@@ -1530,6 +1564,222 @@ def _write_repair_json(path: Path, payload: dict[str, Any]) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
+def _publish_layout_repair_state(
+    sidecar_path: Path,
+    state_path: Path,
+    layout: dict[str, Any],
+    render_markdown: OCRSplitMarkdownRenderer,
+) -> None:
+    if state_path != sidecar_path:
+        if layout.get("status") == "processed":
+            layout.pop("repair_checkpoint", None)
+        else:
+            layout["repair_checkpoint"] = str(state_path)
+        _write_repair_json(state_path, layout)
+    markdown_path = _repair_markdown_path(sidecar_path)
+    _publish_split_repair_pair(
+        sidecar_path, markdown_path, layout, render_markdown(layout)
+    )
+
+
+def _append_layout_repair_history(
+    region: dict[str, Any], proposal: OCRFixProposal
+) -> None:
+    history = region.setdefault("repair_history", [])
+    if not isinstance(history, list):
+        raise ValueError(f"Region repair_history is invalid for {proposal}")
+    history.append(
+        {
+            "action": proposal.action,
+            "status": region.get("status"),
+            "raw_content": region.get("raw_content"),
+            "content": region.get("content"),
+            "error": region.get("error"),
+            "recovery": region.get("recovery"),
+            "finish_reason": region.get("finish_reason"),
+            "reasons": list(proposal.reasons),
+        }
+    )
+
+
+def _normalized_repair_text(value: object) -> str:
+    plain = re.sub(r"<[^>]+>", " ", html.unescape(str(value or "")))
+    return "".join(
+        character.casefold() for character in plain if character.isalnum()
+    )
+
+
+def _native_region_text(
+    pdf_page: Any, page: dict[str, Any], region: dict[str, Any]
+) -> str:
+    bbox = _quality_bbox(region.get("bbox"))
+    if bbox is None:
+        raise ValueError("native-PDF repair requires a valid region bbox")
+    try:
+        page_width = float(page["width"])
+        page_height = float(page["height"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("native-PDF repair requires page width and height") from error
+    if page_width <= 0 or page_height <= 0:
+        raise ValueError("native-PDF repair requires positive page dimensions")
+    left, top, right, bottom = bbox
+    rectangle = pdf_page.rect
+    clip = (
+        rectangle.x0 + left / page_width * rectangle.width,
+        rectangle.y0 + top / page_height * rectangle.height,
+        rectangle.x0 + right / page_width * rectangle.width,
+        rectangle.y0 + bottom / page_height * rectangle.height,
+    )
+    words = pdf_page.get_text("words", clip=clip, sort=True)
+    lines: dict[tuple[int, int], list[tuple[int, str]]] = {}
+    for word in words:
+        if len(word) < 8 or not str(word[4]).strip():
+            continue
+        lines.setdefault((int(word[5]), int(word[6])), []).append(
+            (int(word[7]), str(word[4]))
+        )
+    return "\n".join(
+        " ".join(text for _, text in sorted(line_words))
+        for _, line_words in sorted(lines.items())
+    ).strip()
+
+
+def repair_layout_regions_from_native_pdf(
+    report: OCRFileQualityReport,
+    proposals: Sequence[OCRFixProposal],
+    source_path: str | Path,
+    render_markdown: OCRSplitMarkdownRenderer,
+    *,
+    agreement_threshold: float = 0.65,
+) -> str:
+    """Verify or replace suspect OCR with spatially aligned native PDF text."""
+    if not 0 <= agreement_threshold <= 1:
+        raise ValueError("agreement_threshold must be between zero and one")
+    selected = [
+        proposal
+        for proposal in proposals
+        if proposal.scope == "region"
+        and proposal.action in {"verify_recovery", "discard_and_reprocess"}
+    ]
+    if not selected:
+        raise ValueError("native-PDF handler received no matching proposal")
+
+    source = Path(source_path).expanduser().resolve()
+    if not source.is_file() or source.suffix.casefold() != ".pdf":
+        raise ValueError(f"native-PDF repair requires a PDF source: {source}")
+    sidecar_path = report.sidecar_path.expanduser().resolve()
+    state_path = _layout_repair_state_path(sidecar_path)
+    layout = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(layout, dict):
+        raise ValueError(f"layout repair state must be an object: {state_path}")
+    pages = {
+        int(page.get("page_number", position)): page
+        for position, page in enumerate(layout.get("pages", []), start=1)
+        if isinstance(page, dict)
+    }
+
+    try:
+        import fitz
+    except ImportError as error:
+        raise RuntimeError("PyMuPDF is required for native-PDF repair") from error
+
+    repaired_keys: list[tuple[int, int]] = []
+    verified = 0
+    replaced = 0
+    with fitz.open(source) as pdf:
+        if len(pdf) != int(layout.get("pages_total", len(pages))):
+            raise ValueError(
+                f"PDF has {len(pdf)} pages but layout has "
+                f"{layout.get('pages_total', len(pages))}"
+            )
+        for proposal in selected:
+            page_number = int(proposal.page_number or 0)
+            page = pages.get(page_number)
+            if page is None:
+                raise ValueError(f"native-PDF repair page is missing for {proposal}")
+            _, region = _split_repair_region(layout, proposal)
+            native_text = _native_region_text(pdf[page_number - 1], page, region)
+            normalized_native = _normalized_repair_text(native_text)
+            minimum_characters = (
+                1 if str(region.get("label")) in {"header", "footer", "number"} else 2
+            )
+            if len(normalized_native) < minimum_characters:
+                raise ValueError(
+                    f"native PDF has no usable aligned text for {proposal}"
+                )
+            current_content = str(region.get("content") or "")
+            normalized_current = _normalized_repair_text(current_content)
+            agreement = (
+                SequenceMatcher(
+                    None, normalized_current, normalized_native, autojunk=False
+                ).ratio()
+                if normalized_current
+                else 0.0
+            )
+            use_existing = (
+                proposal.action == "verify_recovery"
+                and bool(normalized_current)
+                and agreement >= agreement_threshold
+            )
+            replacement = current_content if use_existing else native_text
+            candidate = dict(region)
+            candidate.update(
+                status="completed",
+                raw_content=(
+                    region.get("raw_content") if use_existing else native_text
+                ),
+                content=replacement,
+                error=None,
+                recovery=None,
+                finish_reason="stop",
+            )
+            candidate_reasons = _completed_layout_quality_reasons(
+                candidate,
+                sidecar_path=sidecar_path,
+                asset_prefix=layout.get("asset_prefix"),
+            )
+            if candidate_reasons:
+                raise ValueError(
+                    f"native-PDF repair failed validation for {proposal}: "
+                    + "; ".join(candidate_reasons)
+                )
+            _append_layout_repair_history(region, proposal)
+            for key in ("response_id", "usage", "elapsed_s", "input_mime_type"):
+                region.pop(key, None)
+            region.update(candidate)
+            region["native_text_repair"] = {
+                "version": 1,
+                "action": proposal.action,
+                "strategy": (
+                    "verified_existing_ocr" if use_existing else "native_pdf_replacement"
+                ),
+                "agreement": agreement,
+                "source": str(source),
+                "page_number": page_number,
+            }
+            verified += int(use_existing)
+            replaced += int(not use_existing)
+            repaired_keys.append((page_number, int(proposal.region_index or 0)))
+
+    _refresh_layout_repair_status(layout)
+    _publish_layout_repair_state(
+        sidecar_path, state_path, layout, render_markdown
+    )
+    rechecked = audit_layout_ocr_file(sidecar_path)
+    remaining_keys = {
+        (issue.page_number, issue.region_index) for issue in rechecked.region_issues
+    }
+    unresolved = [key for key in repaired_keys if key in remaining_keys]
+    if unresolved:
+        raise RuntimeError(
+            f"native-PDF output remains in the repair queue: {unresolved}"
+        )
+    return (
+        f"native-PDF repaired {len(repaired_keys)} region(s): "
+        f"verified={verified}, replaced={replaced}"
+    )
+
+
 def _clone_repair_assets(source: Path, destination: Path) -> None:
     try:
         shutil.copytree(source, destination, copy_function=os.link)
@@ -1548,8 +1798,10 @@ def stage_layout_ocr_repairs(
 
     The source path may be relocated only when its size and nanosecond mtime
     still match the recorded signature. Terminal regions selected for crop
-    adjustment, quarantine/reprocessing, or crop regeneration are reopened, and
-    their previous response is retained in ``repair_history``. Other proposal
+    adjustment, quarantine/reprocessing, crop regeneration, or region resume
+    are reopened, and their previous response is retained in ``repair_history``.
+    Empty decorative regions selected for review are intentionally discarded.
+    Other proposal
     actions keep their current region state for the provider's normal resume
     behavior. The published sidecar is marked partial without replacing its
     region payload, allowing the provider to enter its resume path. The OCR
@@ -1564,7 +1816,7 @@ def stage_layout_ocr_repairs(
     checkpoint = work_root / "checkpoint.json"
     if work_root.exists() and not checkpoint.is_file():
         raise ValueError(f"Layout repair workspace has no checkpoint: {work_root}")
-    state_path = checkpoint if checkpoint.is_file() else report.sidecar_path
+    state_path = _layout_repair_state_path(report.sidecar_path)
     layout = json.loads(state_path.read_text(encoding="utf-8"))
     if not isinstance(layout, dict):
         raise ValueError(f"Layout repair state must be an object: {state_path}")
@@ -1616,21 +1868,7 @@ def stage_layout_ocr_repairs(
             proposal.action in _OCR_SELECTIVE_REPROCESS_ACTIONS
             and region.get("status") in _OCR_TERMINAL_REGION_STATUSES
         ):
-            history = region.setdefault("repair_history", [])
-            if not isinstance(history, list):
-                raise ValueError(f"Region repair_history is invalid for {proposal}")
-            history.append(
-                {
-                    "action": proposal.action,
-                    "status": region.get("status"),
-                    "raw_content": region.get("raw_content"),
-                    "content": region.get("content"),
-                    "error": region.get("error"),
-                    "recovery": region.get("recovery"),
-                    "finish_reason": region.get("finish_reason"),
-                    "reasons": list(proposal.reasons),
-                }
-            )
+            _append_layout_repair_history(region, proposal)
             region.update(
                 status="pending",
                 raw_content="",
@@ -1638,6 +1876,27 @@ def stage_layout_ocr_repairs(
                 error=None,
                 recovery=None,
                 finish_reason=None,
+            )
+        if proposal.action == "review_or_discard":
+            if str(region.get("label")) not in {"header", "footer", "number"}:
+                raise ValueError(
+                    f"automatic discard is limited to decorative regions: {proposal}"
+                )
+            if str(region.get("content") or "").strip():
+                raise ValueError(
+                    f"automatic discard requires an empty region: {proposal}"
+                )
+            _append_layout_repair_history(region, proposal)
+            region.update(
+                status="recovered",
+                raw_content="",
+                content="",
+                error=None,
+                recovery=(
+                    "Discarded a degenerate Unlimited-OCR response for a "
+                    "decorative or empty number region"
+                ),
+                finish_reason="stop",
             )
         if proposal.action == "adjust_crop_and_retry":
             region["status"] = "failed"
@@ -1783,6 +2042,9 @@ async def execute_ocr_repair_round(
             attempt_counts = _repair_progress_counts(
                 [attempt.status for attempt in report_attempts]
             )
+            handler_results = " | ".join(
+                attempt.message for attempt in report_attempts
+            )
             try:
                 live_report = audit_layout_ocr_file(report.sidecar_path)
                 live_proposals = propose_ocr_repairs([live_report])
@@ -1811,9 +2073,10 @@ async def execute_ocr_repair_round(
                 tqdm.write(
                     f"[OCR repair{round_label} file {report_number}/{len(reports)} "
                     f"{progress_state}] {report.sidecar_path.name}: "
-                    f"attempts={attempt_counts or 'none'}; "
-                    f"issues={issues_before}->{issues_after}; "
-                    f"remaining={remaining_counts or 'none'}"
+                    f"handlers={attempt_counts or 'none'}; "
+                    f"audit_issues={issues_before}->{issues_after}; "
+                    f"remaining={remaining_counts or 'none'}; "
+                    f"handler_results={handler_results or 'none'}"
                 )
     report_progress.close()
 

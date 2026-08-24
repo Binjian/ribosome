@@ -832,11 +832,24 @@ class OCRQualityGate:
     ) -> tuple[QualityFlag, ...]:
         flags = list(audit_flags)
         status = str(record.get("status") or "missing")
+        label = str(record.get("label") or "unknown")
         task_type = str(record.get("task_type") or "unknown")
         content = _clean_text(record.get("content"))
+        recovery = str(record.get("recovery") or "")
+        intentional_decorative_discard = (
+            status == "recovered"
+            and label in {"header", "footer", "number"}
+            and not content
+            and "decorative or empty" in recovery.casefold()
+        )
         if status == "failed" and not any(flag.code == "failed" for flag in flags):
             flags.append(QualityFlag("failed", "OCR region status is failed", "error"))
-        if task_type != "figure" and not content and status not in {"failed", "preserved"}:
+        if (
+            task_type != "figure"
+            and not content
+            and status not in {"failed", "preserved"}
+            and not intentional_decorative_discard
+        ):
             flags.append(QualityFlag("empty_content", "textual region has no usable OCR content", "error"))
         if record.get("finish_reason") == "length":
             flags.append(QualityFlag("output_truncated", "model output stopped at the token limit", "error"))

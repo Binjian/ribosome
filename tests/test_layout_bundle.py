@@ -5,9 +5,10 @@ import pytest
 
 from layout_bundle_factory import build_synthetic_bundle
 from ribosome.preprocessing.ocr.layout_bundle import (
+    LayoutBundlePaths,
     LayoutBundleValidationError,
     LayoutBundleValidator,
-    LayoutBundlePaths,
+    OCRQualityGate,
     PDFPageRenderer,
     collect_region_visual_assets,
     ingest_layout_bundle,
@@ -16,6 +17,24 @@ from ribosome.preprocessing.ocr.layout_bundle import (
     parse_markdown_regions,
     sha256_file,
 )
+
+
+def test_quality_gate_accepts_intentional_empty_decorative_regions():
+    flags = OCRQualityGate().initial_flags(
+        {
+            "label": "number",
+            "task_type": "text",
+            "status": "recovered",
+            "content": "",
+            "recovery": (
+                "Discarded a degenerate Unlimited-OCR response for a "
+                "decorative or empty number region"
+            ),
+            "finish_reason": "stop",
+        }
+    )
+
+    assert not any(flag.code == "empty_content" for flag in flags)
 
 
 def test_ingestion_joins_markers_hashes_pdf_and_repairs_suspicious_ocr(tmp_path):
@@ -228,16 +247,13 @@ def test_reference_bundle_acceptance_counts_and_known_repairs():
     assert regions[(21, 5)].instruction_code == "STRSUB"
     assert regions[(66, 2)].section_number == "4.5.12"
     assert regions[(66, 2)].instruction_code == "SWITCH"
-    for key in ((53, 4), (61, 7), (66, 2), (70, 4)):
+    for key in ((53, 4), (61, 7), (66, 2)):
         region = next(region for region in result.document.regions if region.key == key)
         assert region.text_source == "native_pdf_recovery"
         assert not region.quarantined
         assert any(flag.code == "native_pdf_recovery" for flag in region.quality_flags)
-    assert {region.key for region in result.document.regions if region.quarantined} == {
-        (5, 5),
-        (7, 14),
-        (9, 5),
-    }
+    assert regions[(70, 4)].text_source == "native_pdf"
+    assert not any(region.quarantined for region in result.document.regions)
     sections = {section.number: section for section in result.sections}
     assert sections["4.1.8"].title == sections["4.1.8"].instruction_code == "STRLEN"
     assert sections["4.1.14"].title == sections["4.1.14"].instruction_code == "STRREVERSE"
