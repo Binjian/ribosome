@@ -700,6 +700,16 @@ def _region_fix_strategy(
                 "Retry OCR on the regenerated crop and validate the response.",
             ),
         )
+    if issue.issue_kind == "recovered":
+        return (
+            "verify_recovery",
+            "Verify the recovered prefix or fallback before accepting it as final.",
+            (
+                "Compare recovered content with the crop and available native PDF text.",
+                "Accept it only when semantic and structural checks agree.",
+                "Otherwise requeue the original crop for OCR.",
+            ),
+        )
     if any(
         marker in lowered
         for marker in (
@@ -783,16 +793,6 @@ def _region_fix_strategy(
                 "Verify service availability, crop readability, and request settings.",
                 "Retry with bounded backoff and the same region identity.",
                 "Validate the replacement before clearing the failure.",
-            ),
-        )
-    if issue.issue_kind == "recovered":
-        return (
-            "verify_recovery",
-            "Verify the recovered prefix or fallback before accepting it as final.",
-            (
-                "Compare recovered content with the crop and available native PDF text.",
-                "Accept it only when semantic and structural checks agree.",
-                "Otherwise requeue the original crop for OCR.",
             ),
         )
     if issue.issue_kind == "suspicious_completed":
@@ -1125,14 +1125,27 @@ async def _recognize_adaptive_split_tile(
     max_split_depth: int,
     depth: int = 0,
 ) -> tuple[tuple[OCRSplitTile, OCRSplitFragment, int], ...]:
-    """Recursively shrink only tiles that still exhaust the output budget."""
+    """Recursively shrink tiles with truncated or invalid OCR output."""
     fragment = await recognize_tile(tile.image, proposal, tile)
-    if fragment.finish_reason != "length":
+    fragment_record = {
+        "status": "completed",
+        "task_type": proposal.task_type or "text",
+        "content": fragment.content,
+        "error": None,
+        "recovery": None,
+        "finish_reason": fragment.finish_reason,
+        "asset": None,
+    }
+    validation_reasons = _completed_layout_quality_reasons(
+        fragment_record,
+        sidecar_path=proposal.sidecar_path,
+    )
+    if not validation_reasons:
         return ((tile, fragment, depth),)
     if depth >= max_split_depth or tile.image.height <= min_tile_height:
         raise ValueError(
-            f"split tile y={tile.top}:{tile.bottom} still reached its "
-            f"output-token limit at depth {depth}"
+            f"split tile y={tile.top}:{tile.bottom} failed validation at "
+            f"depth {depth}: {'; '.join(validation_reasons)}"
         )
 
     child_tile_height = max(
@@ -1651,8 +1664,14 @@ def repair_layout_regions_from_native_pdf(
     render_markdown: OCRSplitMarkdownRenderer,
     *,
     agreement_threshold: float = 0.65,
+    skip_unavailable_native_text: bool = False,
 ) -> str:
-    """Verify or replace suspect OCR with spatially aligned native PDF text."""
+    """Verify or replace suspect OCR with spatially aligned native PDF text.
+
+    When ``skip_unavailable_native_text`` is true, regions without a usable
+    aligned text layer remain untouched so other repair strategies for the same
+    document can still run.
+    """
     if not 0 <= agreement_threshold <= 1:
         raise ValueError("agreement_threshold must be between zero and one")
     selected = [
@@ -1684,6 +1703,7 @@ def repair_layout_regions_from_native_pdf(
         raise RuntimeError("PyMuPDF is required for native-PDF repair") from error
 
     repaired_keys: list[tuple[int, int]] = []
+    unavailable: list[str] = []
     verified = 0
     replaced = 0
     with fitz.open(source) as pdf:
@@ -1698,15 +1718,32 @@ def repair_layout_regions_from_native_pdf(
             if page is None:
                 raise ValueError(f"native-PDF repair page is missing for {proposal}")
             _, region = _split_repair_region(layout, proposal)
-            native_text = _native_region_text(pdf[page_number - 1], page, region)
+            try:
+                native_text = _native_region_text(
+                    pdf[page_number - 1], page, region
+                )
+            except Exception as error:
+                if not skip_unavailable_native_text:
+                    raise
+                unavailable.append(
+                    f"page {page_number} region {proposal.region_index}: "
+                    f"{type(error).__name__}: {error}"
+                )
+                continue
             normalized_native = _normalized_repair_text(native_text)
             minimum_characters = (
                 1 if str(region.get("label")) in {"header", "footer", "number"} else 2
             )
             if len(normalized_native) < minimum_characters:
-                raise ValueError(
-                    f"native PDF has no usable aligned text for {proposal}"
+                if not skip_unavailable_native_text:
+                    raise ValueError(
+                        f"native PDF has no usable aligned text for {proposal}"
+                    )
+                unavailable.append(
+                    f"page {page_number} region {proposal.region_index}: "
+                    "no usable aligned native PDF text"
                 )
+                continue
             current_content = str(region.get("content") or "")
             normalized_current = _normalized_repair_text(current_content)
             agreement = (
@@ -1739,10 +1776,16 @@ def repair_layout_regions_from_native_pdf(
                 asset_prefix=layout.get("asset_prefix"),
             )
             if candidate_reasons:
-                raise ValueError(
-                    f"native-PDF repair failed validation for {proposal}: "
+                if not skip_unavailable_native_text:
+                    raise ValueError(
+                        f"native-PDF repair failed validation for {proposal}: "
+                        + "; ".join(candidate_reasons)
+                    )
+                unavailable.append(
+                    f"page {page_number} region {proposal.region_index}: "
                     + "; ".join(candidate_reasons)
                 )
+                continue
             _append_layout_repair_history(region, proposal)
             for key in ("response_id", "usage", "elapsed_s", "input_mime_type"):
                 region.pop(key, None)
@@ -1761,22 +1804,25 @@ def repair_layout_regions_from_native_pdf(
             replaced += int(not use_existing)
             repaired_keys.append((page_number, int(proposal.region_index or 0)))
 
-    _refresh_layout_repair_status(layout)
-    _publish_layout_repair_state(
-        sidecar_path, state_path, layout, render_markdown
-    )
-    rechecked = audit_layout_ocr_file(sidecar_path)
-    remaining_keys = {
-        (issue.page_number, issue.region_index) for issue in rechecked.region_issues
-    }
-    unresolved = [key for key in repaired_keys if key in remaining_keys]
-    if unresolved:
-        raise RuntimeError(
-            f"native-PDF output remains in the repair queue: {unresolved}"
+    if repaired_keys:
+        _refresh_layout_repair_status(layout)
+        _publish_layout_repair_state(
+            sidecar_path, state_path, layout, render_markdown
         )
+        rechecked = audit_layout_ocr_file(sidecar_path)
+        remaining_keys = {
+            (issue.page_number, issue.region_index)
+            for issue in rechecked.region_issues
+        }
+        unresolved = [key for key in repaired_keys if key in remaining_keys]
+        if unresolved:
+            raise RuntimeError(
+                f"native-PDF output remains in the repair queue: {unresolved}"
+            )
     return (
         f"native-PDF repaired {len(repaired_keys)} region(s): "
-        f"verified={verified}, replaced={replaced}"
+        f"verified={verified}, replaced={replaced}, "
+        f"unavailable={len(unavailable)}"
     )
 
 
@@ -2043,7 +2089,12 @@ async def execute_ocr_repair_round(
                 [attempt.status for attempt in report_attempts]
             )
             handler_results = " | ".join(
-                attempt.message for attempt in report_attempts
+                (
+                    f"{attempt.message} Error: {attempt.error}"
+                    if attempt.error
+                    else attempt.message
+                )
+                for attempt in report_attempts
             )
             try:
                 live_report = audit_layout_ocr_file(report.sidecar_path)
@@ -2104,6 +2155,7 @@ async def execute_ocr_repairs_until_stable(
     max_rounds: int = 3,
     dry_run: bool = False,
     include_partial_checkpoints: bool = False,
+    partial_documents_only: bool = False,
     show_progress: bool = True,
     stream_reports: bool = True,
 ) -> OCRRepairLoopResult:
@@ -2111,15 +2163,18 @@ async def execute_ocr_repairs_until_stable(
 
     Unless ``show_progress`` is false, display nested bars for repair rounds and
     the files handled by the current round. Unless ``stream_reports`` is false,
-    also emit a persistent result line as each file finishes.
+    also emit a persistent result line as each file finishes. Set
+    ``partial_documents_only`` to keep advisory findings in already processed
+    documents from broadening a partial-output repair run.
     """
     if max_rounds <= 0:
         raise ValueError("max_rounds must be greater than zero")
     queue = tuple(
-        collect_ocr_repair_queue(
-            root,
-            include_partial_checkpoints=include_partial_checkpoints,
+        report
+        for report in collect_ocr_repair_queue(
+            root, include_partial_checkpoints=include_partial_checkpoints
         )
+        if not partial_documents_only or report.document_status == "partial"
     )
     if not queue:
         return OCRRepairLoopResult((), (), (), "clean")
@@ -2150,14 +2205,19 @@ async def execute_ocr_repairs_until_stable(
             _round_number=round_number,
         )
         rounds.append(round_result)
-        queue = round_result.remaining_queue
+        queue = tuple(
+            report
+            for report in round_result.remaining_queue
+            if not partial_documents_only
+            or report.document_status == "partial"
+        )
         round_progress.update(1)
         round_progress.set_postfix(
             queued=len(queue),
             issues=f"{round_result.issues_before}->{round_result.issues_after}",
             refresh=True,
         )
-        if round_result.clean:
+        if not queue:
             stop_reason = "clean"
             break
         if dry_run:
