@@ -14,6 +14,7 @@ from ribosome.preprocessing.ocr.audit_repair import (
     propose_ocr_repairs,
     repair_layout_regions_from_native_pdf,
     split_and_stitch_layout_regions,
+    stitch_split_ocr_content,
 )
 
 
@@ -167,6 +168,18 @@ def test_invalid_split_tile_is_subdivided_before_stitching(tmp_path):
     assert "<|det|>" not in repaired["pages"][0]["regions"][0]["content"]
 
 
+def test_plain_text_table_fragments_are_stitched_with_overlap():
+    stitched = stitch_split_ocr_content(
+        [
+            "Alarm code\nShared row",
+            "Shared row\nResolution",
+        ],
+        task_type="table",
+    )
+
+    assert stitched == "Alarm code\nShared row\nResolution"
+
+
 def test_native_pdf_best_effort_skips_region_without_aligned_text(tmp_path):
     source = tmp_path / "source.pdf"
     with fitz.open() as pdf:
@@ -214,6 +227,60 @@ def test_native_pdf_best_effort_skips_region_without_aligned_text(tmp_path):
     assert first["status"] == "completed"
     assert second["status"] == "recovered"
     assert second["content"] == "image-only note"
+
+
+def test_native_pdf_repairs_split_proposal_and_cleans_workspace(tmp_path):
+    source = tmp_path / "source.pdf"
+    with fitz.open() as pdf:
+        page = pdf.new_page(width=200, height=200)
+        page.insert_text((20, 40), "alarm code resolution")
+        pdf.save(source)
+
+    sidecar = tmp_path / "native-split.layout.json"
+    _write_layout(
+        sidecar,
+        [
+            _region(
+                1,
+                status="failed",
+                error="ValueError: output-token limit",
+                finish_reason="length",
+                bbox=(10, 20, 190, 55),
+                label="table",
+                task_type="table",
+            )
+        ],
+        status="partial",
+        width=200,
+        height=200,
+    )
+    work_root = tmp_path / ".native-split.layout-work"
+    work_root.mkdir()
+    (work_root / "checkpoint.json").write_text(
+        sidecar.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    partial_markdown = tmp_path / "native-split.partial.md"
+    partial_sidecar = tmp_path / "native-split.partial.layout.json"
+    partial_markdown.write_text("partial", encoding="utf-8")
+    partial_sidecar.write_text("{}", encoding="utf-8")
+    report = audit_layout_ocr_file(sidecar)
+    proposals = propose_ocr_repairs([report])
+
+    assert any(proposal.action == "split_and_stitch" for proposal in proposals)
+    message = repair_layout_regions_from_native_pdf(
+        report,
+        proposals,
+        source,
+        lambda layout: layout["pages"][0]["regions"][0]["content"],
+    )
+
+    repaired = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert "repaired 1 region(s)" in message
+    assert repaired["status"] == "processed"
+    assert repaired["pages"][0]["regions"][0]["content"] == "alarm code resolution"
+    assert not work_root.exists()
+    assert not partial_markdown.exists()
+    assert not partial_sidecar.exists()
 
 
 def test_partial_document_scope_excludes_processed_advisories(tmp_path):

@@ -1022,16 +1022,17 @@ def stitch_split_ocr_content(
 
     if task_type == "table":
         fragment_rows = [tuple(_TABLE_ROW_RE.findall(fragment)) for fragment in cleaned]
-        if any(not rows for rows in fragment_rows):
+        if all(fragment_rows):
+            rows: list[str] = []
+            for incoming in fragment_rows:
+                rows.extend(incoming[_split_units_overlap(rows, incoming) :])
+            opening_match = _TABLE_OPEN_RE.search(cleaned[0])
+            opening = opening_match.group(0) if opening_match else "<table>"
+            return opening + "".join(rows) + "</table>"
+        if any(fragment_rows):
             raise ValueError(
-                "split-and-stitch table fragments must contain complete HTML rows"
+                "split-and-stitch cannot mix HTML-row and plain-text table fragments"
             )
-        rows: list[str] = []
-        for incoming in fragment_rows:
-            rows.extend(incoming[_split_units_overlap(rows, incoming) :])
-        opening_match = _TABLE_OPEN_RE.search(cleaned[0])
-        opening = opening_match.group(0) if opening_match else "<table>"
-        return opening + "".join(rows) + "</table>"
 
     units: list[str] = []
     for fragment in cleaned:
@@ -1593,6 +1594,18 @@ def _publish_layout_repair_state(
     _publish_split_repair_pair(
         sidecar_path, markdown_path, layout, render_markdown(layout)
     )
+    if layout.get("status") == "processed":
+        work_root = (
+            markdown_path.parent / f".{markdown_path.stem}.layout-work"
+        )
+        if work_root.exists():
+            shutil.rmtree(work_root)
+        markdown_path.with_name(
+            f"{markdown_path.stem}.partial.md"
+        ).unlink(missing_ok=True)
+        sidecar_path.with_name(
+            f"{markdown_path.stem}.partial.layout.json"
+        ).unlink(missing_ok=True)
 
 
 def _append_layout_repair_history(
@@ -1678,7 +1691,13 @@ def repair_layout_regions_from_native_pdf(
         proposal
         for proposal in proposals
         if proposal.scope == "region"
-        and proposal.action in {"verify_recovery", "discard_and_reprocess"}
+        and proposal.action
+        in {
+            "verify_recovery",
+            "discard_and_reprocess",
+            "split_and_stitch",
+            "split_and_retry",
+        }
     ]
     if not selected:
         raise ValueError("native-PDF handler received no matching proposal")
