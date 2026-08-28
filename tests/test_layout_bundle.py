@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 
 import pytest
-
 from layout_bundle_factory import build_synthetic_bundle
+from ribosome.preprocessing.ocr.audit_repair import audit_layout_ocr_file
 from ribosome.preprocessing.ocr.layout_bundle import (
     LayoutBundlePaths,
     LayoutBundleValidationError,
@@ -217,7 +217,8 @@ REFERENCE_STEM = "SX322023《新松机器人控制器软件指令集》(A-2)"
 REFERENCE_LAYOUT = (
     Path(__file__).parents[1]
     / "assets"
-    / "unlimited_ocr_mit_coding"
+    / "PDF-20260721"
+    / ".md_unlimited"
     / "04指令手册"
     / f"{REFERENCE_STEM}.layout.json"
 )
@@ -232,6 +233,30 @@ REFERENCE_PDF = (
 
 @pytest.mark.skipif(not (REFERENCE_LAYOUT.is_file() and REFERENCE_PDF.is_file()), reason="ignored reference bundle is unavailable")
 def test_reference_bundle_acceptance_counts_and_known_repairs():
+    audit = audit_layout_ocr_file(REFERENCE_LAYOUT)
+    assert not audit.needs_repair
+
+    sidecar = json.loads(REFERENCE_LAYOUT.read_text(encoding="utf-8"))
+    sidecar_regions = {
+        (page["page_number"], region["index"]): region
+        for page in sidecar["pages"]
+        for region in page["regions"]
+    }
+    repair_strategies = {
+        (5, 5): "verified_existing_ocr",
+        (7, 14): "verified_existing_ocr",
+        (8, 2): "verified_existing_ocr",
+        (53, 4): "native_pdf_replacement",
+        (61, 7): "native_pdf_replacement",
+        (66, 2): "native_pdf_replacement",
+        (70, 4): "verified_existing_ocr",
+    }
+    for key, strategy in repair_strategies.items():
+        assert len(sidecar_regions[key]["repair_history"]) == 1
+        assert sidecar_regions[key]["native_text_repair"]["strategy"] == strategy
+    assert len(sidecar_regions[(9, 5)]["repair_history"]) == 1
+    assert sidecar_regions[(9, 5)]["status"] == "recovered"
+
     result = ingest_layout_bundle(REFERENCE_LAYOUT, pdf_path=REFERENCE_PDF)
 
     assert len(result.document.pages) == 72
@@ -249,9 +274,9 @@ def test_reference_bundle_acceptance_counts_and_known_repairs():
     assert regions[(66, 2)].instruction_code == "SWITCH"
     for key in ((53, 4), (61, 7), (66, 2)):
         region = next(region for region in result.document.regions if region.key == key)
-        assert region.text_source == "native_pdf_recovery"
+        assert region.text_source == "native_pdf"
         assert not region.quarantined
-        assert any(flag.code == "native_pdf_recovery" for flag in region.quality_flags)
+        assert not region.quality_flags
     assert regions[(70, 4)].text_source == "native_pdf"
     assert not any(region.quarantined for region in result.document.regions)
     sections = {section.number: section for section in result.sections}

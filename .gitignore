@@ -193,6 +193,10 @@ cython_debug/
 /ribosome/retrieval/*
 !/ribosome/retrieval/__init__.py
 !/ribosome/retrieval/layout_rag.py
+!/ribosome/application/
+/ribosome/application/*
+!/ribosome/application/__init__.py
+!/ribosome/application/layout_rag.py
 /.python-version
 /log/
 /ollama_logs.text

@@ -46,10 +46,11 @@ package manager specific guidelines on
 
 ## Layout-aware OCR RAG
 
-For OCR-processed PDF bundles, start with
-[layout-bundle ingestion](nbs/03.preprocessing.ocr.layout_bundle.ipynb)
-and then use the
-[hybrid retrieval pipeline](nbs/04.retrieval.layout_rag.ipynb). The full
+For OCR-processed PDF bundles, use the
+[application orchestrator](nbs/05.application.layout_rag.ipynb). It connects
+[layout-bundle ingestion](nbs/03.preprocessing.ocr.layout_bundle.ipynb) to the
+[hybrid retrieval pipeline](nbs/04.retrieval.layout_rag.ipynb) with an audit
+gate, optional repair handlers, exact evidence, and citation payloads. The full
 design, implementation boundary, and production guidance are in the
 [layout-aware OCR RAG strategy](docs/layout-aware-ocr-rag-strategy.md).
 

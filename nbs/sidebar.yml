@@ -21,3 +21,4 @@ website:
       - 03.preprocessing.parsing.ms_office.markitdown.utils.ipynb
       - 03.preprocessing.parsing.ms_office.markitdown.win.ipynb
       - 04.retrieval.layout_rag.ipynb
+      - 05.application.layout_rag.ipynb

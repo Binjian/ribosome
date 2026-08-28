@@ -1,12 +1,14 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import fitz
+import pytest
 from PIL import Image
 from ribosome.preprocessing.ocr.audit_repair import (
-    OCRFileQualityReport,
     OCR_NATIVE_TEXT_REPAIR_ACTIONS,
+    OCRFileQualityReport,
     OCRRegionQualityIssue,
     OCRSplitFragment,
     audit_layout_ocr_file,
@@ -15,8 +17,10 @@ from ribosome.preprocessing.ocr.audit_repair import (
     propose_ocr_repairs,
     repair_layout_regions_from_native_pdf,
     split_and_stitch_layout_regions,
+    stage_layout_ocr_repairs,
     stitch_split_ocr_content,
 )
+from ribosome.preprocessing.ocr.utils import _source_signature
 
 
 def _region(
@@ -291,6 +295,147 @@ def test_native_pdf_repairs_split_proposal_and_cleans_workspace(tmp_path):
     assert not work_root.exists()
     assert not partial_markdown.exists()
     assert not partial_sidecar.exists()
+
+
+def test_checkpoint_staging_archives_each_mutating_region_exactly_once(tmp_path):
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"checkpoint source")
+    source_stat = source.stat()
+    sidecar = tmp_path / "history.layout.json"
+    assets = tmp_path / "history.assets"
+    assets.mkdir()
+    (assets / "decorative.png").write_bytes(b"crop")
+    _write_layout(
+        sidecar,
+        [
+            _region(
+                1,
+                status="failed",
+                content="failed retry",
+                error="backend unavailable",
+            ),
+            _region(2, status="pending", content="interrupted region"),
+            _region(
+                3,
+                status="failed",
+                content="missing crop retry",
+                error="backend unavailable",
+                asset="history.assets/missing.png",
+            ),
+            _region(
+                4,
+                status="completed",
+                content=(
+                    "The Ground Truth image differs. According to Rule 2, "
+                    "the provided OCR content must be rejected."
+                ),
+            ),
+            _region(
+                5,
+                status="preserved",
+                recovery="Unlimited-OCR returned no usable text after retry",
+                finish_reason=None,
+                asset="history.assets/decorative.png",
+                label="number",
+            ),
+            _region(6, status="pending", content="document-resume fallback"),
+        ],
+        status="partial",
+    )
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    payload["source"] = str(source)
+    payload["source_signature"] = {
+        "path": str(source),
+        "size": source_stat.st_size,
+        "mtime_ns": source_stat.st_mtime_ns,
+    }
+    for region in payload["pages"][0]["regions"]:
+        region["raw_content"] = f"raw response {region['index']}"
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = audit_layout_ocr_file(sidecar)
+    all_proposals = propose_ocr_repairs([report])
+    region_proposals = {
+        proposal.region_index: proposal
+        for proposal in all_proposals
+        if proposal.scope == "region"
+    }
+    proposals = [
+        proposal
+        for proposal in all_proposals
+        if not (proposal.scope == "region" and proposal.region_index == 6)
+    ]
+
+    staged = stage_layout_ocr_repairs(report, proposals, source)
+    regions = {
+        region["index"]: region for region in staged["pages"][0]["regions"]
+    }
+
+    for index in range(1, 7):
+        assert len(regions[index]["repair_history"]) == 1
+        assert regions[index]["repair_history"][0]["raw_content"] == (
+            f"raw response {index}"
+        )
+    for index in range(1, 6):
+        history = regions[index]["repair_history"][0]
+        assert history["action"] == region_proposals[index].action
+        assert history["reasons"] == list(region_proposals[index].reasons)
+
+    fallback = regions[6]["repair_history"][0]
+    assert fallback["action"] == "resume_document"
+    assert fallback["reasons"] == list(
+        dict.fromkeys(
+            reason
+            for proposal in all_proposals
+            if proposal.scope == "file" and proposal.action == "resume_document"
+            for reason in proposal.reasons
+        )
+    )
+    assert regions[1]["status"] == "failed"
+    assert regions[2]["status"] == "pending"
+    assert regions[3]["status"] == "failed"
+    assert regions[4]["status"] == "pending"
+    assert regions[4]["content"] == ""
+    assert regions[5]["status"] == "recovered"
+    assert regions[6]["status"] == "pending"
+    assert staged["source_signature"]["sha256"] == _source_signature(source)[
+        "sha256"
+    ]
+
+    relocated = tmp_path / "relocated.pdf"
+    relocated.write_bytes(source.read_bytes())
+    os.utime(
+        relocated,
+        ns=(source_stat.st_mtime_ns, source_stat.st_mtime_ns),
+    )
+    relocated_staged = stage_layout_ocr_repairs(
+        report, proposals, relocated
+    )
+    assert relocated_staged["source_signature"] == _source_signature(relocated)
+
+    checkpoint = tmp_path / ".history.layout-work" / "checkpoint.json"
+    legacy_relocated = json.loads(checkpoint.read_text(encoding="utf-8"))
+    legacy_relocated["source_signature"].pop("sha256")
+    checkpoint.write_text(json.dumps(legacy_relocated), encoding="utf-8")
+    second_move = tmp_path / "second-move.pdf"
+    second_move.write_bytes(relocated.read_bytes())
+    os.utime(
+        second_move,
+        ns=(source_stat.st_mtime_ns, source_stat.st_mtime_ns),
+    )
+    with pytest.raises(ValueError, match="Source signature changed"):
+        stage_layout_ocr_repairs(report, proposals, second_move)
+
+    hashed_checkpoint = json.loads(checkpoint.read_text(encoding="utf-8"))
+    hashed_checkpoint["source_signature"] = _source_signature(relocated)
+    checkpoint.write_text(json.dumps(hashed_checkpoint), encoding="utf-8")
+    relocated.write_bytes(b"checkpoint sourcf")
+    os.utime(
+        relocated,
+        ns=(source_stat.st_mtime_ns, source_stat.st_mtime_ns),
+    )
+    with pytest.raises(ValueError, match="Source signature changed"):
+        stage_layout_ocr_repairs(report, proposals, relocated)
 
 
 def test_partial_document_scope_excludes_processed_advisories(tmp_path):

@@ -207,9 +207,9 @@ Native verification uses a default normalized-text agreement threshold of `0.65`
 
 Adaptive splitting defaults to a 1,400-pixel tile height, 96-pixel overlap, a 128-pixel low-ink boundary search, a 320-pixel minimum tile height, and a maximum recursion depth of 4. A tile that is truncated or fails the same quality checks is recursively divided. Every fragment and the stitched result must validate before publication. Table stitching removes overlapping HTML rows and records tile bounds, split depth, finish reason, response ID, usage, and elapsed time in `split_repair`.
 
-If `.layout-work/checkpoint.json` exists, it is the authoritative repair state. Staging verifies a relocated source against its recorded size and nanosecond mtime, clones the assets when it creates a workspace, and retains `repair_checkpoint` while the document is partial. Pair publication uses staged renames plus best-effort rollback rather than a cross-file transaction; after promotion to `processed`, it removes the workspace and partial artifacts. Source identity for ingestion still requires a cryptographic hash because checkpoint relocation checks are not content hashes.
+If `.layout-work/checkpoint.json` exists, it is the authoritative repair state. New source signatures record the resolved path, size, nanosecond mtime, and SHA-256 digest. A signed source may be relocated only when its size, mtime, and digest all match; a legacy hashless checkpoint may be upgraded only while the source remains at its recorded path. Staging clones the assets when it creates a workspace and retains `repair_checkpoint` while the document is partial. Pair publication uses staged renames plus best-effort rollback rather than a cross-file transaction; after promotion to `processed`, it removes the workspace and partial artifacts.
 
-Native replacement, split repair, and selective reopening of terminal regions append the previous response to `repair_history`. Generic failed-region retry or document resume does not yet guarantee the same archival step, so production hardening must make repair-history preservation uniform across every mutating handler.
+Native replacement, split repair, selective reopening, generic failed-region retry, interrupted-region resume, crop regeneration, decorative discard, and document resume append the previous response to `repair_history` before mutation. When file- and region-level proposals overlap, staging archives each affected region once and retains the more specific region action and reasons.
 
 Handlers are grouped per file so aliases do not cause duplicate OCR calls. Dry runs preview dispatch without invoking handlers. After each round, execution stops with one of `clean`, `dry_run`, `no_handlers`, `execution_failed`, `no_progress`, or `max_rounds`. Unsupported structural changes and non-decorative human-review findings remain queued for a purpose-built handler.
 
@@ -266,7 +266,7 @@ Conditioning is an optional, deterministic local branch for `DOMClass` and `anal
 
 The implemented pass:
 
-1. Joins Markdown markers to layout records and, in strict mode, requires exact page/index, label, status, bbox, and key-set agreement.
+1. Joins Markdown markers to layout records and, in strict mode, rejects duplicate Markdown marker keys, duplicate layout page numbers, and duplicate layout region keys before requiring exact page/index, label, status, bbox, and key-set agreement.
 2. Removes explicit `header`, `footer`, and `number` regions; top/bottom running matter repeated on at least `max(3, ceil(20% of pages))` pages; recurring document titles; and boundary boilerplate derived from those labels and the layout `source` document code/revision.
 3. Drops non-table regions geometrically nested inside table regions and reorders only vertically disjoint inversions, preserving index order for overlapping regions.
 4. Reconstructs numbered headings from the TOC, title similarity, and active accepted parents. Heading level comes from numbering depth. Visible numbers are stripped by default but retained in `section-number`, source-page, and source-region comments; title-like regions that cannot be trusted as headings are demoted to bold or plain text.
@@ -284,7 +284,7 @@ This view is intentionally lossy: original page/region markers and raw HTML tabl
 
 `condition_layout_markdown()` is the in-memory transformation only; callers that use it directly do not receive the file-level audit gate. `condition_markdown_folder()` recursively discovers sorted source Markdown, ignores generated `.conditioned.md` files, requires a sibling sidecar, skips existing outputs by default, and continues after per-file failures by default. Its item statuses are `conditioned`, `conditioned_with_warnings`, `missing_layout`, `skipped_existing`, and `failed`. Progress is shown by default, and caught errors are printed immediately through the progress display.
 
-The example corpus runner deliberately sets non-strict mode. When a non-strict item has audit findings, they are copied into the report as `OCR audit: ...` warnings and its status is `conditioned_with_warnings`; an audit-clean, eligible item can still be `conditioned`. A warned output is not production-approved merely because it was written, and `conditioned_with_warnings` can also reflect failed eligibility. Consumers must inspect `eligible`, `validation_errors`, and `warnings`. Currently, non-strict `LayoutBundleValidator` issues are not merged into those warnings, so callers must validate the canonical bundle separately; surfacing those tolerated structural issues in the report remains hardening work. Existing-output skipping has no hash-based staleness check, so production orchestration must version or regenerate conditioned views when the source or configuration changes.
+The example corpus runner deliberately sets non-strict mode. When a non-strict item has audit findings, they are copied into the report as `OCR audit: ...` warnings. Tolerated `LayoutBundleValidator` findings are also copied as `Bundle validation [severity:code]: ...` warnings ahead of audit and output-validation warnings. Either case produces `conditioned_with_warnings`; an audit-clean, structurally valid, eligible item can still be `conditioned`. A warned output is not production-approved merely because it was written, and `conditioned_with_warnings` can also reflect failed eligibility. Consumers must inspect `eligible`, `validation_errors`, and `warnings`. Existing-output skipping has no hash-based staleness check, so production orchestration must version or regenerate conditioned views when the source or configuration changes.
 
 The current reference conditioned file exactly matches a fresh in-memory pass and is Pandoc-eligible:
 
@@ -521,12 +521,13 @@ CitationAssembler
 
 ## Implemented repository API
 
-The preprocessing and retrieval path is implemented in four notebook-first modules:
+The preprocessing, retrieval, and application path is implemented in five notebook-first modules:
 
 - [`03.preprocessing.ocr.audit_repair.ipynb`](../nbs/03.preprocessing.ocr.audit_repair.ipynb) exports `ribosome.preprocessing.ocr.audit_repair`. It provides deterministic tree/file audits, complete repair proposals, native-PDF verification and replacement, adaptive split-and-stitch, durable checkpoint staging, bounded repair rounds, dry runs, live progress reports, and mandatory re-auditing.
 - [`02.preprocess.conditioning.markdown.ipynb`](../nbs/02.preprocess.conditioning.markdown.ipynb) exports `ribosome.preprocessing.conditioning.markdown`. It provides the optional derived semantic Markdown view, Pandoc eligibility checks, strict audit-gated single-file conditioning, and recursive batch conditioning, including an explicitly non-strict corpus runner with warnings and per-file outcomes.
 - [`03.preprocessing.ocr.layout_bundle.ipynb`](../nbs/03.preprocessing.ocr.layout_bundle.ipynb) exports `ribosome.preprocessing.ocr.layout_bundle`. It provides strict bundle validation, stable hashing and IDs, Markdown/JSON joining, OCR audit gates, native-PDF reconciliation, numbered hierarchy construction, table normalization, typed chunks, page rendering, and crop discovery.
 - [`04.retrieval.layout_rag.ipynb`](../nbs/04.retrieval.layout_rag.ipynb) exports `ribosome.retrieval.layout_rag`. It provides the canonical SQLite graph, FTS5 and exact alias indexes, separate optional Chroma child/parent collections, reciprocal-rank fusion, injectable visual retrieval and reranking, parent/neighbor expansion, citations, and retrieval metrics.
+- [`05.application.layout_rag.ipynb`](../nbs/05.application.layout_rag.ipynb) exports `ribosome.application.layout_rag`. It provides the application boundary that enforces the audit gate, optionally invokes registered repair handlers, runs canonical ingestion and atomic indexing, embeds dense queries when configured, returns exact evidence with full citation payloads, and optionally calls an injected answer generator.
 
 Current implementation boundary:
 
@@ -537,35 +538,21 @@ Current implementation boundary:
 | 3. Tables and visual retrieval | Adapter implemented | Table row groups, crop discovery, PDF page rendering, and visual-candidate fusion are included; a particular ColPali/vision model and its index are intentionally deployment choices. |
 | 4. Evaluation and tuning | Foundation implemented | Recall, MRR, and abstention metrics are included; the representative labelled dataset, ablation runs, answer grading, and UI remain application work. |
 
-Audit and lexical indexing need no embedding service. Gate the raw evidence bundle before ingestion. The example uses top-level `await` as supported by Jupyter; a synchronous script can wrap the indexing call with `asyncio.run(...)`:
+Audit and lexical indexing need no embedding service. The application orchestrator gates the raw evidence bundle before ingestion and keeps the ingestion/index/query pipeline version aligned. The example uses top-level `await` as supported by Jupyter; a synchronous script can wrap the calls with `asyncio.run(...)`:
 
 ```python
-from ribosome.preprocessing.ocr.audit_repair import audit_layout_ocr_file
-from ribosome.preprocessing.ocr.layout_bundle import ingest_layout_bundle
-from ribosome.retrieval.layout_rag import (
-    HybridIndexer,
-    HybridRetriever,
-    SQLiteRetrievalRecordStore,
-)
+from ribosome.application.layout_rag import LayoutRAGApplication
+from ribosome.retrieval.layout_rag import SQLiteRetrievalRecordStore
 
-audit = audit_layout_ocr_file("document.layout.json")
-if audit.needs_repair:
-    raise ValueError(
-        f"OCR audit has {len(audit.file_reasons)} file findings and "
-        f"{len(audit.region_issues)} region findings"
-    )
-
-result = ingest_layout_bundle(
+store = SQLiteRetrievalRecordStore("layout-rag.sqlite3")
+app = LayoutRAGApplication(store)
+indexed = await app.index_bundle(
     "document.layout.json",
     markdown_path="document.md",
     pdf_path="document.pdf",  # explicit path overrides obsolete sidecar paths
 )
-
-store = SQLiteRetrievalRecordStore("layout-rag.sqlite3")
-await HybridIndexer(store).index(result)
-evidence = HybridRetriever(store).retrieve_evidence(
-    "MOVJ P[1] V=10 ACC=100 CNT=100"
-)
+result = await app.query("MOVJ P[1] V=10 ACC=100 CNT=100")
+evidence = result.evidence
 ```
 
 Condition only when the DOM semantics path needs a document-shaped Markdown view:
@@ -593,13 +580,18 @@ dense = ChromaDenseIndex(
     embedding_model="bge-m3",
 )
 embedder = OllamaEmbeddingProvider(AsyncClient(), model="bge-m3")
-await HybridIndexer(store, dense).index(result, embedder=embedder)
-
-query_vector = (await embedder(["MOVJ 的参数范围是什么？"]))[0]
-evidence = HybridRetriever(store, dense_index=dense).retrieve_evidence(
-    "MOVJ 的参数范围是什么？",
-    query_embedding=query_vector,
+dense_app = LayoutRAGApplication(
+    store,
+    dense_index=dense,
+    embedder=embedder,
 )
+await dense_app.index_bundle(
+    "document.layout.json",
+    markdown_path="document.md",
+    pdf_path="document.pdf",
+)
+dense_result = await dense_app.query("MOVJ 的参数范围是什么？")
+evidence = dense_result.evidence
 ```
 
 `embedding_model` is required because it identifies the vector space. Chroma collection names include a digest of the raw pipeline version and embedding-model identity, and every query also filters those metadata fields. Per-document dense replacement snapshots and restores the prior Chroma records if an upsert/delete fails; the enclosing SQLite transaction is rolled back at the same time. A rollback failure is surfaced as an error instead of being silently accepted.
@@ -619,15 +611,12 @@ Completed capabilities:
 - audit recorded OCR independently and retain a deterministic repair queue;
 - provide aligned-native, adaptive-split, checkpoint-staging, and re-audit primitives, with an opt-in notebook composition for the current provider;
 - reconstruct an optional, validated semantic Markdown view without changing canonical evidence; and
-- quarantine unresolved findings and preserve repair provenance for native, split, and selective terminal-region repairs.
+- quarantine unresolved findings, preserve repair provenance uniformly across mutating repair/resume paths, verify checkpoint sources cryptographically, and surface tolerated bundle-validation findings in conditioning reports.
 
 Remaining operational work:
 
 - review or repair unresolved findings in already processed corpus documents;
-- add purpose-built handlers for structural manifest/layout changes and non-decorative manual review;
-- make `repair_history` archival uniform for generic failed-region retry and document-resume paths;
-- merge non-strict bundle-validation issues into conditioning reports; and
-- add cryptographic source verification to checkpoint relocation, which currently checks size and nanosecond mtime.
+- add purpose-built handlers for structural manifest/layout changes and non-decorative manual review.
 
 Acceptance criteria:
 

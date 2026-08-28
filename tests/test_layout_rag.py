@@ -7,7 +7,6 @@ from pathlib import Path
 
 import chromadb
 import pytest
-
 from layout_bundle_factory import build_synthetic_bundle
 from ribosome.preprocessing.ocr.layout_bundle import (
     LayoutIngestionResult,
@@ -361,7 +360,8 @@ REFERENCE_STEM = "SX322023《新松机器人控制器软件指令集》(A-2)"
 REFERENCE_LAYOUT = (
     Path(__file__).parents[1]
     / "assets"
-    / "unlimited_ocr_mit_coding"
+    / "PDF-20260721"
+    / ".md_unlimited"
     / "04指令手册"
     / f"{REFERENCE_STEM}.layout.json"
 )

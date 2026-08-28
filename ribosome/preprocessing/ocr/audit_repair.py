@@ -32,6 +32,11 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence, cast
 from PIL import Image
 from tqdm.auto import tqdm
 
+from ribosome.preprocessing.ocr.utils import (
+    _source_signature,
+    _source_signature_is_compatible,
+)
+
 
 # %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #a012f6d8
 def _layout_repetition_reason(content: str) -> str | None:
@@ -995,7 +1000,7 @@ def _split_row_signature(row: str) -> str:
 def _split_units_overlap(existing: Sequence[str], incoming: Sequence[str]) -> int:
     for size in range(min(len(existing), len(incoming)), 0, -1):
         matched = True
-        for left, right in zip(existing[-size:], incoming[:size]):
+        for left, right in zip(existing[-size:], incoming[:size], strict=True):
             left_signature = _split_row_signature(left)
             right_signature = _split_row_signature(right)
             if not left_signature or not right_signature:
@@ -1262,7 +1267,7 @@ async def split_and_stitch_layout_regions(
         )
         fragments = [fragment for _, fragment, _ in recognized]
         split_depths = [depth for _, _, depth in recognized]
-        for tile, fragment in zip(tiles, fragments):
+        for tile, fragment in zip(tiles, fragments, strict=True):
             if not fragment.content.strip():
                 raise ValueError(f"split tile {tile.index} returned no usable OCR content")
             fragment_record = {
@@ -1293,7 +1298,7 @@ async def split_and_stitch_layout_regions(
             raw_content="\n\n".join(
                 f"<!-- split tile {tile.index + 1} y={tile.top}:{tile.bottom} -->\n"
                 f"{fragment.raw_content}"
-                for tile, fragment in zip(tiles, fragments)
+                for tile, fragment in zip(tiles, fragments, strict=True)
             ),
             content=stitched,
             error=None,
@@ -1347,7 +1352,9 @@ async def split_and_stitch_layout_regions(
                     "usage": dict(fragment.metadata.get("usage") or {}),
                     "elapsed_s": fragment.metadata.get("elapsed_s"),
                 }
-                for tile, fragment, split_depth in zip(tiles, fragments, split_depths)
+                for tile, fragment, split_depth in zip(
+                    tiles, fragments, split_depths, strict=True
+                )
             ],
         }
         page["status"] = (
@@ -1519,6 +1526,13 @@ _OCR_SELECTIVE_REPROCESS_ACTIONS = frozenset(
         "resume_region",
     }
 )
+_OCR_REGION_MUTATING_ACTIONS = frozenset(
+    {
+        *_OCR_SELECTIVE_REPROCESS_ACTIONS,
+        "retry_region",
+        "review_or_discard",
+    }
+)
 
 
 def _repair_markdown_path(sidecar_path: Path) -> Path:
@@ -1615,7 +1629,10 @@ def _publish_layout_repair_state(
 
 
 def _append_layout_repair_history(
-    region: dict[str, Any], proposal: OCRFixProposal
+    region: dict[str, Any],
+    proposal: OCRFixProposal,
+    *,
+    reasons: Sequence[str] | None = None,
 ) -> None:
     history = region.setdefault("repair_history", [])
     if not isinstance(history, list):
@@ -1629,7 +1646,7 @@ def _append_layout_repair_history(
             "error": region.get("error"),
             "recovery": region.get("recovery"),
             "finish_reason": region.get("finish_reason"),
-            "reasons": list(proposal.reasons),
+            "reasons": list(proposal.reasons if reasons is None else reasons),
         }
     )
 
@@ -1861,10 +1878,15 @@ def stage_layout_ocr_repairs(
 ) -> dict[str, Any]:
     """Atomically stage checkpoint-compatible region repairs for one file.
 
-    The source path may be relocated only when its size and nanosecond mtime
-    still match the recorded signature. Terminal regions selected for crop
-    adjustment, quarantine/reprocessing, crop regeneration, or region resume
-    are reopened, and their previous response is retained in ``repair_history``.
+    The source path may be relocated only when its size, nanosecond mtime, and
+    recorded SHA-256 digest match. A legacy hashless signature can be upgraded
+    only while the source remains at its recorded path. Every region selected
+    for a mutating
+    retry or discard archives its previous response exactly once in
+    ``repair_history``. A document-resume proposal also archives nonterminal
+    regions that have no more-specific region proposal. Terminal regions
+    selected for crop adjustment, quarantine/reprocessing, crop regeneration,
+    or region resume are reopened after their evidence is archived.
     Empty decorative regions selected for review are intentionally discarded.
     Other proposal
     actions keep their current region state for the provider's normal resume
@@ -1886,24 +1908,12 @@ def stage_layout_ocr_repairs(
     if not isinstance(layout, dict):
         raise ValueError(f"Layout repair state must be an object: {state_path}")
 
-    source_stat = source.stat()
-    actual_signature = {
-        "path": str(source),
-        "size": source_stat.st_size,
-        "mtime_ns": source_stat.st_mtime_ns,
-    }
+    actual_signature = _source_signature(source)
     recorded_signature = layout.get("source_signature")
-    if recorded_signature != actual_signature:
-        same_file_content = (
-            isinstance(recorded_signature, dict)
-            and recorded_signature.get("size") == actual_signature["size"]
-            and recorded_signature.get("mtime_ns")
-            == actual_signature["mtime_ns"]
+    if not _source_signature_is_compatible(recorded_signature, actual_signature):
+        raise ValueError(
+            f"Source signature changed for {source}; refusing checkpoint repair"
         )
-        if not same_file_content:
-            raise ValueError(
-                f"Source signature changed for {source}; refusing checkpoint repair"
-            )
     layout["source"] = str(source)
     layout["source_signature"] = actual_signature
 
@@ -1912,6 +1922,7 @@ def stage_layout_ocr_repairs(
         for position, page in enumerate(layout.get("pages", []), start=1)
         if isinstance(page, dict)
     }
+    archived_regions: set[tuple[int, int]] = set()
     for proposal in proposals:
         if proposal.scope != "region":
             continue
@@ -1929,11 +1940,20 @@ def stage_layout_ocr_repairs(
         )
         if region is None:
             raise ValueError(f"Repair region is missing for {proposal}")
+        region_key = (
+            int(proposal.page_number or 0),
+            int(proposal.region_index or 0),
+        )
+        if (
+            proposal.action in _OCR_REGION_MUTATING_ACTIONS
+            and region_key not in archived_regions
+        ):
+            _append_layout_repair_history(region, proposal)
+            archived_regions.add(region_key)
         if (
             proposal.action in _OCR_SELECTIVE_REPROCESS_ACTIONS
             and region.get("status") in _OCR_TERMINAL_REGION_STATUSES
         ):
-            _append_layout_repair_history(region, proposal)
             region.update(
                 status="pending",
                 raw_content="",
@@ -1951,7 +1971,6 @@ def stage_layout_ocr_repairs(
                 raise ValueError(
                     f"automatic discard requires an empty region: {proposal}"
                 )
-            _append_layout_repair_history(region, proposal)
             region.update(
                 status="recovered",
                 raw_content="",
@@ -1969,6 +1988,37 @@ def stage_layout_ocr_repairs(
                 "ValueError: Unlimited-OCR output is empty after post-processing"
             )
         page["status"] = "partial"
+
+    resume_proposals = [
+        proposal
+        for proposal in proposals
+        if proposal.scope == "file" and proposal.action == "resume_document"
+    ]
+    if resume_proposals:
+        resume_reasons = tuple(
+            dict.fromkeys(
+                reason
+                for proposal in resume_proposals
+                for reason in proposal.reasons
+            )
+        )
+        resume_proposal = resume_proposals[0]
+        for page_number, page in pages.items():
+            for region in page.get("regions", []):
+                if not isinstance(region, dict):
+                    continue
+                try:
+                    region_key = (page_number, int(region.get("index", -1)))
+                except (TypeError, ValueError):
+                    continue
+                if (
+                    region.get("status") not in _OCR_TERMINAL_REGION_STATUSES
+                    and region_key not in archived_regions
+                ):
+                    _append_layout_repair_history(
+                        region, resume_proposal, reasons=resume_reasons
+                    )
+                    archived_regions.add(region_key)
     layout["status"] = "partial"
     created_workspace = state_path == report.sidecar_path
     try:
