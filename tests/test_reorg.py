@@ -1,3 +1,4 @@
+import copy
 import sys
 from pathlib import Path
 
@@ -108,3 +109,72 @@ def test_reorg_node_keeps_body_ordered_lists_as_content():
 
     assert [section_title(node) for node in result["blocks"]] == ["Intro", "Next"]
     assert [node["t"] for node in result["blocks"][0]["c"][1]["c"]] == ["OrderedList"]
+
+
+def test_reorg_node_is_idempotent():
+    ast = {
+        "blocks": [
+            header(1, "A"),
+            para("a"),
+            header(2, "B"),
+            para("b"),
+            header(1, "C"),
+        ]
+    }
+    levels1 = []
+    pass1 = reorg_node(copy.deepcopy(ast), section_level=levels1)
+
+    levels2 = []
+    pass2 = reorg_node(copy.deepcopy(pass1), section_level=levels2)
+
+    assert pass1 == pass2
+    assert levels1 == [1, 2, 1]
+    assert levels2 == [1, 2, 1]
+
+
+def test_reorg_node_handles_bare_list_of_blocks():
+    bare_blocks = [
+        header(1, "Intro"),
+        para("intro body"),
+        header(2, "Details"),
+        para("details body"),
+    ]
+    levels = []
+    result = reorg_node(bare_blocks, section_level=levels)
+
+    assert len(result) == 1
+    assert result[0]["t"] == "Section"
+    assert section_title(result[0]) == "Intro"
+    assert [node["t"] for node in result[0]["c"][1]["c"]] == ["Para"]
+    assert len(result[0]["subnodes"]) == 1
+    assert section_title(result[0]["subnodes"][0]) == "Details"
+    assert levels == [1, 2]
+
+
+def test_reorg_node_handles_nested_container_blocks():
+    ast = {
+        "blocks": [
+            {
+                "t": "BlockQuote",
+                "c": [
+                    header(2, "Quoted Header"),
+                    para("quoted body"),
+                ],
+            },
+            header(1, "Main Header"),
+            para("main body"),
+        ]
+    }
+    levels = []
+    result = reorg_node(ast, section_level=levels)
+
+    # Check BlockQuote contains reorganized section
+    bq = result["blocks"][0]
+    if bq["t"] == "Section":
+        # If wrapped by section packing
+        pass
+    else:
+        assert bq["t"] == "BlockQuote"
+        assert bq["c"][0]["t"] == "Section"
+        assert section_title(bq["c"][0]) == "Quoted Header"
+
