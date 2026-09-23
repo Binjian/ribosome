@@ -32,8 +32,8 @@ def test_summary_node_pair_recurses_into_subnodes():
             object(),
             "unused",
             Path('doc_ast.json'),
-            0,
-            0,
+            {"count": 0},
+            {"count": 0},
             leaf_min_len=9999,
             min_len=9999,
         )

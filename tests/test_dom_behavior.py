@@ -62,8 +62,13 @@ class DOMBehaviorTests(unittest.TestCase):
         dom = DOM(self.md_file, db_client=chromadb.EphemeralClient())
         object.__setattr__(dom, "ollama_client", FakeOllamaClient())
         original_min_len = type(dom).leaf_min_len
+        original_doc_min_len = type(dom).min_len
         self.addCleanup(setattr, type(dom), "leaf_min_len", original_min_len)
+        self.addCleanup(setattr, type(dom), "min_len", original_doc_min_len)
+        # _summarize_leaf_async thresholds on min_len when it is set, so both
+        # ClassVars must be lowered for short test texts to reach the fake LLM.
         type(dom).leaf_min_len = 10
+        type(dom).min_len = 10
         return dom
 
     def test_textualize_summarizes_text_and_images(self):
@@ -109,7 +114,7 @@ class DOMBehaviorTests(unittest.TestCase):
         ):
             asyncio.run(dom.textualize())
 
-        result = json.loads(dom.ast_json)
+        result = json.loads(dom.semantics_json)
         section = result["blocks"][0]
         content_nodes = section["c"][1]["c"]
         para = content_nodes[0]
@@ -121,6 +126,50 @@ class DOMBehaviorTests(unittest.TestCase):
         self.assertEqual(result["file_path"], str(self.md_file))
         self.assertIn("summary", result)
         self.assertTrue(result["summary"])
+        self.assertEqual(json.loads(dom.ast_json), ast)  # ast_json stays pre-summary
+
+    def test_textualize_rerun_is_idempotent(self):
+        dom = self.make_dom()
+        ast = {
+            "blocks": [
+                {
+                    "t": "Section",
+                    "c": [
+                        {"t": "Header", "c": [1, ["intro", [], []], [{"t": "Str", "c": "Intro"}]]},
+                        {
+                            "t": "Content",
+                            "c": [
+                                {
+                                    "t": "Para",
+                                    "c": [
+                                        {
+                                            "t": "Str",
+                                            "c": "This paragraph is intentionally long enough to trigger summarization.",
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        dom.ast_json = json.dumps(ast, ensure_ascii=False)
+        dom.ast_json_file = self.root / "doc_ast.json"
+        dom.ast_json_file.write_text(dom.ast_json, encoding="utf-8")
+
+        async def fake_text_summary(client, content, model="unused", role="user", lang="zh"):
+            return f"TXT<{content[:24]}>"
+
+        with patch("ribosome.core.dom.summary.get_summary_response_async", side_effect=fake_text_summary):
+            asyncio.run(dom.textualize())
+            first = dom.semantics_json
+            asyncio.run(dom.textualize())
+            second = dom.semantics_json
+
+        self.assertTrue(first)
+        self.assertEqual(first, second)
+        self.assertEqual(dom.ast_json, json.dumps(ast, ensure_ascii=False))
 
     def test_textualize_wraps_unexpected_errors_with_context(self):
         dom = self.make_dom()
