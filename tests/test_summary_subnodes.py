@@ -2,12 +2,10 @@ import asyncio
 import json
 from pathlib import Path
 
-import jsoncfg
-
-from ribosome.core.dom.summary import summary_node_pair_async
+from ribosome.core.dom.summary import summarize_node_async
 
 
-def test_summary_node_pair_recurses_into_subnodes():
+def test_summarize_node_async_recurses_into_subnodes():
     payload = {
         "t": "Section",
         "c": [],
@@ -22,11 +20,9 @@ def test_summary_node_pair_recurses_into_subnodes():
             }
         ],
     }
-    config = jsoncfg.loads_config(json.dumps(payload, ensure_ascii=False))
 
-    _, result = asyncio.run(
-        summary_node_pair_async(
-            config,
+    result = asyncio.run(
+        summarize_node_async(
             json.loads(json.dumps(payload)),
             Path('.'),
             object(),
