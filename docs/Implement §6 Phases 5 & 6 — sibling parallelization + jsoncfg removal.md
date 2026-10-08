@@ -1,300 +1,79 @@
-# Implement §6 Phases 5 & 6 — sibling parallelization + jsoncfg removal
-
-## Context
-
-`docs/dom-textualize-recursion-fix.md` §6 lists six phases. Phases 1–4 are already implemented and green
-(81 pytest tests, both notebooks pass `nbdev-test`). Two residual issues from §5 remain:
-
-- **§5.7 Sequential LLM awaits** — `summary_node_pair_async` awaits each child one at a time, so a document's
-  independent subtree summaries run serially. Now that §2.5's redundant-call explosion is fixed, wall-clock
-  time is dominated by serialized network round-trips.
-- **§5.3 jsoncfg retained solely for log line numbers** — the recursion walks *two* trees: the in-memory dict
-  AST and a disk-backed `jsoncfg` `ConfigNode` tree loaded from `ast_json_file`. The config tree is used for
-  nothing but `jsoncfg.node_location(...).line` in log messages, yet it is the source of the whole
-  memory-vs-disk drift fragility class (§5.4, fixed defensively in Phase 2) and forces `textualize` to require
-  a flushed AST file on disk.
-
-Outcome: sibling summaries run concurrently under a bounded fan-out, and the recursion becomes a single-tree
-walk that logs `node type + key path` instead of a source line number. Per the tradeoff recorded in §6, we
-lose line numbers in logs and gain elimination of the dual-tree failure mode by construction.
-
-**User decisions already taken:** implement in documented order (Phase 5, then Phase 6); rename
-`summary_node_pair_async` → `summarize_node_async`; bound the fan-out with a semaphore; keep `_config_error`
-and `with_async_context` exported from `core.dom.utils` untouched.
-
-**Workflow note (nbdev):** notebooks are the source of truth. `ribosome/core/dom/*.py` are generated *and
-git-ignored*. All edits go into `nbs/01.core.dom.summary.ipynb` and `nbs/01.core.dom.model.ipynb`, then
-`.venv/bin/nbdev-export`, then tests. `NotebookEdit` requires a fresh `Read` of the notebook immediately
-before every edit.
-
----
-
-## Phase 5 — Sibling parallelization (dual-tree walk still in place)
-
-File: `nbs/01.core.dom.summary.ipynb`
-
-### 5.1 Exported imports + bounded concurrency (cell `3cc79b0f`)
-
-`asyncio` is currently imported only in the `# | hide` cell `80b336b7`, so it is *not* in the generated
-`summary.py`. Add `import asyncio` and `from weakref import WeakKeyDictionary` to the exported import cell.
-
-Add a loop-keyed semaphore. Python is `>=3.12`, where `asyncio.Semaphore` binds to the running loop on first
-await and raises if reused from another loop — and the notebook test helper `run_async` (cell `5d7e0e77`)
-spawns a *fresh* loop in a thread per call. A plain module-level semaphore would therefore break the second
-test that uses it:
-
-```python
-_SUMMARY_CONCURRENCY = int(os.getenv("RIBOSOME_SUMMARY_CONCURRENCY", "8"))
-_summary_semaphores: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakKeyDictionary()
-
-def _get_summary_semaphore() -> asyncio.Semaphore:
-    """Per-event-loop semaphore bounding concurrent LLM calls."""
-    loop = asyncio.get_running_loop()
-    sem = _summary_semaphores.get(loop)
-    if sem is None:
-        sem = _summary_semaphores[loop] = asyncio.Semaphore(_SUMMARY_CONCURRENCY)
-    return sem
-```
-
-### 5.2 Guard the two network touchpoints (not the recursion)
-
-Acquire the semaphore only around actual LLM calls, never around a nested summarizer — that keeps the
-semaphore non-reentrant use impossible (no deadlock):
-
-- cell `8f89b3fc` `_summarize_leaf_async`: wrap just the `await get_summary_response_async(...)` call in
-  `async with _get_summary_semaphore():`. The short-text early return stays outside the guard.
-- cell `f7bcc663` `_summarize_image_node_async`: wrap the `await get_image_summary_async(...)` call.
-
-This also bounds `summary_node_async` (legacy) and `_finalize_summary_ast_async` (model) for free, since both
-route through `_summarize_leaf_async`.
-
-### 5.3 Gather the sibling recursion (cell `6f666125`)
-
-Three sites, all order-preserving (`asyncio.gather` returns results in argument order):
-
-1. **dict branch, list-valued key** — replace the `for citem, item in zip(citems, value)` loop:
-   ```python
-   results = await asyncio.gather(*(
-       summary_node_pair_async(
-           citem, item,
-           root_path=root_path, client=client, model=model, file_path=file_path,
-           table_count=table_count, section_count=section_count,
-           action=action, leaf_min_len=leaf_min_len, min_len=min_len, lang=lang,
-       )
-       for citem, item in zip(citems, value)
-   ))
-   children = [child for _, child in results]
-   node[key] = children
-   ```
-2. **list branch** — hoist the per-item dispatch into a local coroutine and gather it:
-   ```python
-   async def _child(citem, item):
-       if isinstance(item, (dict, list)):
-           _, child = await summary_node_pair_async(citem, item, ...)
-           return child
-       if isinstance(item, (str, int, float, bool)):
-           return str(item).strip()
-       return item
-
-   node = list(await asyncio.gather(*(_child(c, i) for c, i in zip(citems, node))))
-   ```
-3. cell `92951cb5` `_summarize_list_async` — gather the per-item coercion:
-   ```python
-   parts = list(await asyncio.gather(*(
-       _coerce_summary_async(item, leaf_min_len=leaf_min_len, min_len=min_len,
-                             client=client, model=model, lang=lang)
-       for item in root
-   )))
-   ```
-
-**Left sequential on purpose:** dict-valued keys (single child, nothing to parallelize) and scalar dict values
-(Header level, attrs — below `leaf_min_len`, so no LLM call and no benefit).
-
-**Shared-state safety:** `table_count` / `section_count` are mutated only inside the synchronous
-`_record_summary_progress` (cell `78f4c0ad`), which contains no `await` between read and write — atomic with
-respect to the event loop. Log *ordering* becomes nondeterministic; accepted per §5.7.
-
-**Error semantics:** default `gather` (no `return_exceptions`) propagates the first exception, which the
-`@with_async_context` wrapper on `summary_node_pair_async` re-wraps into the
-`"Error summarizing node ... backend exploded"` `ValueError` that
-`tests/test_dom_behavior.py::test_textualize_wraps_unexpected_errors_with_context` asserts. Loser siblings are
-not cancelled and may log "Task exception was never retrieved"; that is cosmetic and expected.
-
-### 5.4 New tests (append to hide cell `d01018ee`, or a new `# | hide` cell after it)
-
-- `test_summarize_siblings_run_concurrently`: fake `_summarize_leaf_async` that increments an in-flight
-  counter, `await asyncio.sleep(0)`, then decrements, tracking the max. Payload with ≥3 sibling subtrees;
-  assert `max_inflight > 1` and that the returned tree matches the same expected strings the existing
-  sequential test asserts (order preservation).
-- `test_summary_semaphore_caps_llm_fanout`: patch `get_summary_response_async` with a concurrency-tracking
-  fake, `asyncio.gather` 20 `_summarize_leaf_async` calls over threshold, assert `max_inflight <=
-  _SUMMARY_CONCURRENCY`.
-
-### Phase 5 verification
-1. `.venv/bin/nbdev-export`; confirm `ribosome/core/dom/summary.py` now contains `import asyncio`,
-   `_get_summary_semaphore`, and three `asyncio.gather` sites.
-2. `.venv/bin/pytest tests/` — expect 81 passing, no regressions.
-3. `.venv/bin/nbdev-test --path nbs --file_glob "01.core.dom.summary.ipynb"` → Success.
-4. `.venv/bin/nbdev-test --path nbs --file_glob "01.core.dom.model.ipynb"` → Success (`textualize` path).
-
----
-
-## Phase 6 — jsoncfg removal, single-tree walk, rename
-
-Files: `nbs/01.core.dom.summary.ipynb`, `nbs/01.core.dom.model.ipynb`, `tests/test_summary_subnodes.py`,
-`docs/dom-textualize-recursion-fix.md`
-
-### 6.1 New error helper replacing `_config_error` in summary (new exported cell near `57194bc8`)
-
-Substring-compatible with every existing `contains=` assertion:
-
-```python
-def _node_error(message: str, node_type: str, path: str, node=None) -> ValueError:
-    details = [message, f"Node type: {node_type}", f"At path: {path}"]
-    if node is not None:
-        details.insert(1, f"Node: {node}")
-    return ValueError("\n".join(details))
-```
-
-Preserved messages: `Node does not have a 't' key`, `Invalid image caption format`,
-`Invalid image node structure`, `Invalid image link: ...`, `Unsupported node type: ...`,
-`Error summarizing node`, `Error summarizing image node`.
-
-### 6.2 Delete `_config_node_line` (cell `57194bc8`) and its test (cell `ba9bf318`)
-
-This is the one deviation from "keep it": `_config_node_line` lives in the **summary** notebook, not utils,
-and has zero consumers outside the two log lines being rewritten (verified by grep across `nbs/`, `tests/`,
-`docs/`). Keeping it would keep the `jsoncfg` import in `summary.py`, defeating the phase's stated goal.
-`_config_error` and `with_async_context` in `core.dom.utils` stay exactly as they are.
-
-### 6.3 Imports (cell `3cc79b0f`)
-
-Drop `import jsoncfg`, the `ConfigJSONArray / ConfigJSONObject / ConfigJSONScalar / ConfigNode` imports, and
-`_config_error` from the `core.dom.utils` import; keep `with_async_context`. In hide cell `5d7e0e77`, delete
-the now-unused `make_config` helper.
-
-### 6.4 `_resolve_image_link` (cell `117061a4`) and `_summarize_image_node_async` (cell `f7bcc663`)
-
-- `_resolve_image_link(node, root_path, node_type, path)` — raise `_node_error(...)` instead of `_config_error`.
-- `_summarize_image_node_async(node, root_path, client, model, node_type, path)`; decorator becomes
-  `@with_async_context(lambda node, *a, **k: str(_node_error("Error summarizing image node", node.get("t", "?"), path_arg, node)))`
-  — concretely: `@with_async_context(lambda node, root_path, client, model, node_type, path: str(_node_error("Error summarizing image node", node_type, path, node)))`.
-- Log line: `print(f"Summarize image: {image_link} at {path}")`.
-- Update test cell `9e3fab94` (drops the leading `None` config arg, adds `node_type`/`path`).
-
-### 6.5 `_record_summary_progress` (cell `78f4c0ad`) + test (cell `38ed13a0`)
-
-`config_node: ConfigNode` → `path: str`; prints `... Summarize table: N at {path}` /
-`... Summarize section: N at {path}`. Test builds a path string instead of `make_config(...)`.
-
-### 6.6 The recursion: `summary_node_pair_async` → `summarize_node_async` (cell `6f666125`)
-
-New signature (returns the node directly, not a `(config_node, node)` tuple):
-
-```python
-@with_async_context(lambda node, path, *a, **k: str(_node_error("Error summarizing node", type(node).__name__, path, node)))
-async def summarize_node_async(
-    node: dict | list | str | int | float | bool | None,
-    root_path: Path,
-    client: AsyncClient | AsyncOpenAI,
-    model: str,
-    file_path: Path,
-    table_count: dict,
-    section_count: dict,
-    path: str = "$",
-    action: Optional[Callable] = None,
-    leaf_min_len: int = 100,
-    min_len: Optional[int] = None,
-    lang: str = "zh",
-) -> dict | list | str | int | float | bool | None:
-```
-
-Body changes:
-- Delete every `isinstance(config_node, ConfigJSON*)` guard and the `cvalue` / `citems` zip machinery.
-- Child paths: dict-valued key → `f"{path}.{key}"`; list items → `f"{path}.{key}[{i}]"` (and `f"{path}[{i}]"`
-  in the list branch). Pass `path=child_path` into each recursive `summarize_node_async` call inside the
-  Phase-5 gathers.
-- Unsupported-shape raises become `_node_error(f"Unsupported node type: {type(node)}", type(node).__name__, path, node)`.
-- `return node`.
-
-**Caution:** the legacy `summary_node_async` (cell `acbcc743`) stays and is now a near-homonym of
-`summarize_node_async`. Leave it untouched (it backs `summary_node_main`); flag removal of the legacy pair as
-a separate follow-up rather than folding it into this change.
-
-### 6.7 Recursion tests (cell `d01018ee`)
-
-- `test_summary_node_pair_async_summarizes_dict_list_and_scalar_paths` → rename to
-  `test_summarize_node_async_summarizes_dict_list_and_scalar_paths`, drop the `config` argument, expect a bare
-  node (not a tuple), and keep the same expected strings — this is the regression net proving the single-tree
-  walk is output-identical. `fake_progress` signature gains `path`.
-- **Delete** `test_summary_node_pair_async_tolerates_dict_child_missing_from_config` — the Phase-2 failure mode
-  (dict key present in memory, absent from `ast_json_file`) cannot exist once there is only one tree.
-- `test_summary_node_pair_async_default_leaf_min_len_avoids_llm_calls` → keep as
-  `test_summarize_node_async_default_leaf_min_len_avoids_llm_calls`, dropping the `make_config(...)['v']`
-  first argument.
-- Phase-5 concurrency tests: update to the new name/signature.
-
-### 6.8 Model notebook (`nbs/01.core.dom.model.ipynb`)
-
-Duplicate cell ids exist in this notebook (`8ba2abd1` at indices 32 *and* 33; `97bcb2cb` at 43 and 45), so
-address cells by index (`cell-33`) and re-`Read` after every edit.
-
-- cell 8 (`2b3fc27e`, exported imports): `summary_node_pair_async` → `summarize_node_async`; drop
-  `import jsoncfg` and `from jsoncfg.config_classes import ConfigJSONObject`.
-- cell 9 (`337d028a`, hide): drop the `jsoncfg = __import__("jsoncfg")` / `ConfigJSONObject = ...` lines.
-- cell 33 (`8ba2abd1`, `textualize`): delete `config_ast = jsoncfg.load_config(str(self.ast_json_file))`, the
-  `isinstance(config_ast, ConfigJSONObject)` check, and `config_blocks`; call
-  `blocks = await summarize_node_async(node=blocks, root_path=..., client=..., model=..., file_path=..., table_count=table_counter, section_count=section_counter, path="$.blocks", action=action, leaf_min_len=..., min_len=..., lang=...)`.
-  `textualize` no longer touches the filesystem — the `ast_json_file` precondition disappears.
-- cell 34 (`82250ea8`): fake becomes `async def fake_summarize(node, root_path, client, model, file_path, table_count, section_count, path="$", action=None, leaf_min_len=100, min_len=None, lang="zh")` returning the
-  bare list; keep the `dict(table_count)` snapshot assertions and the `dom.ast_json` unchanged assertion.
-- cell 37 (`6fe67ad6`, `summary_nodewline_main`): same jsoncfg removal + rename; drop the
-  `assert self.ast_json_file` line.
-- cell 38 (`bebc4e28`): fake signature update, bare return.
-
-### 6.9 `tests/test_summary_subnodes.py`
-
-Drop `import jsoncfg` and the `config = jsoncfg.loads_config(...)` construction; call
-`summarize_node_async(payload, Path('.'), object(), "unused", Path('doc_ast.json'), {"count": 0}, {"count": 0}, leaf_min_len=9999, min_len=9999)`
-and use the returned node directly (no `_,` unpack). Assertions about `subnodes` recursion are unchanged.
-
-`tests/test_dom_behavior.py` needs no edits — it patches `get_summary_response_async` /
-`get_image_summary_async`, which keep their signatures. `tests/validation_script*.py` are not collected by
-pytest (filename filter) and only import `with_async_context`, which `summary.py` still re-exports.
-
-`nbs/01.core.dom.tree.ipynb` keeps its own jsoncfg usage and is imported by nothing — out of scope, so
-`jsoncfg` stays in `pyproject.toml` / `requirements.txt`.
-
-### 6.10 Doc update
-
-In `docs/dom-textualize-recursion-fix.md`: mark §5.3 and §5.7 resolved, note the rename
-(`summary_node_pair_async` → `summarize_node_async`), the `RIBOSOME_SUMMARY_CONCURRENCY` bound, the
-line-number → key-path logging change, and refresh §4's test matrix to point at the renamed/new tests.
-
-### Phase 6 verification
-1. `.venv/bin/nbdev-export`, then:
-   `grep -n "jsoncfg\|config_node\|_config_node_line" ribosome/core/dom/summary.py ribosome/core/dom/model.py` → no hits.
-   `grep -rn "summary_node_pair_async" nbs tests` → no hits.
-2. `.venv/bin/pytest tests/` — green (one Phase-2 test intentionally removed, two Phase-5 tests added).
-3. `.venv/bin/nbdev-test --path nbs --file_glob "01.core.dom.summary.ipynb"` and `"01.core.dom.model.ipynb"` → Success.
-4. Output equivalence: the renamed `test_summarize_node_async_summarizes_dict_list_and_scalar_paths` asserts
-   the identical expected strings as before the rewrite, and
-   `tests/test_dom_behavior.py::test_textualize_summarizes_text_and_images` +
-   `::test_textualize_rerun_is_idempotent` still pass unchanged.
-5. Optional manual smoke (needs a live Ollama/DashScope): run `textualize()` on `assets/SN024002/SN024002.md`
-   and confirm the log now shows `... Summarize section: N at $.blocks[i].c[j]` and wall-clock time drops.
-
----
-
-## Critical files
-
-| File | Role |
-| --- | --- |
-| `nbs/01.core.dom.summary.ipynb` | Phases 5 & 6 source of truth: cells `3cc79b0f`, `8f89b3fc`, `92951cb5`, `117061a4`, `57194bc8`/`ba9bf318`, `f7bcc663`/`9e3fab94`, `78f4c0ad`/`38ed13a0`, `6f666125`/`d01018ee`, `5d7e0e77` |
-| `nbs/01.core.dom.model.ipynb` | Phase 6: cells 8, 9, 33, 34, 37, 38 (index-addressed; duplicate ids present) |
-| `tests/test_summary_subnodes.py` | Phase 6 caller update |
-| `ribosome/core/dom/utils.py` | Read-only reference: `with_async_context` (110–156) passes the wrapped fn's args to the context builder — unchanged |
-| `docs/dom-textualize-recursion-fix.md` | §5.3/§5.7 status + §4 matrix update |
-
-Reused rather than rewritten: `with_async_context`, `_summarize_leaf_async`, `_summarize_list_async`,
-`_coerce_summary_async`, `_record_summary_progress`, `_finalize_summary_ast_async`.
+# Historical implementation record: §6 Phases 5 & 6 — sibling parallelization and jsoncfg removal
+
+## Status and scope
+
+Reviewed 2026-10-08. Phase 5 landed in `10a1844` and Phase 6 in `e66e579`. The changes described here are present in notebook source and generated modules; this review has not rerun the suites. Historical test counts and performance expectations are not current verification results.
+
+The authoritative open implementation work is §7 of [dom-textualize-recursion-fix.md](dom-textualize-recursion-fix.md). This document records the landed architecture and the acceptance gaps relevant to these two phases. Do not reintroduce the dual-tree worker or implement the superseded code snippets from the original version of this plan.
+
+This is an nbdev project: edit `nbs/01.core.dom.summary.ipynb` and `nbs/01.core.dom.model.ipynb`, then export. The generated `ribosome/core/dom/summary.py` and `model.py` are currently ignored by Git, so a clean Git status alone does not prove generated code matches the notebooks. Locate notebook cells by function/test name and verify their identity before editing; historical cell positions and editor-specific instructions are not reliable implementation targets.
+
+## Phase 5 — Sibling parallelization — complete with limits
+
+Three sites gather sibling operations: list-valued dict children in `summarize_node_async`, the worker's list branch, and per-item coercion in `_summarize_list_async`. Result lists retain input order. Dict-valued keys and scalar dict fields are still processed sequentially; long scalar fields can issue requests, so their sequential treatment is not justified by a guarantee that they fall below the threshold.
+
+`_SUMMARY_CONCURRENCY` is read from `RIBOSOME_SUMMARY_CONCURRENCY` at import, defaulting to `8`. `_get_summary_semaphore` stores a semaphore for each running event loop in a `WeakKeyDictionary`. This avoids sharing a loop-bound semaphore between successive notebook test loops when acquisition must wait. The bound is per loop, shared by documents and clients on that loop; it is not a process-wide limit across loops or threads.
+
+Request permits surround `get_summary_response_async` in `_summarize_leaf_async` and `get_image_summary_async` in `_summarize_image_node_async`. Parent recursion does not acquire permits while waiting for descendants, avoiding that recursive deadlock pattern. Document finalization and legacy text calls routed through `_summarize_leaf_async` share the budget. Legacy image calls through `get_image_summary_response_async` and the exported `get_leaf_summary_async` / `get_list_summary_async` pair bypass it.
+
+The semaphore bounds active requests, not scheduled tasks. Every gather eagerly schedules its inputs, so wide/deep documents can still allocate many tasks. Malformed environment values currently fail integer parsing at import; negative values fail semaphore creation, and zero can block requests indefinitely. Configuration validation and bounded task scheduling remain open under §7.2.
+
+`_record_summary_progress` is synchronous, with no suspension between reading and incrementing a counter. Its updates are safe relative to other tasks on the same loop; that does not establish thread safety, per-run counter semantics, or atomic publication of DOM state. Completion log order can vary.
+
+### Failure behavior
+
+Gathered siblings can continue after a child failure is propagated. Requests and subtree mutations can therefore outlive the failed traversal. This is a correctness concern requiring cancellation and awaited cleanup, not a cosmetic logging issue. An unretrieved-task warning is not an established consequence of these gather sites.
+
+`with_async_context` passes existing `ValueError` instances through and wraps other `Exception` instances with context. Cancellation must continue to propagate as cancellation. Order-preserving results do not guarantee equal live-model output, callback visitation order, or identical behavior for callbacks that depend on shared mutable state.
+
+### Existing regression coverage
+
+- `test_summarize_node_async_gathers_siblings_concurrently` observes overlapping mocked leaf work and checks sibling result order.
+- `test_summarize_leaf_async_caps_llm_fanout_with_semaphore` observes the text-request cap and result count.
+- `test_textualize_wraps_unexpected_errors_with_context` checks wrapping of an unexpected backend failure; it does not assert that sibling tasks have stopped.
+
+The first two tests currently use short sleeps to induce overlap. The cap test also requires `max_inflight > 1`, so it is incompatible with the valid intended configuration of a single request permit. Tests should set their concurrency explicitly or accept one permit while separately verifying overlap with a limit greater than one.
+
+## Phase 6 — Single-tree traversal — complete
+
+`summary_node_pair_async` was renamed to `summarize_node_async`. The worker takes the in-memory node and returns the summarized node directly, rather than returning a `(config_node, node)` tuple. It carries a diagnostic `path`, defaulting to `$`, with `textualize` starting at `$.blocks`.
+
+`_node_error(message, path, node=None)` derives node type from the supplied node and includes the key path. The summary module no longer imports `jsoncfg`, walks `ConfigNode` objects, or uses `_config_node_line`. `_config_error` and `with_async_context` remain exported from utils without changes. The old sample decorator that treated the second positional argument as `path` was incorrect: that argument is `root_path`. New context builders must derive arguments from the actual call signature, including positional and keyword call forms.
+
+`textualize` reads `self.ast_json` directly, with no requirement for an AST file on disk. It still writes `semantics_json_file` during finalization; removal of the disk-backed input does not make the method free of filesystem operations. The legacy `summary_nodewline_main` also uses the new worker, but still asserts `ast_json_file` and passes it as the logging file path. Removing that legacy requirement is separate work.
+
+`jsoncfg` remains a project dependency: other modules, including DOM utils and tree, still use it. Phase 6 removed the parallel config tree from this traversal, not the dependency from the whole project. The legacy `summary_node_async` also remains separate from the new near-homonymous worker.
+
+### Existing regression coverage
+
+- `test_summarize_node_async_summarizes_dict_list_and_scalar_paths` retains expected output strings for a deterministic fixture.
+- `test_summarize_node_async_reports_key_path_in_errors` asserts the failing key path; it does not separately assert every node-type/context field.
+- `test_summarize_node_async_threads_action_through_every_depth` covers argument forwarding on its particular dict/list fixture. Scalar list items and scalar dict values can still bypass callbacks on other branches; §7.1 defines the broader contract work.
+- `tests/test_summary_subnodes.py` verifies recursion through `subnodes` using the single-tree API.
+- `test_textualize_rerun_is_idempotent` checks equal mocked serialization and input preservation; it does not guarantee counter reset or live-provider determinism.
+
+The missing-config regression was deleted because there is no second tree to align. Replacement tests should exercise in-memory traversal and path diagnostics, rather than reconstructing an obsolete config tree.
+
+## Follow-up acceptance criteria
+
+Implement these through §7 of the authoritative plan, keeping both documents' status consistent:
+
+1. Validate concurrency as a positive integer before work begins. Test missing, malformed, zero, negative, one, and greater-than-one values. Isolate configuration tests so import-time settings do not leak into other tests.
+2. Prove the combined text/image request budget, two documents sharing one loop, and fresh sequential event loops. Use events/barriers with timeouts to force contention and out-of-order completion while asserting ordered results.
+3. Introduce ordered bounded scheduling with a documented task budget. Measure total task allocation on both wide and deep trees; a per-level window alone does not establish a global bound. Keep parent recursion outside request permits.
+4. On child failure or caller cancellation, cancel owned pending tasks and await cleanup before returning. Assert no further requests, mutations, or progress updates occur after return and that a subsequent run can use all permits. Verify cleanup at all three former gather sites, including nested failures.
+5. Preserve originating node/path and exception causes for failures raised through positional and keyword API calls. Add node-type assertions, image errors, unsupported shapes, and cancellation propagation. Define escaping for unusual dict keys if key paths must uniquely locate arbitrary input.
+6. Exercise `textualize` with `ast_json_file=None` and with a deliberately stale AST artifact; neither should affect traversal. Assert the input AST stays unchanged and configured semantic output still writes successfully. Treat failure publication/counter semantics as §7.3 work.
+7. Establish callback coverage and permitted replacements before claiming traversal equivalence. Compare coverage and deterministic output, not concurrent callback completion order. Test nested lists, dict children, `subnodes`, and image/ignored-node boundaries.
+8. Measure request counts and elapsed time separately. A semaphore plus gather proves neither elimination of redundant summaries nor a guaranteed speedup. Live comparisons require the same document, provider/model, thresholds, and concurrency settings.
+
+## Verification workflow
+
+1. Make notebook source changes and export with `.venv/bin/nbdev-export` before testing imported modules. Inspect the complete diff and preserve unrelated notebook/test changes; export can process other notebooks too.
+2. Run focused tests for the change, then `.venv/bin/pytest tests/`. Record the command, collected count, failures, and skips rather than expecting a historical count.
+3. Run `.venv/bin/nbdev-test --path nbs/01.core.dom.summary.ipynb` and `.venv/bin/nbdev-test --path nbs/01.core.dom.model.ipynb`. Confirm live/example cells retain `# | notest`; `# | hide` does not skip execution. Avoid `--save` so verification does not rewrite outputs.
+4. Check module source with `rg -n 'jsoncfg|config_node|_config_node_line|summary_node_pair_async' ribosome/core/dom/summary.py ribosome/core/dom/model.py`. No hits are expected (rg exit status 1 means no matches). Check the two affected notebooks and collected callers separately. Historical docs and self-contained `tests/validation_script*.py` fakes intentionally retain the old name, so a repository-wide zero-match requirement is wrong.
+5. Inspect generated helper signatures and compare them with notebook export cells even if Git reports no generated diff. Do not count grep/rg absence alone as proof of correct runtime behavior.
+6. Keep any live-provider smoke test opt-in, with a scratch output location. Record provider/model, input/settings, requests, maximum active requests, elapsed time, artifact validity, and diagnostic paths. Do not require exact live-output equality or an unmeasured wall-clock improvement.
+
+Relevant sources are the two notebooks, their generated summary/model modules, `tests/test_summary_subnodes.py`, and textualize tests in `tests/test_dom_behavior.py`. Utils is a reference for exception behavior; edits there require an explicit consumer audit rather than incidental changes to this historical phase record.
