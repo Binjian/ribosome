@@ -48,7 +48,7 @@ The legacy exported `summary_node_async` still has `leaf_min_len=0`. It is a sep
 
 Current regression coverage:
 
-- `test_finalize_summary_ast_async_updates_summary_and_cache` verifies the returned summary, `semantics_json`, and that `ast_json` stays `None` in its fixture. It does not read back the semantics artifact; disk persistence needs a separate assertion.
+- `test_finalize_summary_ast_async_updates_summary_and_cache` now seeds a populated input AST and artifact, verifies both remain unchanged, and reads back UTF-8 semantics bytes alongside the returned summary.
 - `test_textualize_updates_blocks_and_document_summary` reads the result from `semantics_json`.
 - `test_textualize_rerun_is_idempotent` verifies equal serialized output across two runs with a deterministic mock while preserving `ast_json`.
 - `test_embed_doc_embeds_semantics_and_writes_artifact` verifies forwarding of a manually seeded `semantics_json` to a mocked embedding function and persistence of its returned artifact. It does not execute `textualize` followed by real embedding traversal in one test.
@@ -77,13 +77,17 @@ For a documentation audit, do not claim the suites pass unless they were run in 
 
 The completed Phase 1–4 changes touched the two source notebooks, `tests/test_summary_subnodes.py`, `tests/test_dom_behavior.py`, and their generated summary/model modules. New work should follow the file list and acceptance criteria of §7 in the authoritative plan rather than the historical cell numbers that were previously recorded here.
 
-## Acceptance gaps to close in the current plan
+## Acceptance coverage implemented in this update
 
-These are verification targets for subsequent work, not instructions to repeat completed phases:
+The historical phases remain complete. Their additional acceptance checks now live in the model notebook and `tests/test_textualize_lifecycle.py`:
 
-- Configure a semantics artifact path, run finalization, and assert its UTF-8 bytes match `semantics_json`. Seed a populated `ast_json` and an AST artifact first; both must remain byte-identical. Cover an empty `blocks` list separately, asserting an empty document summary and no summary request.
-- Exercise `textualize` followed by `embed_doc` in one offline test using deterministic provider fakes and a scratch collection. Assert the embedding stage receives the newly produced semantics, not a manually seeded fixture. Use a fresh DOM instance or empty `embed_json`, since the existing embedding cache guard otherwise skips processing.
-- Capture root-worker arguments in the textualize mock: assert the chosen action, `leaf_min_len`, `min_len`, `lang`, key path, and the shared counter objects. Accepting these parameters in a fake's signature alone does not prove their values were forwarded correctly.
-- Extend rerun coverage to input artifact preservation, successful semantics readback, and the explicitly chosen counter semantics. Inject final-summary and file-write failures as part of §7.3; the current repeatability test does not establish transactional publication.
+- The notebook finalization test and `test_textualize_rerun_preserves_artifacts_and_current_counters` verify semantic UTF-8 bytes and unchanged populated AST memory/artifact. `test_textualize_empty_blocks_writes_empty_summary_without_request` covers an empty document and asserts zero provider requests.
+- `test_textualize_then_embed_doc_uses_new_semantics` exercises both lifecycle stages with deterministic provider fakes and a real ephemeral Chroma collection. It asserts the request text comes from the newly produced semantics, stored row count/content, and embedding artifact bytes, starting with an empty embedding cache.
+- Root-worker arguments are asserted in the notebook and `test_textualize_forwards_settings_and_shared_counters`, including nondefault thresholds/language, action identity, path, and mutation of the passed counters.
+- Rerun coverage includes input artifact preservation, semantic readback, and the existing cumulative counter semantics. Final-summary/file-write failure publication remains part of §7.3; these repeatability checks do not establish transactional publication.
 
 Keep these acceptance criteria synchronized with §7 of the authoritative document when implementing them. Report skipped tests and environmental failures separately from passing checks.
+
+The rerun regression explicitly records the existing cumulative counter behavior (one completed Section per run increments the instance count again). Changing to per-run counters or introducing atomic failure publication remains §7.3 work and was not folded into these verification changes. The lifecycle integration uses real embedding traversal with fake provider responses and an ephemeral Chroma collection; no provider credentials or requests are required.
+
+Verification in this update: the focused pytest selection passed (8 tests, 1 deselected), and both summary/model notebooks passed `nbdev-test`. The model notebook was exported by filename, preserving the unrelated embedding notebook edits. Sandboxed full-suite runs stalled in the unrelated subprocess-fallback test (the bounded retry exited with timeout status 124). Rerunning `timeout 60 .venv/bin/pytest tests/ -q --tb=short` outside the sandbox completed: 81 passed, 10 failed, all failures in existing embedding tests against the old generated embedding implementation. Those workspace changes are outside this Phase 1–4 update.

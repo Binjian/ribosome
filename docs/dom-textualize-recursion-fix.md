@@ -145,8 +145,9 @@ self.section_count = section_counter["count"]
 Tests live inline in the `# | hide` cells of the two notebooks (`nbdev-test`), plus `tests/` for the integration-level behavior (`pytest`).
 
 1. **Lifecycle Consistency**:
-   - `test_finalize_summary_ast_async_updates_summary_and_cache` asserts `semantics_json` is populated and `ast_json` stays `None` in that fixture; the integration rerun test separately checks preservation of a populated input AST.
-   - `test_embed_doc_embeds_semantics_and_writes_artifact` verifies `embed_doc()` consumes the `textualize` output.
+   - `test_finalize_summary_ast_async_updates_summary_and_cache` asserts semantic output, exact artifact bytes, and preservation of a populated input AST and its file.
+   - `test_embed_doc_embeds_semantics_and_writes_artifact` verifies forwarding of seeded semantics to a mocked embedder and persistence of its output; the lifecycle integration below verifies actual textualize output.
+   - `tests/test_textualize_lifecycle.py` adds an actual offline `textualize()` → `embed_doc()` integration using fake provider responses and an ephemeral Chroma collection, plus empty-document, nondefault-setting forwarding, and rerun artifact/cumulative-counter checks. Atomic failure publication and per-run counters remain open in §7.3.
 2. **Action Propagation**:
    - `test_summarize_node_async_threads_action_through_every_depth` passes an `action` that records every visited node and asserts the exact traversal order across section → paragraph → list-item scalar → nested-dict, covering recursive argument forwarding on that fixture. It does not cover scalars or nested lists handled by the list branch, nor scalar dict values; see §7.1.
    - `textualize` resolves `action` through `_require_action` and threads it into the root call; `summarize_node_async` re-passes `action=action` at all three recursive sites.
