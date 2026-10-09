@@ -10,6 +10,8 @@ The original audit uncovered critical flaws in **state management**, **dual-tree
 
 > **Review status (2026-10-08)**: Phases 1–6 are present in the current notebooks and generated modules. Sections 2–3 and 5–6 retain implementation history; they are not instructions to reapply those changes. The next implementation work is §7. Historical fixes do not establish complete action coverage, bounded task allocation, transactional publication, or repeatable live-model output. This review changes documentation only.
 
+> **Implementation update:** Phase 1–4 artifact/lifecycle acceptance checks and Phase 5–6 concurrency follow-ups are implemented. The summary worker now has a per-traversal active-task budget, validated request/task settings, awaited failure/cancellation cleanup, signature-bound error context, escaped paths, and a defined callback/replacement scope. Legacy request paths share the limiter and images receive the chosen language. §7.2 is completed; the remaining §7.1 threshold/content-preservation work, §7.3 transactional DOM publication, and §7.4 request reduction remain open.
+
 ---
 
 ## 2. Comprehensive Problem Analysis
@@ -149,8 +151,8 @@ Tests live inline in the `# | hide` cells of the two notebooks (`nbdev-test`), p
    - `test_embed_doc_embeds_semantics_and_writes_artifact` verifies forwarding of seeded semantics to a mocked embedder and persistence of its output; the lifecycle integration below verifies actual textualize output.
    - `tests/test_textualize_lifecycle.py` adds an actual offline `textualize()` → `embed_doc()` integration using fake provider responses and an ephemeral Chroma collection, plus empty-document, nondefault-setting forwarding, and rerun artifact/cumulative-counter checks. Atomic failure publication and per-run counters remain open in §7.3.
 2. **Action Propagation**:
-   - `test_summarize_node_async_threads_action_through_every_depth` passes an `action` that records every visited node and asserts the exact traversal order across section → paragraph → list-item scalar → nested-dict, covering recursive argument forwarding on that fixture. It does not cover scalars or nested lists handled by the list branch, nor scalar dict values; see §7.1.
-   - `textualize` resolves `action` through `_require_action` and threads it into the root call; `summarize_node_async` re-passes `action=action` at all three recursive sites.
+   - `test_summarize_node_async_threads_action_through_every_depth` checks its deterministic fixture. `test_callback_scope_replacements_and_boundaries` covers nested lists/scalars, dict fields, `subnodes`, empty containers, images/ignored nodes, and category-preserving replacements without requiring a global concurrent callback order.
+   - `textualize` resolves `action` through `_require_action` and threads it into the root worker; callbacks exclude `t`/`s` and image/ignored-node internals.
 3. **Counter Accumulation** (for §3.4):
    - `test_record_summary_progress_prints_expected_labels` (dict counters, key-path logging), plus `test_textualize_updates_blocks_and_document_summary` snapshots the cumulative counters written back onto the document.
 4. **Key-Misalignment Safety** (for §3.3): **superseded by Phase 6.** With `jsoncfg` gone there is only one tree, so the memory-vs-disk mismatch cannot be constructed. The Phase-2 regression test (`test_summary_node_pair_async_tolerates_dict_child_missing_from_config`) was deleted along with the failure mode it defended against. The structural replacement is `test_summarize_node_async_reports_key_path_in_errors`, which asserts errors name the failing node type and key path.
@@ -289,6 +291,8 @@ The following findings come from the current `summarize_node_async`, its helpers
 
 ### 7.1. Define and enforce traversal contracts — priority 1
 
+**Partial completion:** callback scope/category validation and image language forwarding are implemented and test-covered. The first two historical gaps below are resolved; separating leaf/aggregate thresholds and preserving non-summary payloads by default remain open. Existing automatic scalar coercion was preserved to retain deterministic summary expectations.
+
 **Observed gaps**:
 - `action` runs at entry to `summarize_node_async`, but the list branch directly returns scalar items without invoking it. List-valued dict children invoke the worker on each item without invoking it on the list itself. Scalar dict values also bypass it. Image internals and ignored node types are intentionally short-circuited. The existing action test exercises only one successful route.
 - `_summarize_image_node_async` hardcodes `lang='zh'` even when `textualize` passes another language.
@@ -303,7 +307,9 @@ The following findings come from the current `summarize_node_async`, its helpers
 
 **Acceptance tests**: callback counts and replacements on nested lists, scalar dict fields, booleans, `None`, empty containers, dict children, and `subnodes`; compare coverage rather than concurrent completion order. Verify image and text language forwarding. Test thresholds at 99/100/101 and 299/300/301 with independent settings and an empty input. Compare all non-summary fields against the input with an identity action, using long text and a deterministic fake responder. Retain invalid-node key-path assertions.
 
-### 7.2. Bound work and finish sibling cleanup before returning — priority 1
+### 7.2. Bound work and finish sibling cleanup before returning — implemented
+
+**Current implementation:** `RIBOSOME_SUMMARY_TASK_LIMIT` defaults to 8 and caps active traversal-owned workers across nested maps; a full budget makes nested work run inline instead of waiting for parent slots. Result storage remains O(n) and recursion still consumes call frames. `RIBOSOME_SUMMARY_CONCURRENCY` defaults to 8 and bounds requests per loop across documents/clients, including legacy network calls. Both settings must be positive integers. All three sibling sites use `_ordered_summary_map`, whose exception/cancellation path cancels and awaits owned workers. A local context decorator binds positional/keyword arguments and preserves the originating path/type/cause. Shared utils remain unchanged. `tests/test_summary_concurrency.py` verifies the following historical criteria, including isolated imports, one-permit operation, mixed text/image/legacy requests, fresh loops, wide/deep task bounds, nested cleanup, and recovery.
 
 **Observed gaps**: every gather site eagerly schedules its entire input. The semaphore bounds active requests, not allocated tasks or retained subtrees. `RIBOSOME_SUMMARY_CONCURRENCY` is parsed at import; malformed values fail module import, negative values fail semaphore creation, and zero can block requests indefinitely. A failed gather does not establish that sibling operations have stopped.
 
