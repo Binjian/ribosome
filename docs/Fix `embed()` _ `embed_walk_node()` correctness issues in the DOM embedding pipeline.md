@@ -4,7 +4,7 @@
 
 Review of `embed()` (ribosome/core/dom/embedding.py:120-189, generated from `nbs/01.core.dom.embedding.ipynb` cell 13) and its recursive helpers `embed_node()` / `embed_walk_node()` found real correctness bugs in how semantics-JSON nodes are walked, hashed, embedded, and stored into the Chroma collection. The walk does cover every dict/list value of the pandoc-style AST, but:
 
-> **Review status (2026-10-08):** the working tree contains a partial notebook/test implementation of the earlier version of this plan, while the generated `embedding.py` still reflects the old code. Do not export or treat that draft as complete until the ID, action-ordering, stale-row, and failure-handling corrections below are implemented. This review changes the plan only.
+> **Implementation status (2026-10-09):** implemented in the notebook source and exported. The partial draft has been completed with framed structural IDs, a pre-embedding action pass, response-model metadata, stale-row cleanup, and propagated failures. See the verification record below. The bug descriptions describe the original implementation.
 
 **Verified bugs (all confirmed against the code):**
 
@@ -119,3 +119,55 @@ Give the internal walker explicit immutable context: `doc_id`, `structural_path`
 4. Chroma integration test: use an ephemeral/scratch collection, not only the fake. Embed unchanged input twice, then changed input once. Verify exact row IDs/counts, duplicate siblings, stale-row deletion, scalar metadata, and queryability. The expected count is the number of non-empty embeddable nodes plus one only when the root summary is non-empty.
 5. Failure integration: force an embedding/upsert failure through `DOMClass.embed_doc` and verify no new `_embed.json` is published. Retry successfully and confirm the collection converges without stale rows.
 6. Optional live sanity: run a small asset against the configured provider and a scratch database. Record provider/model, source path, row counts, duration, and artifact validity; do not use exact vector values as assertions.
+
+
+## Implementation and verification record (2026-10-09)
+
+- The notebook owns `_semantic_payload`, canonicalization, path escaping, framed
+  node IDs, action validation, persistence, and the immutable-context walk.
+  Root IDs retain the original canonicalization for ordinary metadata-free input.
+  Recognized old `doc_id` artifacts and new `document_id` artifacts strip their
+  pipeline annotations; unrelated business `i`/`m` fields remain semantic content.
+- Actions visit every dict/list container once, including list-valued properties,
+  before any embedding request or hash. Scalar fields are unchanged. Invalid
+  container replacements fail before collection access or persistence.
+- Public helper signatures remain compatible. `cur_object_path` remains an
+  ancestor-ID seed: its first item supplies document identity, additional items
+  are framed into a compatibility namespace, and the sequence is never mutated.
+  Standalone helpers default to structural path `$`; pipeline helpers carry the
+  actual dict-key/list-index path. Missing optional provenance is omitted.
+- Rows use provider-reported models with a requested-model fallback, scalar
+  metadata, `document_id`, escaped structural paths, and exact source strings.
+  Non-empty root summaries are embedded once. Empty summaries have no row
+  annotations. Invalid/non-finite vectors and provider/storage errors propagate
+  with source, document, node, and path context.
+- Source-filtered old IDs are read before writes; stale deletion occurs only after
+  all new upserts succeed. Chroma supports the required lookup/delete operations.
+  Replacement is not an atomic transaction: failed generation/upserts can leave
+  additional new rows, and a failed delete can leave incomplete cleanup. No
+  successful artifact is returned in either case; retrying completes replacement.
+  Existing rows lacking source provenance still require migration or a rebuild.
+- All three collection fakes now replace records by ID and keep an independent
+  operation log, with filtered lookup and delete. Pytest and hidden notebook
+  regressions cover duplicate siblings, escaping/non-ASCII content, actions,
+  exported-artifact reruns, business metadata, exact relative/absolute source
+  identity, raw-dict responses, and query/provider/upsert/delete failures.
+- Real ephemeral Chroma tests verify unchanged and changed reruns, exact IDs/counts,
+  stale deletion, scalar metadata, optional provenance, and vector queryability.
+  `DOMClass.embed_doc` failure tests verify absent artifacts remain absent and
+  previous artifact bytes remain untouched; successful retries remove partial rows.
+  No production model change was needed.
+- Reusable development scripts are saved under `utils/`, with usage and revision
+  constraints documented in `utils/README.md`.
+
+Commands and results:
+
+- `.venv/bin/nbdev-export --path nbs/01.core.dom.embedding.ipynb`: successful;
+  generated module retains its `AUTOGENERATED` header.
+- `.venv/bin/nbdev-test --path nbs/01.core.dom.embedding.ipynb`: successful, offline.
+- `.venv/bin/nbdev-test --path nbs/01.core.dom.model.ipynb`: successful, offline.
+- Focused embedding/DOM tests: 46 passed (including 28 new correctness cases).
+- Full suite: 166 passed. The sandbox run stalled at the existing subprocess tests;
+  the completed run used `timeout 60 .venv/bin/pytest tests/ -q --tb=short`
+  outside the sandbox, as in prior full-suite verification.
+- `git diff --check`: successful. Optional live-provider smoke was not run.

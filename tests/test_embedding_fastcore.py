@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -35,17 +36,29 @@ class FakeAsyncClient:
 
 class FakeCollection:
     def __init__(self):
-        self.records = []
+        self.rows = {}
+        self.operations = []
 
-    def add(self, ids, metadatas, embeddings, documents):
-        self.records.append(
-            {
-                "ids": ids,
-                "metadatas": metadatas,
-                "embeddings": embeddings,
-                "documents": documents,
-            }
-        )
+    @property
+    def records(self):
+        return list(self.rows.values())
+
+    def upsert(self, ids, metadatas, embeddings, documents):
+        self.operations.append(('upsert', list(ids)))
+        for i, identifier in enumerate(ids):
+            self.rows[identifier] = dict(ids=[identifier], metadatas=[metadatas[i]],
+                embeddings=embeddings[i:i+1], documents=[documents[i]])
+
+    def get(self, where=None, include=None):
+        self.operations.append(('get', where))
+        return {'ids': [identifier for identifier, row in self.rows.items()
+            if not where or all(row['metadatas'][0].get(k) == v for k, v in where.items())]}
+
+    def delete(self, ids):
+        self.operations.append(('delete', list(ids)))
+        for identifier in ids:
+            self.rows.pop(identifier, None)
+
 
 
 def test_normalize_embeddings_handles_supported_shapes():
@@ -118,12 +131,18 @@ def test_embed_node_adds_collection_record_for_supported_node():
         )
     )
 
+    expected_metadata = {
+        "embed_model": "embed-model",
+        "node_type": "Section",
+        "document_id": "root-id",
+        "node_path": "$",
+    }
     _test_eq(result["s"], "section summary")
-    _test_eq(result["m"], {"embed_model": "embed-model"})
+    _test_eq(result["m"], expected_metadata)
     _test_eq(len(result["i"]), 64)
     _test_eq(len(collection.records), 1)
     _test_eq(collection.records[0]["documents"], ["section summary"])
-    _test_eq(collection.records[0]["metadatas"], [{"embed_model": "embed-model"}])
+    _test_eq(collection.records[0]["metadatas"], [expected_metadata])
     _test_eq(collection.records[0]["embeddings"].shape, (1, 2))
 
 
@@ -176,10 +195,11 @@ def test_embed_walk_node_recurses_lists_and_applies_action():
         FakeEmbedResponse([[0, 1]], model="walk-model"),
     ])
 
+    object_path = ["ast-id"]
     result = asyncio.run(
         embed_walk_node(
             node=semantics,
-            cur_object_path=["ast-id"],
+            cur_object_path=object_path,
             collection=collection,
             embed_types={"Section", "Table"},
             llm_client=client,
@@ -194,6 +214,11 @@ def test_embed_walk_node_recurses_lists_and_applies_action():
     _test_eq(len(collection.records), 2)
     _test_eq(collection.records[0]["documents"], ["table summary"])
     _test_eq(collection.records[1]["documents"], ["root summary"])
+    # the compatibility ancestor seed remains unchanged
+    _test_eq(object_path, ["ast-id"])
+    # structural paths are independent of ancestor IDs
+    _test_eq(collection.records[0]["metadatas"][0]["node_path"], "$/children/0")
+    _test_eq(collection.records[0]["metadatas"][0]["document_id"], "ast-id")
 
 
 def test_embed_adds_ast_and_nested_nodes_then_returns_json():
@@ -224,13 +249,196 @@ def test_embed_adds_ast_and_nested_nodes_then_returns_json():
     )
 
     result = json.loads(result_json)
-    _test_eq(result["m"], {"embed_model": "seed-model"})
+    _test_eq(result["m"]["embed_model"], "ast-model")
+    _test_eq(result["m"]["node_type"], "Document")
+    _test_eq(result["m"]["document_id"], result["i"])
+    _test_eq(result["m"]["node_path"], "$")
+    _test_eq(result["m"]["file_path"], "sample.md")
     _test_eq(result["seen"], True)
     _test_eq(result["children"][0]["seen"], True)
     _test_eq(len(result["i"]), 64)
     _test_eq(len(result["children"][0]["i"]), 64)
     _test_eq(len(collection.records), 2)
     _test_eq(collection.records[0]["documents"], ["document summary"])
+    _test_eq(collection.records[0]["metadatas"], [result["m"]])
     _test_eq(collection.records[1]["documents"], ["section summary"])
+    _test_eq(collection.records[1]["metadatas"][0]["node_type"], "Section")
+    _test_eq(collection.records[1]["metadatas"][0]["document_id"], result["i"])
+    _test_eq(collection.records[1]["metadatas"][0]["node_path"], "$/children/0")
+    _test_eq(collection.records[1]["metadatas"][0]["file_path"], "sample.md")
     _test_eq(client.calls[0]["input"], "document summary")
     _test_eq(client.calls[1]["input"], "section summary")
+
+
+def test_embed_node_handles_dict_response_model():
+    collection = FakeCollection()
+    client = FakeAsyncClient([{"embeddings": [[0.5, 1.5]], "model": "dict-model"}])
+
+    result = asyncio.run(
+        embed_node(
+            node={"t": "Section", "s": "section summary"},
+            collection=collection,
+            cur_object_path=["root-id"],
+            embed_types={"Section"},
+            llm_client=client,
+            model="seed-model",
+        )
+    )
+
+    _test_eq(result["m"]["embed_model"], "dict-model")
+    _test_eq(len(collection.records), 1)
+
+
+def test_embed_node_dict_response_without_model_falls_back_to_requested():
+    collection = FakeCollection()
+    client = FakeAsyncClient([{"embeddings": [[0.5, 1.5]]}])
+
+    result = asyncio.run(
+        embed_node(
+            node={"t": "Section", "s": "section summary"},
+            collection=collection,
+            cur_object_path=["root-id"],
+            embed_types={"Section"},
+            llm_client=client,
+            model="seed-model",
+        )
+    )
+
+    _test_eq(result["m"]["embed_model"], "seed-model")
+
+
+def test_embed_walk_node_dict_child_embedded_once():
+    semantics = {
+        "t": "Section",
+        "s": "root summary",
+        "meta_node": {"t": "Table", "s": "table summary"},
+    }
+    collection = FakeCollection()
+    client = FakeAsyncClient([
+        FakeEmbedResponse([[1, 0]], model="walk-model"),
+        FakeEmbedResponse([[0, 1]], model="walk-model"),
+    ])
+
+    result = asyncio.run(
+        embed_walk_node(
+            node=semantics,
+            cur_object_path=["ast-id"],
+            collection=collection,
+            embed_types={"Section", "Table"},
+            llm_client=client,
+            model="seed-model",
+            action=lambda node: {**node, "visited": True} if isinstance(node, dict) else node,
+        )
+    )
+
+    # regression: the dict-valued child must be embedded exactly once (child first, parent last)
+    _test_eq(len(collection.records), 2)
+    _test_eq(len(client.calls), 2)
+    _test_eq(collection.records[0]["documents"], ["table summary"])
+    _test_eq(collection.records[1]["documents"], ["root summary"])
+    ids = [record["ids"][0] for record in collection.records]
+    _test_eq(len(set(ids)), 2)
+    # action ran before embedding, and the surviving id is the one stored in the collection
+    _test_eq(result["meta_node"]["visited"], True)
+    _test_eq(result["meta_node"]["i"], ids[0])
+
+
+def test_embed_walk_node_ancestor_path_and_determinism():
+    def make_ast():
+        return {
+            "t": "Section",
+            "s": "outer summary",
+            "children": [
+                {
+                    "t": "Section",
+                    "s": "inner summary",
+                    "children": [{"t": "Table", "s": "table summary"}],
+                },
+            ],
+        }
+
+    def walk():
+        collection = FakeCollection()
+        client = FakeAsyncClient([FakeEmbedResponse([[1, 1]], model="walk-model")] * 3)
+        object_path = ["ast-id"]
+        result = asyncio.run(
+            embed_walk_node(
+                node=make_ast(),
+                cur_object_path=object_path,
+                collection=collection,
+                embed_types={"Section", "Table"},
+                llm_client=client,
+                model="seed-model",
+            )
+        )
+        _test_eq(object_path, ["ast-id"])
+        return result, collection
+
+    result, collection = walk()
+    outer_i = result["i"]
+    inner_i = result["children"][0]["i"]
+    table_metadata = collection.records[0]["metadatas"][0]
+    _test_eq(collection.records[0]["documents"], ["table summary"])
+    # node_path records dict keys and list indexes
+    _test_eq(table_metadata["node_path"], "$/children/0/children/0")
+    _test_eq(table_metadata["document_id"], "ast-id")
+    _test_eq(collection.records[1]["metadatas"][0]["node_path"], "$/children/0")
+    _test_eq(collection.records[2]["metadatas"][0]["node_path"], "$")
+
+    # ids are deterministic across walks of identical content
+    result2, collection2 = walk()
+    _test_eq(result2["i"], outer_i)
+    _test_eq([r["ids"] for r in collection2.records], [r["ids"] for r in collection.records])
+
+
+def test_embed_root_embedded_once_when_root_type_is_embeddable():
+    semantics = {"t": "Section", "s": "root summary", "children": []}
+    collection = FakeCollection()
+    client = FakeAsyncClient([FakeEmbedResponse([[2, 2]], model="root-model")])
+
+    result_json = asyncio.run(
+        embed(
+            semantics_json=json.dumps(semantics),
+            file_path=Path("sample.md"),
+            embed_types={"Section"},
+            db_client=None,
+            collection=collection,
+            llm_client=client,
+            model="seed-model",
+        )
+    )
+
+    result = json.loads(result_json)
+    canonical_json = json.dumps(
+        semantics, sort_keys=True, ensure_ascii=False, separators=(",", ";")
+    ).encode("utf-8").decode("utf-8")
+    expected_id = hashlib.sha256(("sample.md" + canonical_json).encode("utf-8")).hexdigest()
+    # regression: root keeps the id assigned by embed() and is embedded exactly once
+    _test_eq(result["i"], expected_id)
+    _test_eq(len(collection.records), 1)
+    _test_eq(len(client.calls), 1)
+    _test_eq(collection.records[0]["ids"], [expected_id])
+    _test_eq(collection.records[0]["metadatas"][0]["node_type"], "Section")
+
+
+def test_embed_skips_empty_root_summary():
+    semantics = {"summary": "", "blocks": [{"t": "Section", "s": "section summary", "children": []}]}
+    collection = FakeCollection()
+    client = FakeAsyncClient([FakeEmbedResponse([[3, 3]], model="section-model")])
+
+    asyncio.run(
+        embed(
+            semantics_json=json.dumps(semantics),
+            file_path=Path("sample.md"),
+            embed_types={"Section"},
+            db_client=None,
+            collection=collection,
+            llm_client=client,
+            model="seed-model",
+        )
+    )
+
+    _test_eq(len(client.calls), 1)
+    _test_eq(client.calls[0]["input"], "section summary")
+    _test_eq(len(collection.records), 1)
+    _test_eq(collection.records[0]["documents"], ["section summary"])

@@ -29,17 +29,29 @@ class FakeOllamaClient:
 
 class FakeCollection:
     def __init__(self):
-        self.records = []
+        self.rows = {}
+        self.operations = []
 
-    def add(self, ids, metadatas, embeddings, documents):
-        self.records.append(
-            {
-                "ids": ids,
-                "metadatas": metadatas,
-                "embeddings": embeddings,
-                "documents": documents,
-            }
-        )
+    @property
+    def records(self):
+        return list(self.rows.values())
+
+    def upsert(self, ids, metadatas, embeddings, documents):
+        self.operations.append(('upsert', list(ids)))
+        for i, identifier in enumerate(ids):
+            self.rows[identifier] = dict(ids=[identifier], metadatas=[metadatas[i]],
+                embeddings=embeddings[i:i+1], documents=[documents[i]])
+
+    def get(self, where=None, include=None):
+        self.operations.append(('get', where))
+        return {'ids': [identifier for identifier, row in self.rows.items()
+            if not where or all(row['metadatas'][0].get(k) == v for k, v in where.items())]}
+
+    def delete(self, ids):
+        self.operations.append(('delete', list(ids)))
+        for identifier in ids:
+            self.rows.pop(identifier, None)
+
 
 
 class FakeDbClient:
@@ -232,9 +244,18 @@ class DOMBehaviorTests(unittest.TestCase):
             asyncio.run(dom.embed_doc(db_path=self.root / "db"))
 
         self.assertEqual(len(collection.records), 4)
+        root_id = collection.records[0]["ids"][0]
         self.assertEqual(
             collection.records[0]["metadatas"],
-            [{"embed_model": dom.ollama_model}],
+            [
+                {
+                    "embed_model": "fake-embed-model",
+                    "node_type": "Document",
+                    "document_id": root_id,
+                    "node_path": "$",
+                    "file_path": str(self.md_file),
+                }
+            ],
         )
         self.assertEqual(
             [record["documents"][0] for record in collection.records],
@@ -244,6 +265,16 @@ class DOMBehaviorTests(unittest.TestCase):
             len({record["ids"][0] for record in collection.records}),
             4,
         )
+        # node rows carry structural paths and exact source provenance
+        section_one_id = collection.records[2]["ids"][0]
+        table_metadata = collection.records[1]["metadatas"][0]
+        self.assertEqual(table_metadata["node_type"], "Table")
+        self.assertEqual(table_metadata["document_id"], root_id)
+        self.assertEqual(table_metadata["file_path"], str(self.md_file))
+        self.assertEqual(table_metadata["node_path"], "$/blocks/0/c/1/c/0")
+        section_one_metadata = collection.records[2]["metadatas"][0]
+        self.assertEqual(section_one_metadata["node_type"], "Section")
+        self.assertEqual(section_one_metadata["node_path"], "$/blocks/0")
 
 
 if __name__ == "__main__":
