@@ -6,6 +6,10 @@ Importing this module does not import DOM modules or start model requests.
 import asyncio
 from contextvars import ContextVar
 import math
+import hashlib
+import json
+from pathlib import Path
+import tempfile
 import os
 from statistics import mean
 import sys
@@ -166,9 +170,63 @@ async def _setup_document(dom):
         raise
 
 
+class SummaryCheckpoint:
+    """Atomic document-level progress; only unchanged successes are reusable."""
+
+    def __init__(self, path, model, host, resume):
+        self.path = Path(path)
+        self.config = {"model": model, "host": host}
+        self.entries = {}
+        if resume and self.path.exists():
+            saved = json.loads(self.path.read_text(encoding="utf-8"))
+            if saved.get("version") != 1:
+                raise ValueError(f"Unsupported summary checkpoint: {self.path}")
+            if saved.get("config") == self.config:
+                self.entries = saved["entries"]
+
+    @staticmethod
+    def signature(file):
+        paths = [file, file.with_name(f"{file.stem}_ast.json"),
+                 file.with_name(f"{file.stem}_semantics.json")]
+        return {str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest()
+                if path.is_file() else None for path in paths}
+
+    def completed(self, file):
+        entry = self.entries.get(str(file.resolve()))
+        if entry and entry["row"]["status"] == "completed" \
+                and entry["signature"] == self.signature(file) \
+                and file.with_name(f"{file.stem}_semantics.json").is_file():
+            return dict(entry["row"], file=str(file), resumed=True)
+
+    def record(self, file, row):
+        self.entries[str(file.resolve())] = {
+            "row": row, "signature": self.signature(file)}
+        self.save()
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             dir=self.path.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump({"version": 1, "config": self.config, "entries": self.entries}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
 async def summarize_documents(files, client, model, database, *, concurrency=4,
-                              progress_interval=0.25, dom_factory=None, progress_factory=tqdm):
-    """Rerun documents with bounded workers, threaded setup, and periodic rendering."""
+                              progress_interval=0.25, dom_factory=None, progress_factory=tqdm,
+                              checkpoint_path=None, resume=True, checkpoint_host=None):
+    """Summarize with bounded workers and optional atomic per-document checkpoints.
+
+    Resume retries failed/incomplete documents and skips unchanged successes.
+    Set resume=False to start a fresh checkpoint and regenerate all summaries.
+    """
     import json
     from pathlib import Path
     from ribosome.core.dom import model as dom_model, summary as dom_summary
@@ -186,11 +244,16 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
         return []
     dom_factory = dom_factory or dom_model.DOMClass
     results = [None] * len(files)
-    pending = iter(enumerate(files))
+    checkpoint = (SummaryCheckpoint(checkpoint_path, model, checkpoint_host, resume)
+                  if checkpoint_path is not None else None)
+    if checkpoint:
+        for index, file in enumerate(files):
+            results[index] = checkpoint.completed(file)
+    pending = iter((index, file) for index, file in enumerate(files) if results[index] is None)
     summarize_node = dom_summary.summarize_node_async
     document_progress = ContextVar("document_progress", default=None)
     active = {}
-    totals = {"nodes": 0, "done_nodes": 0, "documents": 0, "status": "starting"}
+    totals = {"nodes": 0, "done_nodes": 0, "documents": sum(row is not None for row in results), "status": "starting"}
     _batch_active = True
     try:
         with progress_factory(total=len(files), desc="Documents", unit="doc", position=0) as documents, \
@@ -258,6 +321,9 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
                 row["elapsed_seconds"] = round(perf_counter() - start, 3)
                 if isinstance(client, SummaryAsyncClient):
                     row.update(client.metrics.snapshot(document=str(md_file)))
+                row["resumed"] = False
+                if checkpoint:
+                    checkpoint.record(md_file, row)
                 results[index] = row
                 totals["documents"] += 1
                 totals["status"] = row["status"]
@@ -284,4 +350,6 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
                     render()
     finally:
         _batch_active = False
+        if checkpoint:
+            checkpoint.save()
     return results

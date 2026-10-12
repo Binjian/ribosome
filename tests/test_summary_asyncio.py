@@ -388,3 +388,64 @@ def test_benchmark_timeout_cleans_up_requests_and_saves_diagnostics(tmp_path):
     assert len(report['warmups']) == 1
     assert 'Timed out' in report['warmups'][0]['error']
     assert report['warmups'][0]['cancelled_requests'] > 0
+
+
+def test_checkpoint_resumes_after_cancellation_and_invalidates_changes(tmp_path):
+    files = [tmp_path / 'one.md', tmp_path / 'two.md']
+    for file in files:
+        file.write_text('text')
+    checkpoint = tmp_path / 'checkpoint.json'
+    calls = []
+    interrupt = True
+
+    async def textualize(dom):
+        calls.append(dom.file.name)
+        if interrupt and dom.file.name == 'two.md':
+            raise asyncio.CancelledError
+        dom.file.with_name(f'{dom.file.stem}_semantics.json').write_text('{"blocks": []}')
+
+    def run(model='offline', resume=True):
+        return asyncio.run(app.summarize_documents(
+            files, object(), model, object(), concurrency=1,
+            checkpoint_path=checkpoint, resume=resume, checkpoint_host='local',
+            dom_factory=fake_factory({'blocks': []}, textualize_hook=textualize),
+            progress_factory=Progress))
+
+    with pytest.raises(asyncio.CancelledError):
+        run()
+    assert json.loads(checkpoint.read_text())['entries'][str(files[0].resolve())]['row']['status'] == 'completed'
+    interrupt = False
+    calls.clear()
+    rows = run()
+    assert calls == ['two.md']
+    assert [row['resumed'] for row in rows] == [True, False]
+    calls.clear()
+    assert all(row['resumed'] for row in run())
+    assert calls == []
+    files[0].write_text('changed')
+    run()
+    assert calls == ['one.md']
+    calls.clear()
+    run(model='new-model')
+    assert calls == ['one.md', 'two.md']
+    calls.clear()
+    run(model='new-model', resume=False)
+    assert calls == ['one.md', 'two.md']
+
+
+def test_checkpoint_retries_failures_and_missing_outputs(tmp_path):
+    file = tmp_path / 'doc.md'
+    file.write_text('text')
+    checkpoint = app.SummaryCheckpoint(tmp_path / 'state.json', 'model', 'host', True)
+    row = {'file': str(file), 'status': 'failed'}
+    checkpoint.record(file, row)
+    assert checkpoint.completed(file) is None
+    row['status'] = 'completed'
+    checkpoint.record(file, row)
+    assert checkpoint.completed(file) is None
+    output = file.with_name('doc_semantics.json')
+    output.write_text('{}')
+    checkpoint.record(file, row)
+    assert checkpoint.completed(file)['resumed']
+    output.write_text('{"changed": true}')
+    assert checkpoint.completed(file) is None
