@@ -280,7 +280,7 @@ def test_image_language_errors_and_unsupported_shapes(monkeypatch):
     assert asyncio.run(walk(node, lang='en'))['s'] == 'image'
     assert received == ['en']
     with pytest.raises(ValueError, match='Invalid image node structure') as caught:
-        asyncio.run(walk({'t': 'Image', 'c': []}, path='$.image'))
+        asyncio.run(walk({'t': 'Image', 'c': [[]]}, path='$.image'))
     assert 'Node type: Image' in str(caught.value)
     assert 'At path: $.image' in str(caught.value)
     with pytest.raises(ValueError, match='Unsupported node type'):
