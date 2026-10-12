@@ -191,6 +191,89 @@ def test_total_spawned_tasks_are_bounded_across_nested_tree(monkeypatch, depth, 
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('request_limit', [1, 4, 8])
+def test_singleton_depth_does_not_starve_independent_requests(monkeypatch, request_limit):
+    monkeypatch.setattr(sut, '_SUMMARY_CONCURRENCY', request_limit)
+    monkeypatch.setattr(sut, '_SUMMARY_TASK_LIMIT', 8)
+
+    async def scenario():
+        release = asyncio.Event()
+        saturated = asyncio.Event()
+        active = peak = calls = 0
+
+        async def provider(client, text, **kwargs):
+            nonlocal active, peak, calls
+            active += 1
+            calls += 1
+            peak = max(peak, active)
+            if active == request_limit:
+                saturated.set()
+            try:
+                await release.wait()
+                return 'short'
+            finally:
+                active -= 1
+
+        monkeypatch.setattr(sut, 'get_summary_response_async', provider)
+        node = {'t': 'Section', 'c': [{'t': 'Str', 'c': 'x' * 400} for _ in range(16)]}
+        for _ in range(30):
+            node = {'t': 'Section', 'c': [node]}
+        task = asyncio.create_task(walk(node, leaf_min_len=300, min_len=300))
+        try:
+            await asyncio.wait_for(saturated.wait(), 2)
+            assert peak == request_limit
+            release.set()
+            result = await asyncio.wait_for(task, 2)
+            assert result['s']
+            assert calls == 16
+            assert active == 0
+        finally:
+            release.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_acceleration_preserves_pipeline_calls_and_outputs(monkeypatch):
+    from collections import Counter
+    from utils.benchmark_summary_asyncio import _legacy_ordered_summary_map
+
+    async def scenario():
+        calls = []
+
+        async def text(client, content, **kwargs):
+            calls.append(('text', content, kwargs['model'], kwargs['lang']))
+            await asyncio.sleep(0)
+            return content
+
+        async def image(**kwargs):
+            calls.append(('image', kwargs['image_link'], kwargs['model'], kwargs['lang']))
+            await asyncio.sleep(0)
+            return 'image'
+
+        monkeypatch.setattr(sut, 'get_summary_response_async', text)
+        monkeypatch.setattr(sut, 'get_image_summary_async', image)
+        payload = {'t': 'Section', 'c': [
+            {'t': 'Str', 'c': 'long text ' * 40},
+            {'t': 'Image', 'c': [[], [], ['offline.png', '']]},
+            {'t': 'Space'}, {'t': 'Image', 'c': []},
+            {'t': 'Section', 'c': [], 'subnodes': [{'t': 'Str', 'c': 'nested ' * 60}]},
+        ]}
+        for _ in range(10):
+            payload = {'t': 'Section', 'c': [payload]}
+        optimized = await walk(copy.deepcopy(payload), min_len=300, leaf_min_len=100)
+        optimized_calls = Counter(calls)
+        calls.clear()
+        with patch.object(sut, '_ordered_summary_map', _legacy_ordered_summary_map):
+            baseline = await walk(copy.deepcopy(payload), min_len=300, leaf_min_len=100)
+        assert baseline == optimized
+        assert Counter(calls) == optimized_calls
+
+    from unittest.mock import patch
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('site', ['dict_children', 'list_items', 'aggregate', 'nested'])
 @pytest.mark.parametrize('cancel', [False, True])
 def test_failure_and_cancellation_await_all_owned_siblings(monkeypatch, site, cancel):
