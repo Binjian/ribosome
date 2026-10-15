@@ -218,21 +218,21 @@ Every level of the recursion awaits children one at a time (`for ... : await sum
 
 All six phases are landed. `summary_node_pair_async` was renamed to `summarize_node_async` in Phase 6, so the earlier phase descriptions still referencing the old name are historical.
 
-**Workflow note**: this is an nbdev project. The source of truth is the notebooks `nbs/01.core.dom.summary.ipynb` and `nbs/01.core.dom.model.ipynb`; `ribosome/core/dom/summary.py` and `ribosome/core/dom/model.py` are generated. All edits happen in the notebooks, followed by `nbdev_export`, then the test suite.
+**Workflow note**: this is an nbdev project. The source of truth is the notebooks `nbs/01.core.dom.summary.natural_text.ipynb` and `nbs/01.core.dom.model.ipynb`; `ribosome/core/dom/summary.py` and `ribosome/core/dom/model.py` are generated. All edits happen in the notebooks, followed by `nbdev_export`, then the test suite.
 
 ### Phase 1 — Mechanical cleanups (no behavior change) ✅ implemented
-Addresses §5.1, §5.6. Files: `nbs/01.core.dom.summary.ipynb`, `nbs/01.core.dom.model.ipynb`.
+Addresses §5.1, §5.6. Files: `nbs/01.core.dom.summary.natural_text.ipynb`, `nbs/01.core.dom.model.ipynb`.
 
 1. Change signatures to `table_count: dict` / `section_count: dict` in `summary_node_pair_async` and `_record_summary_progress`; delete the `isinstance(..., dict)` branches and the `{"count": ...}` re-wrapping at the top of `summary_node_pair_async`. `textualize` already passes dicts — no caller changes needed.
 2. In `_finalize_summary_ast_async`, replace `if not ast_dict["blocks"] or dict_summary == []` with `if not ast_dict["blocks"]`.
 
 ### Phase 2 — Consistent missing-config tolerance ✅ implemented, then superseded by Phase 6
-Addresses §5.4. File: `nbs/01.core.dom.summary.ipynb`.
+Addresses §5.4. File: `nbs/01.core.dom.summary.natural_text.ipynb`.
 
 In the dict-valued-child branch of `summary_node_pair_async`, when `cvalue` is not a `ConfigJSONObject`, skip the recursive call and summarize the child with `config_node=None` tolerance — i.e., relax the guard at the top of the dict branch from a hard `raise` to accepting `None` (mirroring the list branch, which already accepts `config_node=None`). Add a regression test: in-memory AST containing a dict-valued key absent from `ast_json_file` must not raise.
 
 ### Phase 3 — Safe defaults at the API boundary ✅ implemented
-Addresses §5.5. File: `nbs/01.core.dom.summary.ipynb`.
+Addresses §5.5. File: `nbs/01.core.dom.summary.natural_text.ipynb`.
 
 Change `summary_node_pair_async` defaults to `leaf_min_len: int = 100` (aligned with `DOMClass.leaf_min_len`) and keep `min_len: Optional[int] = None` (None is a valid "no minimum" for non-leaf summaries). Audit existing direct callers in `tests/` and notebooks for reliance on the old `0` default.
 
@@ -244,7 +244,7 @@ Addresses §5.2. Files: `nbs/01.core.dom.model.ipynb`, `tests/test_dom_behavior.
 3. Add a rerun-idempotency test: calling `textualize()` twice in a row succeeds and produces identical `semantics_json`.
 
 ### Phase 5 — Sibling parallelization ✅ implemented
-Addresses §5.7. File: `nbs/01.core.dom.summary.ipynb`.
+Addresses §5.7. File: `nbs/01.core.dom.summary.natural_text.ipynb`.
 
 Replace per-child `await` loops with `children = await asyncio.gather(*(summary_node_pair_async(...) for ...))`. Defer until Phases 1–4 land, since gather interacts with any in-flight mutation of shared state; verify summary output is unchanged (order-preserving gather) and only log interleaving differs.
 
@@ -257,7 +257,7 @@ Replace per-child `await` loops with `children = await asyncio.gather(*(summary_
 - **Not bounded**: the orphaned `get_leaf_summary_async` / `get_list_summary_async` pair still calls `get_summary_response_async` directly, bypassing the semaphore. Nothing in the `textualize` path reaches it — the list helper calls the leaf helper; both remain exported public entry points — so it is left as-is along with the legacy `summary_node_async` pair.
 
 ### Phase 6 — `jsoncfg` removal ✅ implemented
-Addresses §5.3. Files: `nbs/01.core.dom.summary.ipynb`, `nbs/01.core.dom.model.ipynb`, `tests/test_summary_subnodes.py`.
+Addresses §5.3. Files: `nbs/01.core.dom.summary.natural_text.ipynb`, `nbs/01.core.dom.model.ipynb`, `tests/test_summary_subnodes.py`.
 
 Decide whether to drop `jsoncfg` from the recursion: replace line-number logging with node-type + key-path context in `_record_summary_progress` and `_config_error`, remove `config_ast` loading from `textualize`, and simplify `summary_node_pair_async` to a single-tree walk. **Tradeoff**: loses source line numbers in logs; gains elimination of the entire dual-tree fragility class and the `jsoncfg` dependency in this module. Recommend deferring until Phase 4's rerun-idempotency guarantees are in place, since single-tree walking makes §5.2-class drift impossible by construction.
 

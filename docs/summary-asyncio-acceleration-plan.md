@@ -13,7 +13,7 @@ identical request counts. Actual Ollama gains need benchmarking.
 
 ## Implementation changes
 
-- In `nbs/01.core.dom.summary.ipynb`, make `_ordered_summary_map` execute
+- In `nbs/01.core.dom.summary.natural_text.ipynb`, make `_ordered_summary_map` execute
   single-item inputs inline without reserving a worker slot. Retain ordered
   results, bounded tasks, cancellation cleanup, and the shared text/image request
   semaphore. Regenerate the Python module.
