@@ -35,6 +35,7 @@ dependencies = [
     'pypandoc',
     'marker',
     'markdown',
+    'markdown-it-py',
     'pydantic',
     'dotenv',
     'json-cfg',
