@@ -160,3 +160,37 @@ def test_object_requests_respect_concurrency_limit(tmp_path, monkeypatch):
     monkeypatch.setattr(sut, 'get_summary_response_async', text)
     results = asyncio.run(sut.summarize_markdown_objects_async(file, object(), 'offline'))
     assert len(results) == 10 and peak == 2 and active == 0
+
+
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'cancel'])
+def test_progress_tracks_completed_objects_and_always_closes(tmp_path, monkeypatch, outcome):
+    file = document(tmp_path, '- item\n')
+    bars = []
+    class Bar:
+        def __init__(self, **kwargs):
+            self.total = kwargs['total']
+            self.completed = 0
+            self.closed = False
+            bars.append(self)
+        def update(self, amount):
+            self.completed += amount
+        def close(self):
+            self.closed = True
+    async def summarize(**kwargs):
+        if outcome == 'failure':
+            raise RuntimeError('failed')
+        if outcome == 'cancel':
+            raise asyncio.CancelledError()
+        return 'summary'
+    monkeypatch.setattr('tqdm.auto.tqdm', Bar)
+    monkeypatch.setattr(sut, 'get_summary_response_async', summarize)
+    async def run():
+        return await sut.summarize_markdown_objects_async(file, object(), 'offline', show_progress=True)
+    if outcome == 'success':
+        asyncio.run(run())
+    else:
+        with pytest.raises(ValueError if outcome == 'failure' else asyncio.CancelledError):
+            asyncio.run(run())
+    assert bars[0].total == 1
+    assert bars[0].completed == (1 if outcome == 'success' else 0)
+    assert bars[0].closed
