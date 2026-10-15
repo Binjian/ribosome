@@ -252,6 +252,7 @@ def test_windows_vector_converter_handles_markdown_html_and_svg(
 
 
 def test_inkscape_converter_normalizes_mislabeled_emf(tmp_path, monkeypatch):
+    monkeypatch.setattr(win, "_find_magick", lambda: "magick")
     source = tmp_path / "drawing.wmf"
     emf_header = bytearray(44)
     emf_header[40:44] = b" EMF"
@@ -304,6 +305,7 @@ def test_find_inkscape_in_standard_windows_install_folder(tmp_path, monkeypatch)
 
 
 def test_metafile_fallback_forces_opaque_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(win, "_find_magick", lambda: "magick")
     source = tmp_path / "drawing.emf"
     source.write_bytes(b"emf")
     target = tmp_path / "drawing.png"
@@ -323,3 +325,25 @@ def test_metafile_fallback_forces_opaque_output(tmp_path, monkeypatch):
 
     assert commands[0][0] == "magick"
     assert commands[0][6:10] == ["-background", "white", "-alpha", "off"]
+
+
+def test_find_magick_in_versioned_windows_install_folder(tmp_path, monkeypatch):
+    executable = tmp_path / "ImageMagick-7.1.1-Q16-HDRI" / "magick.exe"
+    executable.parent.mkdir()
+    executable.touch()
+    monkeypatch.setattr(win.shutil, "which", lambda _: None)
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+
+    assert win._magick_command(Path("in.emf"), Path("out.png"))[0] == str(executable)
+    assert win._opaque_png_command(Path("in.png"), Path("out.png"))[0] == str(executable)
+
+
+def test_missing_magick_explains_inkscape_dependency(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(win.shutil, "which", lambda _: None)
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    with pytest.raises(FileNotFoundError, match="Inkscape converter also requires ImageMagick"):
+        win._find_magick()
