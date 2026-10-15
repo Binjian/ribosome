@@ -12,7 +12,8 @@ from types import SimpleNamespace
 from ollama import AsyncClient
 import pytest
 
-from ribosome.core.dom import model as dom_model, summary as dom_summary
+from ribosome.core.dom import model as dom_model
+from ribosome.core.dom.summary import natural_text as dom_summary
 from utils import summary_asyncio as app
 
 
@@ -246,11 +247,11 @@ def test_notebook_configuration_preserves_overrides_and_detects_stale_imports(mo
     names = ['RIBOSOME_DOCUMENT_CONCURRENCY', 'RIBOSOME_SUMMARY_CONCURRENCY', 'RIBOSOME_SUMMARY_TASK_LIMIT']
     for name in names:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.delitem(sys.modules, 'ribosome.core.dom.summary')
+    monkeypatch.delitem(sys.modules, 'ribosome.core.dom.summary.natural_text')
     assert list(app.configure_summary_limits().values()) == [4, 8, 32]
     monkeypatch.setenv(names[1], '2')
     assert app.configure_summary_limits()[names[1]] == 2
-    monkeypatch.setitem(sys.modules, 'ribosome.core.dom.summary',
+    monkeypatch.setitem(sys.modules, 'ribosome.core.dom.summary.natural_text',
                         SimpleNamespace(_SUMMARY_CONCURRENCY=8, _SUMMARY_TASK_LIMIT=32))
     with pytest.raises(RuntimeError, match='Restart the kernel'):
         app.configure_summary_limits()

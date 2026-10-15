@@ -57,7 +57,7 @@ def test_textualize_forwards_settings_and_shared_counters(dom, monkeypatch):
 def test_textualize_rerun_preserves_artifacts_and_current_counters(dom):
     original = dom.ast_json
     original_bytes = dom.ast_json_file.read_bytes()
-    with patch('ribosome.core.dom.summary.get_summary_response_async',
+    with patch('ribosome.core.dom.summary.natural_text.get_summary_response_async',
                side_effect=deterministic_summary):
         asyncio.run(dom.textualize())
         first = dom.semantics_json
@@ -76,7 +76,7 @@ def test_textualize_rerun_preserves_artifacts_and_current_counters(dom):
 def test_textualize_empty_blocks_writes_empty_summary_without_request(dom):
     dom.ast_json = '{"blocks": []}'
     request = AsyncMock(side_effect=AssertionError('empty input must not call provider'))
-    with patch('ribosome.core.dom.summary.get_summary_response_async', request):
+    with patch('ribosome.core.dom.summary.natural_text.get_summary_response_async', request):
         asyncio.run(dom.textualize())
     request.assert_not_awaited()
     assert json.loads(dom.semantics_json)['summary'] == ''
@@ -90,7 +90,7 @@ def test_textualize_then_embed_doc_uses_new_semantics(dom, tmp_path):
     client.embed.return_value = SimpleNamespace(embeddings=[[0.5, 1.0]], model='offline-model')
     object.__setattr__(dom, 'ollama_client', client)
     database = chromadb.EphemeralClient()
-    with patch('ribosome.core.dom.summary.get_summary_response_async',
+    with patch('ribosome.core.dom.summary.natural_text.get_summary_response_async',
                side_effect=deterministic_summary):
         asyncio.run(dom.textualize())
     semantics = json.loads(dom.semantics_json)

@@ -28,7 +28,7 @@ from utils.summary_asyncio import SummaryAsyncClient, _document_id, count_summar
 
 async def _legacy_ordered_summary_map(fn, values):
     """Frozen pre-acceleration scheduler, including single-item slot reservations."""
-    from ribosome.core.dom import summary as sut
+    from ribosome.core.dom.summary import natural_text as sut
     budget = sut._summary_budget.get()
     token = None
     if budget is None:
@@ -169,7 +169,7 @@ def cached_samples(input_dir, max_nodes=300, max_images=8):
 
 async def run_variant(samples, client, output_dir, variant, *, task_limit,
                       request_limit, document_limit, scheduler=None):
-    from ribosome.core.dom import summary as sut
+    from ribosome.core.dom.summary import natural_text as sut
     client.reset_metrics()
     results = [None] * len(samples)
     pending = iter(enumerate(samples))

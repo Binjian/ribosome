@@ -1,5 +1,5 @@
 import asyncio
-from ribosome.core.dom.summary import with_async_context
+from ribosome.core.dom.summary.natural_text import with_async_context
 
 async def test_validation():
     # 1) Verify a decorated async function still returns normally

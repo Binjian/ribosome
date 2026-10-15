@@ -2,7 +2,7 @@
 
 ## 1. Executive Summary
 
-This document reviews the AST summarization pipeline triggered by `DOMClass.textualize` in `ribosome.core.dom.model` (line 534) and its underlying recursive worker `summarize_node_async` in `ribosome.core.dom.summary` (line 277).
+This document reviews the AST summarization pipeline triggered by `DOMClass.textualize` in `ribosome.core.dom.model` (line 534) and its underlying recursive worker `summarize_node_async` in `ribosome.core.dom.summary.natural_text` (line 277).
 
 The `textualize` method is designed to traverse the hierarchical AST produced by `reorg`, generate LLM summaries for nodes (paragraphs, images, tables, sections), populate each node's `"s"` field, synthesize a whole-document summary, and transition the document into the `semantics_json` state required for downstream vector embedding via `embed_doc`.
 
@@ -170,7 +170,7 @@ A follow-up audit of the landed refactoring (commit `372e1c2`) confirmed all fiv
 > **Status**: the six original residual items were addressed by the landed phases; new gaps are recorded in §7. §5.1 and §5.6 → Phase 1; §5.5 → Phase 3; §5.2 → Phase 4; §5.3 → Phase 6; §5.7 → Phase 5. §5.4 was addressed by Phase 2 and then made unreachable by Phase 6. Per-item notes are on §5.2–§5.4 and §5.7; the analysis text is left as written at audit time.
 
 ### 5.1. Dead `int` Fallback in Counter Plumbing
-`summary_node_pair_async` and `_record_summary_progress` accept `table_count: int | dict` / `section_count: int | dict` and branch on `isinstance(..., dict)` (see `ribosome/core/dom/summary.py`, `_record_summary_progress` and the top of `summary_node_pair_async`). The sole caller (`textualize`) always passes `{"count": ...}` dicts, so the `int` branches are unreachable compatibility shims. They double the code paths in `_record_summary_progress` for no benefit.
+`summary_node_pair_async` and `_record_summary_progress` accept `table_count: int | dict` / `section_count: int | dict` and branch on `isinstance(..., dict)` (see `ribosome/core/dom/summary/natural_text.py`, `_record_summary_progress` and the top of `summary_node_pair_async`). The sole caller (`textualize`) always passes `{"count": ...}` dicts, so the `int` branches are unreachable compatibility shims. They double the code paths in `_record_summary_progress` for no benefit.
 
 ### 5.2. `ast_json` Dual-Write Re-Blurs the State Machine
 `_finalize_summary_ast_async` writes the summarized tree to **both** `self.semantics_json` and `self.ast_json`, but only persists `semantics_json_file` — `ast_json_file` on disk keeps the pre-summary tree. Consequences:
@@ -218,7 +218,7 @@ Every level of the recursion awaits children one at a time (`for ... : await sum
 
 All six phases are landed. `summary_node_pair_async` was renamed to `summarize_node_async` in Phase 6, so the earlier phase descriptions still referencing the old name are historical.
 
-**Workflow note**: this is an nbdev project. The source of truth is the notebooks `nbs/01.core.dom.summary.natural_text.ipynb` and `nbs/01.core.dom.model.ipynb`; `ribosome/core/dom/summary.py` and `ribosome/core/dom/model.py` are generated. All edits happen in the notebooks, followed by `nbdev_export`, then the test suite.
+**Workflow note**: this is an nbdev project. The source of truth is the notebooks `nbs/01.core.dom.summary.natural_text.ipynb` and `nbs/01.core.dom.model.ipynb`; `ribosome/core/dom/summary/natural_text.py` and `ribosome/core/dom/model.py` are generated. All edits happen in the notebooks, followed by `nbdev_export`, then the test suite.
 
 ### Phase 1 — Mechanical cleanups (no behavior change) ✅ implemented
 Addresses §5.1, §5.6. Files: `nbs/01.core.dom.summary.natural_text.ipynb`, `nbs/01.core.dom.model.ipynb`.
@@ -279,7 +279,7 @@ Decide whether to drop `jsoncfg` from the recursion: replace line-number logging
    - Phase 3: a direct call to `summary_node_pair_async` without `leaf_min_len` performs no LLM calls on short leaf tokens (mock client, assert call count).
    - Phase 4: `textualize()` → `embed_doc()` still succeeds; double-`textualize` idempotency test passes.
    - Phase 5: `test_summarize_node_async_gathers_siblings_concurrently` observes `max_inflight > 1`; `test_summarize_leaf_async_caps_llm_fanout_with_semaphore` observes `max_inflight <= RIBOSOME_SUMMARY_CONCURRENCY`.
-   - Phase 6: `rg -n "jsoncfg|config_node|_config_node_line" ribosome/core/dom/summary.py ribosome/core/dom/model.py` returns nothing, and `rg -n "summary_node_pair_async" nbs` returns nothing (the only stale mentions left in the repo are inside this document's historical sections and the self-contained `tests/validation_script*.py` mock scripts, which define their own local fakes and are not collected by pytest).
+   - Phase 6: `rg -n "jsoncfg|config_node|_config_node_line" ribosome/core/dom/summary/natural_text.py ribosome/core/dom/model.py` returns nothing, and `rg -n "summary_node_pair_async" nbs` returns nothing (the only stale mentions left in the repo are inside this document's historical sections and the self-contained `tests/validation_script*.py` mock scripts, which define their own local fakes and are not collected by pytest).
 4. §4's test matrix has been refreshed against the landed test names.
 5. Not yet run: a live-document smoke test (`textualize()` on `assets/SN024002/SN024002.md` against a real Ollama/DashScope endpoint) to confirm the wall-clock win and read the new `… Summarize section: N at $.blocks[i].c[j]` log lines.
 

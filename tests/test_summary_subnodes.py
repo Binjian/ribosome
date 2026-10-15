@@ -2,7 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from ribosome.core.dom.summary import summarize_node_async
+from ribosome.core.dom.summary.natural_text import summarize_node_async
 
 
 def test_summarize_node_async_recurses_into_subnodes():

@@ -121,8 +121,8 @@ class DOMBehaviorTests(unittest.TestCase):
         async def fake_image_summary(client, image_link, model="unused", role="user", lang="zh"):
             return f"IMG<{Path(image_link).name}>"
 
-        with patch("ribosome.core.dom.summary.get_summary_response_async", side_effect=fake_text_summary), patch(
-            "ribosome.core.dom.summary.get_image_summary_async", side_effect=fake_image_summary
+        with patch("ribosome.core.dom.summary.natural_text.get_summary_response_async", side_effect=fake_text_summary), patch(
+            "ribosome.core.dom.summary.natural_text.get_image_summary_async", side_effect=fake_image_summary
         ):
             asyncio.run(dom.textualize())
 
@@ -173,7 +173,7 @@ class DOMBehaviorTests(unittest.TestCase):
         async def fake_text_summary(client, content, model="unused", role="user", lang="zh"):
             return f"TXT<{content[:24]}>"
 
-        with patch("ribosome.core.dom.summary.get_summary_response_async", side_effect=fake_text_summary):
+        with patch("ribosome.core.dom.summary.natural_text.get_summary_response_async", side_effect=fake_text_summary):
             asyncio.run(dom.textualize())
             first = dom.semantics_json
             asyncio.run(dom.textualize())
@@ -203,7 +203,7 @@ class DOMBehaviorTests(unittest.TestCase):
         async def boom(*args, **kwargs):
             raise RuntimeError("backend exploded")
 
-        with patch("ribosome.core.dom.summary.get_summary_response_async", side_effect=boom):
+        with patch("ribosome.core.dom.summary.natural_text.get_summary_response_async", side_effect=boom):
             with self.assertRaises(ValueError) as ctx:
                 asyncio.run(dom.textualize())
 

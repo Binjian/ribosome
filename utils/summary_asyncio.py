@@ -41,7 +41,7 @@ def configure_summary_limits():
         except (TypeError, ValueError):
             raise ValueError(f"{name} must be a positive integer; got {value!r}") from None
         limits[name] = parsed
-    loaded = sys.modules.get("ribosome.core.dom.summary")
+    loaded = sys.modules.get("ribosome.core.dom.summary.natural_text")
     if loaded is not None:
         for name, attribute in (
             ("RIBOSOME_SUMMARY_CONCURRENCY", "_SUMMARY_CONCURRENCY"),
@@ -229,7 +229,8 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
     """
     import json
     from pathlib import Path
-    from ribosome.core.dom import model as dom_model, summary as dom_summary
+    from ribosome.core.dom import model as dom_model
+    from ribosome.core.dom.summary import natural_text as dom_summary
 
     if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")

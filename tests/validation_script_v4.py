@@ -3,7 +3,7 @@ from functools import wraps
 from inspect import signature, Parameter
 from typing import Callable, Optional
 
-# Copy implementation from ribosome/core/dom/summary.py
+# Copy implementation from ribosome/core/dom/summary/natural_text.py
 def with_async_context(context_builder: Callable[..., str]) -> Callable:
     def build_context(*args, **kwargs) -> str:
         try:

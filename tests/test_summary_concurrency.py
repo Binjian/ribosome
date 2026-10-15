@@ -13,7 +13,7 @@ from weakref import WeakKeyDictionary
 
 import pytest
 
-from ribosome.core.dom import summary as sut
+from ribosome.core.dom.summary import natural_text as sut
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +54,7 @@ def test_configuration_isolated_at_import(value, setting):
     else:
         env[name] = value
     result = subprocess.run(
-        [sys.executable, '-c', f'from ribosome.core.dom.summary import _SUMMARY_{setting}; print(_SUMMARY_{setting})'],
+        [sys.executable, '-c', f'from ribosome.core.dom.summary.natural_text import _SUMMARY_{setting}; print(_SUMMARY_{setting})'],
         env=env, capture_output=True, text=True, timeout=15)
     if value in {'bad', '0', '-1'}:
         assert result.returncode != 0

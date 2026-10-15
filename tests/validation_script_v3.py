@@ -6,7 +6,7 @@ for mod in ["nbdev", "nbdev.showdoc", "fastcore", "fastcore.test", "fastcore.bas
     sys.modules[mod] = MagicMock()
 
 import asyncio
-from ribosome.core.dom.summary import with_async_context
+from ribosome.core.dom.summary.natural_text import with_async_context
 
 async def test_validation():
     print("Testing decorated function returning normally...")
