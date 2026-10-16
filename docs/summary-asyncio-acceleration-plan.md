@@ -17,7 +17,7 @@ identical request counts. Actual Ollama gains need benchmarking.
   single-item inputs inline without reserving a worker slot. Retain ordered
   results, bounded tasks, cancellation cleanup, and the shared text/image request
   semaphore. Regenerate the Python module.
-- In `nbs/05.application.summary.ipynb`, configure document, request, and traversal
+- In `nbs/05.application.summary.natural_text.ipynb`, configure document, request, and traversal
   limits before importing DOM modules. Start with **4 document workers, 8 request
   slots, and 32 traversal slots**, respecting explicit environment overrides.
   Display effective settings and explain that changing import-time settings

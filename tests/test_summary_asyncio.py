@@ -263,7 +263,7 @@ def test_notebook_configuration_preserves_overrides_and_detects_stale_imports(mo
 def test_notebook_compiles_and_configures_before_dom_import():
     from nbformat import read, validate
     from IPython.core.interactiveshell import InteractiveShell
-    notebook = read(Path('nbs/05.application.summary.ipynb'), as_version=4)
+    notebook = read(Path('nbs/05.application.summary.natural_text.ipynb'), as_version=4)
     validate(notebook)
     shell = InteractiveShell.instance()
     for cell in notebook.cells:
