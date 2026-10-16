@@ -24,8 +24,10 @@ _document_id = ContextVar("summary_document_id", default=None)
 _batch_active = False
 
 
-def configure_summary_limits():
+def configure_summary_limits(summary_module="natural_text"):
     """Set notebook defaults before DOM import; reject stale kernel settings."""
+    if summary_module not in {"natural_text", "object"}:
+        raise ValueError("summary_module must be 'natural_text' or 'object'")
     defaults = {
         "RIBOSOME_DOCUMENT_CONCURRENCY": 4,
         "RIBOSOME_SUMMARY_CONCURRENCY": 8,
@@ -41,7 +43,7 @@ def configure_summary_limits():
         except (TypeError, ValueError):
             raise ValueError(f"{name} must be a positive integer; got {value!r}") from None
         limits[name] = parsed
-    loaded = sys.modules.get("ribosome.core.dom.summary.natural_text")
+    loaded = sys.modules.get(f"ribosome.core.dom.summary.{summary_module}")
     if loaded is not None:
         for name, attribute in (
             ("RIBOSOME_SUMMARY_CONCURRENCY", "_SUMMARY_CONCURRENCY"),
@@ -173,9 +175,11 @@ async def _setup_document(dom):
 class SummaryCheckpoint:
     """Atomic document-level progress; only unchanged successes are reusable."""
 
-    def __init__(self, path, model, host, resume):
+    def __init__(self, path, model, host, resume, *, settings=None):
         self.path = Path(path)
         self.config = {"model": model, "host": host}
+        if settings is not None:
+            self.config["settings"] = settings
         self.entries = {}
         if resume and self.path.exists():
             saved = json.loads(self.path.read_text(encoding="utf-8"))

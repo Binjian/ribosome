@@ -201,3 +201,43 @@ def test_empty_object_summary_reports_source_location(tmp_path, monkeypatch):
     monkeypatch.setattr(sut, 'get_summary_response_async', empty)
     with pytest.raises(ValueError, match=r'list object 1 at .*manual.md:1-1: Provider returned an empty'):
         asyncio.run(sut.summarize_markdown_object_tree_async(file, object(), 'offline'))
+
+
+def test_pipe_tables_preserve_captions_spans_and_atomic_subtrees(tmp_path, monkeypatch):
+    table = '| Item | Value |\n| :--- | ---: |\n| first | 2 |\n| second | 3 |\n'
+    file = write(tmp_path, '# Parent\n\n## Child\n\n表 1 数据\n\n' + table + '\nAfter.\n')
+    before = file.read_bytes()
+    extracted = sut.extract_markdown_objects(file)
+    assert len(extracted) == 1
+    record = extracted[0]
+    assert record['type'] == 'table' and record['caption'] == '表 1 数据'
+    assert record['content'] == table
+    assert (record['line_start'], record['line_end']) == (5, 10)
+    tree = sut.extract_markdown_object_tree(file)
+    wrapper = next(sut._object_nodes(tree))
+    assert any(node.get('t') == 'Table' for node in nodes(wrapper))
+    prompts = []
+    async def text(client, content, **kwargs):
+        prompts.append(content)
+        return 'PIPE-TABLE-SUMMARY'
+    monkeypatch.setattr(sut, 'get_summary_response_async', text)
+    result = asyncio.run(sut.summarize_markdown_object_tree_async(
+        file, object(), 'offline', leaf_min_len=99999))
+    summarized = next(sut._object_nodes(result))
+    assert summarized['c'] == wrapper['c']
+    assert len(prompts) == 1 and 'complete Markdown pipe table' in prompts[0]
+    assert json.loads(prompts[0].split('\n', 1)[1]) == {'caption': '表 1 数据', 'content': table}
+    assert summarized['s'] in result['blocks'][0]['subnodes'][0]['s']
+    assert summarized['s'] in result['summary']
+    assert file.read_bytes() == before
+
+
+def test_pipe_tables_ignore_code_and_stay_inside_enclosing_lists(tmp_path):
+    file = write(tmp_path, '```md\n| fake |\n| --- |\n| x |\n```\n\n'
+                 '- item\n\n  | nested |\n  | --- |\n  | x |\n\n'
+                 '| real |\n| --- |\n| y |\n\n<table><tr><td>html</td></tr></table>\n')
+    objects = sut.extract_markdown_objects(file)
+    assert [o['type'] for o in objects] == ['list', 'table', 'table']
+    assert '| nested |' in objects[0]['content']
+    assert objects[1]['content'] == '| real |\n| --- |\n| y |\n'
+    assert objects[2]['content'].startswith('<table>')
