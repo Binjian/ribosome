@@ -194,3 +194,60 @@ def test_progress_tracks_completed_objects_and_always_closes(tmp_path, monkeypat
     assert bars[0].total == 1
     assert bars[0].completed == (1 if outcome == 'success' else 0)
     assert bars[0].closed
+
+
+def test_manual_ollama_configuration_uses_project_env(tmp_path, monkeypatch):
+    (tmp_path / 'pyproject.toml').write_text('')
+    (tmp_path / '.env').write_text('OLLAMA_HOST=http://configured:11434\nOLLAMA_SUMMARY_MODEL=vision-model\nOLLAMA_API_KEY=test-key\n')
+    monkeypatch.setenv('PROJ_ROOT', str(tmp_path))
+    monkeypatch.setenv('OLLAMA_HOST', 'http://stale:11434')
+    captured = {}
+    def client(**kwargs):
+        captured.update(kwargs)
+        return object()
+    monkeypatch.setattr(sut, 'AsyncClient', client)
+    _, model = sut._configured_ollama_summary_client()
+    assert model == 'vision-model'
+    assert captured == {'host': 'http://configured:11434', 'headers': {'Authorization': 'Bearer test-key'}}
+    (tmp_path / '.env').write_text('OLLAMA_HOST=http://configured:11434\n')
+    with pytest.raises(ValueError, match='OLLAMA_SUMMARY_MODEL'):
+        sut._configured_ollama_summary_client()
+    (tmp_path / '.env').unlink()
+    with pytest.raises(FileNotFoundError, match='Missing configuration'):
+        sut._configured_ollama_summary_client()
+
+
+def test_sx322018_notebook_function_uses_configured_root_and_exports(tmp_path, monkeypatch):
+    import json
+    import os
+    notebook = json.loads(Path('nbs/01.core.dom.summary.object.ipynb').read_text())
+    source = next(''.join(c['source']) for c in notebook['cells']
+                  if 'async def test_summarize_objects_with_sx322018_md' in ''.join(c['source']))
+    (tmp_path / 'pyproject.toml').write_text('')
+    file = tmp_path / 'assets/SX322018-A-0/SX322018《新松机器人气动点焊应用操作手册》-A-0.md'
+    file.parent.mkdir(parents=True)
+    file.write_text('unchanged source', encoding='utf-8')
+    monkeypatch.setenv('PROJ_ROOT', str(tmp_path))
+    records = [{'id': i, 'type': kind, 'summary': ''}
+               for i, kind in enumerate(['figure', 'table', 'list'], 1)]
+    client = object()
+    async def summarize(path, actual_client, model, **kwargs):
+        assert path == file and actual_client is client and model == 'configured-model'
+        assert kwargs == {'lang': 'zh', 'show_progress': True}
+        return {'blocks': [{'t': 'Section', 'c': [
+            {'t': 'Div', 'c': [[], []], 's': '摘要',
+             'object': {**record, 'summary': '摘要'}} for record in records],
+            'subnodes': []}], 'summary': '文档摘要'}
+    def eq(a, b):
+        assert a == b
+    scope = {'Path': Path, 'os': os, 'json': json, 'test_eq': eq,
+             'extract_markdown_objects': lambda path: records,
+             '_configured_ollama_summary_client': lambda: (client, 'configured-model'),
+             'summarize_markdown_object_tree_async': summarize,
+             '_object_nodes': sut._object_nodes,
+             '_write_semantics_tree': sut._write_semantics_tree}
+    exec(compile(source, '<sx322018-notebook-test>', 'exec'), scope)
+    result = asyncio.run(scope['test_summarize_objects_with_sx322018_md']())
+    output = file.with_name(file.stem + '_semantics.json')
+    assert json.loads(output.read_text(encoding='utf-8')) == result
+    assert file.read_text(encoding='utf-8') == 'unchanged source'
