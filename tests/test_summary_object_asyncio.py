@@ -167,7 +167,8 @@ def test_checkpoint_resume_and_configuration_invalidation(tmp_path, monkeypatch)
     assert not run([file], **options)[0]['resumed']
     assert run([file], **options)[0]['resumed']
     old_checkpoint = json.loads(state.read_text())
-    assert old_checkpoint['config']['settings'].pop('object_schema_version') == 2
+    assert old_checkpoint['config']['settings']['object_schema_version'] == 3
+    old_checkpoint['config']['settings']['object_schema_version'] = 2
     state.write_text(json.dumps(old_checkpoint))
     assert not run([file], **options)[0]['resumed']
     assert run([file], **options)[0]['resumed']

@@ -16,7 +16,7 @@ def document(tmp_path, source):
 def physical_rows(table):
     for child in table['children']:
         if child['type'] == 'table_row_group':
-            yield from child['children']
+            yield from physical_rows(child)
         else:
             yield child
 
@@ -27,6 +27,82 @@ def merged_source():
             '<tbody>\n<tr><td rowspan="3">A</td><td>one</td></tr>\n'
             '<tr><td>two</td></tr>\n<tr><td>three</td></tr>\n'
             '<tr><td>B</td><td>four</td></tr>\n</tbody></table>\n')
+
+
+def nested_source():
+    return ('# Section\n\n表 1 Nested\n\n<table>\n'
+            '<thead><tr><th>Category</th><th>Group</th><th>Subgroup</th><th>Value</th></tr></thead>\n'
+            '<tbody>\n'
+            '<tr><td rowspan="8">A</td><td rowspan="6">B</td><td>r2</td></tr>\n'
+            '<tr><td rowspan="2">C</td><td>r3</td></tr>\n'
+            '<tr><td>r4</td></tr>\n'
+            '<tr><td>r5</td></tr>\n'
+            '<tr><td rowspan="2">D</td><td>r6</td></tr>\n'
+            '<tr><td>r7</td></tr>\n'
+            '<tr><td rowspan="2">E</td><td>r8</td></tr>\n'
+            '<tr><td>r9</td></tr>\n'
+            '<tr><td>Tail</td><td>r10</td></tr>\n'
+            '</tbody></table>\n')
+
+
+def row_groups(table):
+    for child in table['children']:
+        if child['type'] == 'table_row_group':
+            yield child
+            yield from row_groups(child)
+
+
+def test_nested_merges_preserve_three_levels_siblings_and_gaps(tmp_path):
+    file = document(tmp_path, nested_source())
+    before = file.read_bytes()
+    table, = sut.extract_markdown_objects(file)
+    header, outer, tail = table['children']
+    assert header['row_index'] == 1 and tail['row_index'] == 10
+    assert outer['id'] == '1.group.2-9'
+    middle, sibling = outer['children']
+    assert middle['id'] == '1.group.2-7' and sibling['id'] == '1.group.8-9'
+    first, inner, gap, second = middle['children']
+    assert first['row_index'] == 2 and gap['row_index'] == 5
+    assert inner['id'] == '1.group.3-4' and second['id'] == '1.group.6-7'
+    assert [r['row_index'] for r in inner['children']] == [3, 4]
+    assert [r['row_index'] for r in second['children']] == [6, 7]
+    assert [(g['row_start'], g['row_end']) for g in row_groups(table)] == [
+        (2, 9), (2, 7), (3, 4), (6, 7), (8, 9)]
+    for group in row_groups(table):
+        assert group['line_start'] == group['row_start'] + 6
+        assert group['line_end'] == group['row_end'] + 6
+        assert group['content'] == '\n'.join(
+            file.read_text().splitlines()[group['line_start'] - 1:group['line_end']])
+    rows = list(physical_rows(table))
+    assert [r['row_index'] for r in rows] == list(range(1, 11))
+    assert len({r['id'] for r in rows}) == 10
+    assert [c['text'] for c in rows[3]['cells'] if c['inherited']] == ['A', 'B', 'C']
+    assert table == sut.extract_markdown_objects(file)[0]
+    assert file.read_bytes() == before
+
+
+def test_identical_ranges_do_not_add_redundant_group_levels(tmp_path):
+    source = nested_source().replace('<td rowspan="8">A</td>',
+                                    '<td rowspan="8" colspan="2">A</td><td rowspan="8">Copy</td>')
+    table, = sut.extract_markdown_objects(document(tmp_path, source))
+    groups = list(row_groups(table))
+    assert len(groups) == len({g['id'] for g in groups}) == 5
+    rows = list(physical_rows(table))
+    assert [r['row_index'] for r in rows] == list(range(1, 11))
+    assert [(c['text'], c['column'], c['colspan']) for c in rows[3]['cells']] == [
+        ('A', 1, 2), ('Copy', 3, 1), ('B', 4, 1), ('C', 5, 1), ('r4', 6, 1)]
+
+
+@pytest.mark.parametrize('span', [0, 99])
+def test_nested_groups_stop_at_html_row_group_boundaries(tmp_path, span):
+    source = nested_source().replace('rowspan="8"', f'rowspan="{span}"')
+    source = source.replace('<tr><td>Tail', '</tbody><tbody><tr><td>Tail')
+    table, = sut.extract_markdown_objects(document(tmp_path, source))
+    assert [g['id'] for g in row_groups(table)] == [
+        '1.group.2-9', '1.group.2-7', '1.group.3-4', '1.group.6-7', '1.group.8-9']
+    tail = table['children'][-1]
+    assert tail['row_index'] == 10
+    assert not any(c['inherited'] for c in tail['cells'])
 
 
 def test_pipe_rows_keep_source_headers_escaped_pipes_and_empty_cells(tmp_path):
@@ -73,7 +149,9 @@ def test_overlapping_and_contained_spans_combine_without_duplicate_rows(tmp_path
     group, last = table['children']
     assert group['type'] == 'table_row_group'
     assert (group['row_start'], group['row_end']) == (1, 4)
-    assert len(group['children']) == 4 and last['row_index'] == 5
+    assert len(group['children']) == 3 and last['row_index'] == 5
+    assert group['children'][1]['id'] == '1.group.2-3'
+    assert [r['row_index'] for r in group['children'][1]['children']] == [2, 3]
     rows = list(physical_rows(table))
     assert len({r['id'] for r in rows}) == 5
     assert [(c['text'], c['column'], c['colspan']) for c in rows[2]['cells']] == [
@@ -169,6 +247,102 @@ def test_row_group_and_table_summaries_flow_into_recursive_json(tmp_path, monkey
     assert flat[0] == table['object']
 
 
+def test_every_nested_subgroup_is_summarized_bottom_up_and_embedded(tmp_path, monkeypatch):
+    file = document(tmp_path, nested_source())
+    original = sut.extract_markdown_object_tree(file)
+    calls, bars = [], []
+    class Bar:
+        def __init__(self, **kwargs):
+            self.total, self.completed, self.closed = kwargs['total'], 0, False
+            bars.append(self)
+        def update(self, amount): self.completed += amount
+        def close(self): self.closed = True
+    async def text(client, content, **kwargs):
+        instruction, raw = content.split('\n', 1)
+        payload = json.loads(raw)
+        if 'row_index' in payload:
+            identity = f"1.row.{payload['row_index']}"
+            summary = f"R{payload['row_index']}"
+        elif 'row_start' in payload:
+            start, end = payload['row_start'], payload['row_end']
+            identity = f'1.group.{start}-{end}'
+            if (start, end) in {(3, 4), (6, 7)}:
+                assert [c['text'] for c in payload['inherited_cells']] == ['A', 'B']
+            elif (start, end) == (8, 9):
+                assert [c['text'] for c in payload['inherited_cells']] == ['A']
+            summary = f"G{start}-{end}(" + '|'.join(payload['child_summaries']) + ')'
+        else:
+            identity = '1'
+            summary = 'TABLE(' + '|'.join(payload['child_summaries']) + ')'
+        calls.append((identity, payload))
+        await asyncio.sleep(0)
+        return summary
+    monkeypatch.setattr(sut, 'get_summary_response_async', text)
+    monkeypatch.setattr('tqdm.auto.tqdm', Bar)
+    tree = asyncio.run(sut.summarize_markdown_object_tree_async(
+        file, object(), 'offline', show_progress=True, leaf_min_len=99999))
+    wrapper = next(sut._object_nodes(tree))
+    assert wrapper['c'] == next(sut._object_nodes(original))['c']
+    assert len(calls) == len({identity for identity, _ in calls}) == 16
+    indices = {identity: i for i, (identity, _) in enumerate(calls)}
+    payloads = dict(calls)
+    def check(node):
+        record = node['object']
+        assert node['s'] == record['summary'] and node['s'].strip()
+        assert [c['object'] for c in node.get('subnodes', [])] == record['children']
+        if record['children']:
+            assert payloads[str(record['id'])]['child_summaries'] == [c['summary'] for c in record['children']]
+        for child in node.get('subnodes', []):
+            assert indices[child['object']['id']] < indices[str(record['id'])]
+            assert child['s'] in node['s']
+            check(child)
+    check(wrapper)
+    assert wrapper['s'] in tree['summary']
+    assert bars[0].total == bars[0].completed == 1 and bars[0].closed
+    destination = tmp_path / 'nested_semantics.json'
+    sut._write_semantics_tree(destination, tree)
+    assert json.loads(destination.read_text()) == tree
+    flat = asyncio.run(sut.summarize_markdown_objects_async(file, object(), 'offline'))
+    assert flat[0] == wrapper['object']
+
+
+@pytest.mark.parametrize('target', ['row', 'group'])
+@pytest.mark.parametrize('failure', ['empty', 'error'])
+def test_deep_failures_locate_origin_and_cancel_siblings_without_publishing(tmp_path, monkeypatch, target, failure):
+    file = document(tmp_path, nested_source())
+    destination = tmp_path / 'nested_semantics.json'
+    destination.write_text('previous')
+    updates, active = [], set()
+    class Progress:
+        def update(self, amount): updates.append(amount)
+    async def text(client, content, **kwargs):
+        identity = object()
+        active.add(identity)
+        try:
+            payload = json.loads(content.split('\n', 1)[1])
+            await asyncio.sleep(0)
+            selected = (payload.get('row_index') == 4 if target == 'row' else
+                        (payload.get('row_start'), payload.get('row_end')) == (3, 4))
+            if selected:
+                if failure == 'error': raise RuntimeError('deep provider failure')
+                return ''
+            return 'summary'
+        finally:
+            active.remove(identity)
+    monkeypatch.setattr(sut, 'get_summary_response_async', text)
+    table, = sut.extract_markdown_objects(file)
+    async def run():
+        await sut._summarize_markdown_object_async(table, object(), 'offline', 'en', Progress())
+        sut._write_semantics_tree(destination, {'blocks': [table]})
+    with pytest.raises(ValueError) as exc:
+        asyncio.run(run())
+    message = str(exc.value)
+    assert 'table object 1' in message and '1.group.2-9' in message and '1.group.2-7' in message
+    assert 'table_row_group 1.group.3-4' in message
+    assert ('rows.md:10-10' if target == 'row' else 'rows.md:9-10') in message
+    assert not active and not updates and destination.read_text() == 'previous'
+
+
 @pytest.mark.parametrize('stage', ['row', 'group', 'table'])
 @pytest.mark.parametrize('failure', ['empty', 'error'])
 def test_failures_identify_rows_and_do_not_publish_or_complete_table(tmp_path, monkeypatch, stage, failure):
@@ -200,8 +374,9 @@ def test_failures_identify_rows_and_do_not_publish_or_complete_table(tmp_path, m
 
 
 @pytest.mark.parametrize('limit', [1, 2])
-def test_merged_row_concurrency_stays_bounded_and_cancellation_cleans_up(tmp_path, monkeypatch, limit):
-    file = document(tmp_path, merged_source())
+@pytest.mark.parametrize('source', [merged_source, nested_source])
+def test_merged_row_concurrency_stays_bounded_and_cancellation_cleans_up(tmp_path, monkeypatch, limit, source):
+    file = document(tmp_path, source())
     monkeypatch.setattr(sut, '_SUMMARY_CONCURRENCY', limit)
     monkeypatch.setattr(sut, '_SUMMARY_TASK_LIMIT', limit)
     active = peak = 0
@@ -223,7 +398,9 @@ def test_merged_row_concurrency_stays_bounded_and_cancellation_cleans_up(tmp_pat
             nonlocal active
             active += 1
             try:
-                if 'row_index": 2' in content:
+                payload = json.loads(content.split('\n', 1)[1])
+                if (payload.get('row_index') == 2 if source is merged_source else
+                        (payload.get('row_start'), payload.get('row_end')) == (3, 4)):
                     started.set()
                     await asyncio.Event().wait()
                 return 'summary'
