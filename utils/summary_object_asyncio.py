@@ -69,7 +69,7 @@ async def summarize_object_documents(
         return []
     checkpoint = (SummaryCheckpoint(
         checkpoint_path, model, checkpoint_host, resume,
-        settings={"summarizer": "object", "lang": lang,
+        settings={"summarizer": "object", "object_schema_version": 2, "lang": lang,
                   "leaf_min_len": leaf_min_len, "min_len": min_len},
     ) if checkpoint_path is not None else None)
     results = [checkpoint.completed(file) if checkpoint else None for file in files]

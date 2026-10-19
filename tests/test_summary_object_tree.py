@@ -72,7 +72,7 @@ def test_same_line_tables_and_surrounding_html_are_distinct(tmp_path):
     assert any(n.get('t') == 'Str' and n.get('c') == 'after' for n in nodes(tree))
 
 
-def test_summaries_are_atomic_and_propagate_to_all_ancestors(tmp_path, monkeypatch):
+def test_summaries_include_rows_and_propagate_to_all_ancestors(tmp_path, monkeypatch):
     file = sample(tmp_path)
     original = sut.extract_markdown_object_tree(file)
     calls, images = [], []
@@ -88,7 +88,7 @@ def test_summaries_are_atomic_and_propagate_to_all_ancestors(tmp_path, monkeypat
     monkeypatch.setattr(sut, 'get_image_summary_async', image)
     result = asyncio.run(sut.summarize_markdown_object_tree_async(file, object(), 'offline', leaf_min_len=1))
     wrappers = list(sut._object_nodes(result))
-    assert len([x for x in calls if x.startswith('Summarize this')]) == 3
+    assert len([x for x in calls if x.startswith('Summarize this')]) == 4
     assert len(images) == 2
     for before, after in zip(sut._object_nodes(original), wrappers):
         assert before['c'] == after['c']
@@ -203,7 +203,7 @@ def test_empty_object_summary_reports_source_location(tmp_path, monkeypatch):
         asyncio.run(sut.summarize_markdown_object_tree_async(file, object(), 'offline'))
 
 
-def test_pipe_tables_preserve_captions_spans_and_atomic_subtrees(tmp_path, monkeypatch):
+def test_pipe_tables_preserve_captions_spans_and_original_subtrees(tmp_path, monkeypatch):
     table = '| Item | Value |\n| :--- | ---: |\n| first | 2 |\n| second | 3 |\n'
     file = write(tmp_path, '# Parent\n\n## Child\n\n表 1 数据\n\n' + table + '\nAfter.\n')
     before = file.read_bytes()
@@ -225,8 +225,13 @@ def test_pipe_tables_preserve_captions_spans_and_atomic_subtrees(tmp_path, monke
         file, object(), 'offline', leaf_min_len=99999))
     summarized = next(sut._object_nodes(result))
     assert summarized['c'] == wrapper['c']
-    assert len(prompts) == 1 and 'complete Markdown pipe table' in prompts[0]
-    assert json.loads(prompts[0].split('\n', 1)[1]) == {'caption': '表 1 数据', 'content': table}
+    assert len(prompts) == 4 and 'complete Markdown pipe table' in prompts[-1]
+    assert json.loads(prompts[-1].split('\n', 1)[1]) == {
+        'caption': '表 1 数据', 'content': table,
+        'child_summaries': ['PIPE-TABLE-SUMMARY'] * 3}
+    assert len(summarized['subnodes']) == 3
+    assert all(row['s'] == row['object']['summary'] == 'PIPE-TABLE-SUMMARY'
+               for row in summarized['subnodes'])
     assert summarized['s'] in result['blocks'][0]['subnodes'][0]['s']
     assert summarized['s'] in result['summary']
     assert file.read_bytes() == before

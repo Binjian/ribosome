@@ -57,7 +57,7 @@ def test_code_fences_and_captionless_objects(tmp_path):
     assert objects[1]['content'] == '<table>\n<tr><td>x</td></tr>\n</table>'
 
 
-def test_summaries_are_atomic_captioned_and_ordered(tmp_path, monkeypatch):
+def test_summaries_are_captioned_and_ordered_with_table_rows(tmp_path, monkeypatch):
     file = document(tmp_path, '![a](a.png)\n![b](b.png)\n图 1 pair\n\n表 1 data\n\n'
                     '<table><tr><td><img src="inner.png"/>x</td></tr></table>\n\nSteps:\n\n- one\n- two\n')
     visuals, prompts = [], []
@@ -73,7 +73,7 @@ def test_summaries_are_atomic_captioned_and_ordered(tmp_path, monkeypatch):
     monkeypatch.setattr(sut, 'get_summary_response_async', text)
     results = asyncio.run(sut.summarize_markdown_objects_async(file, object(), 'offline'))
     assert [o['id'] for o in results] == [1, 2, 3]
-    assert len(visuals) == 2 and len(prompts) == 3
+    assert len(visuals) == 2 and len(prompts) == 4
     assert all(Path(p).parent == tmp_path for p in visuals)
     assert all(x in results[0]['summary'] for x in ['图 1 pair', 'visual:a.png', 'visual:b.png'])
     assert '<table>' in results[1]['summary'] and '表 1 data' in results[1]['summary']
@@ -87,14 +87,14 @@ def test_failure_cleans_up_siblings_and_locates_object(tmp_path, monkeypatch):
         key = kwargs['content']
         active.add(key)
         try:
-            if 'HTML table' in key:
+            if 'table row' in key:
                 await asyncio.sleep(0)
                 raise RuntimeError('provider failed')
             await asyncio.sleep(20)
         finally:
             active.remove(key)
     monkeypatch.setattr(sut, 'get_summary_response_async', fail)
-    with pytest.raises(ValueError, match=r'table object 2 at .*manual.md:3-3: provider failed'):
+    with pytest.raises(ValueError, match=r'table object 2 at .*manual.md:3-3: .*table_row 2.row.1.*provider failed'):
         asyncio.run(sut.summarize_markdown_objects_async(file, object(), 'offline'))
     assert not active
 
