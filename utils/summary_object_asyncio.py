@@ -67,24 +67,29 @@ async def summarize_object_documents(
     files = [Path(file).resolve() for file in files]
     if not files:
         return []
-    checkpoint = (SummaryCheckpoint(
-        checkpoint_path, model, checkpoint_host, resume,
-        settings={"summarizer": "object", "object_schema_version": 3, "lang": lang,
-                  "leaf_min_len": leaf_min_len, "min_len": min_len},
-    ) if checkpoint_path is not None else None)
-    results = [checkpoint.completed(file) if checkpoint else None for file in files]
-    for row in results:
-        if row is not None:
-            row["corpus"] = str(corpus)
-    pending = iter((index, file) for index, file in enumerate(files) if results[index] is None)
     document_progress = ContextVar("object_document_progress", default=None)
     extract_tree = dom_summary.extract_markdown_object_tree
     summarize_object = dom_summary._summarize_markdown_object_async
     active = {}
-    totals = {"objects": 0, "done_objects": 0,
-              "documents": sum(row is not None for row in results), "status": "starting"}
+    checkpoint = None
+    image_token = None
     _batch_active = True
     try:
+        snapshot = await dom_summary._prepare_ignored_images()
+        image_token = dom_summary._ignored_images.set(snapshot)
+        checkpoint = (SummaryCheckpoint(
+            checkpoint_path, model, checkpoint_host, resume,
+            settings={"summarizer": "object", "object_schema_version": 4, "lang": lang,
+                      "leaf_min_len": leaf_min_len, "min_len": min_len,
+                      "ignored_images_signature": snapshot.signature},
+        ) if checkpoint_path is not None else None)
+        results = [checkpoint.completed(file) if checkpoint else None for file in files]
+        for row in results:
+            if row is not None:
+                row["corpus"] = str(corpus)
+        pending = iter((index, file) for index, file in enumerate(files) if results[index] is None)
+        totals = {"objects": 0, "done_objects": 0,
+                  "documents": sum(row is not None for row in results), "status": "starting"}
         with progress_factory(total=len(files), desc="Documents", unit="doc", position=0) as documents, \
              progress_factory(total=0, desc="Objects (active documents)", unit="object", position=1) as objects:
 
@@ -183,6 +188,8 @@ async def summarize_object_documents(
                     await asyncio.gather(display_task, return_exceptions=True)
                     render()
     finally:
+        if image_token is not None:
+            dom_summary._ignored_images.reset(image_token)
         _batch_active = False
         if checkpoint:
             checkpoint.save()
