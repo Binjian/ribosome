@@ -405,3 +405,89 @@ def test_generation_settings_invalidate_checkpoint(tmp_path):
         finally:
             await client._client.aclose()
     asyncio.run(scenario())
+
+
+def test_short_document_publishes_and_reuses_worker_while_long_documents_run(tmp_path, monkeypatch):
+    files = [document(tmp_path, f'long{i}.md', '- long\n') for i in range(3)]
+    short = document(tmp_path, 'short.md', '- short\n')
+    following = document(tmp_path, 'following.md', '- following\n')
+    files += [short, following]
+    checkpoint = tmp_path / 'checkpoint.json'
+    monkeypatch.setattr(dom_summary, '_SUMMARY_CONCURRENCY', 8)
+    original_semaphore = dom_summary._get_summary_semaphore
+
+    async def scenario():
+        release_long, release_short = asyncio.Event(), asyncio.Event()
+        final_visible, following_started = asyncio.Event(), asyncio.Event()
+        blocked = set()
+        class ObservedProgress(Progress):
+            def set_postfix_str(self, text, *, refresh):
+                super().set_postfix_str(text, refresh=refresh)
+                if 'short.md: objects 1/1, final document summary' in text:
+                    assert 'running=1' in text
+                    final_visible.set()
+        async def text(client, content, **kwargs):
+            name = Path(shared._document_id.get()).name
+            if name.startswith('long'):
+                blocked.add(name)
+                await release_long.wait()
+            elif name == 'short.md' and dom_summary._summary_stage.get() == 'final document summary':
+                await release_short.wait()
+            elif name == 'following.md':
+                following_started.set()
+            return 'summary'
+        monkeypatch.setattr(dom_summary, 'get_summary_response_async', text)
+        task = asyncio.create_task(app.summarize_object_documents(
+            files, object(), 'offline', concurrency=4, leaf_min_len=1,
+            checkpoint_path=checkpoint, progress_factory=ObservedProgress, progress_interval=0.001))
+        try:
+            await asyncio.wait_for(final_visible.wait(), 3)
+            assert len(blocked) == 3
+            assert not short.with_name('short_semantics.json').exists()
+            release_short.set()
+            await asyncio.wait_for(following_started.wait(), 3)
+            assert not task.done()  # Three long documents are still blocked.
+            assert short.with_name('short_semantics.json').exists()
+            entries = json.loads(checkpoint.read_text())['entries']
+            assert entries[str(short)]['row']['status'] == 'completed'
+            assert not any(str(file) in entries for file in files[:3])
+            assert any(f'COMPLETED {short}' in message for message in Progress.messages)
+        finally:
+            release_short.set()
+            release_long.set()
+            rows = await asyncio.wait_for(task, 3)
+        assert [row['file'] for row in rows] == [str(file) for file in files]
+        assert all(row['status'] == 'completed' for row in rows)
+    asyncio.run(scenario())
+    assert dom_summary._get_summary_semaphore is original_semaphore
+
+
+def test_queue_progress_and_cancellation_release_shared_slots(tmp_path, monkeypatch):
+    files = [document(tmp_path, f'{i}.md', '- item\n') for i in range(2)]
+    monkeypatch.setattr(dom_summary, '_SUMMARY_CONCURRENCY', 1)
+    original_semaphore = dom_summary._get_summary_semaphore
+    async def scenario():
+        queued = asyncio.Event()
+        class ObservedProgress(Progress):
+            def set_postfix_str(self, text, *, refresh):
+                super().set_postfix_str(text, refresh=refresh)
+                if 'queued=1' in text and 'running=1' in text:
+                    queued.set()
+        async def text(*args, **kwargs):
+            await asyncio.Event().wait()
+        monkeypatch.setattr(dom_summary, 'get_summary_response_async', text)
+        task = asyncio.create_task(app.summarize_object_documents(
+            files, object(), 'offline', concurrency=2, leaf_min_len=1,
+            progress_factory=ObservedProgress, progress_interval=0.001))
+        try:
+            await asyncio.wait_for(queued.wait(), 3)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert dom_summary._get_summary_semaphore is original_semaphore
+        semaphore = original_semaphore()
+        await asyncio.wait_for(semaphore.acquire(), 1)
+        semaphore.release()
+        assert not app._batch_active
+    asyncio.run(scenario())

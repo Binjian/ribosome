@@ -4,6 +4,7 @@ Importing this module does not import DOM modules or contact a model provider.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 import math
 from pathlib import Path
@@ -70,6 +71,7 @@ async def summarize_object_documents(
     document_progress = ContextVar("object_document_progress", default=None)
     extract_tree = dom_summary.extract_markdown_object_tree
     summarize_object = dom_summary._summarize_markdown_object_async
+    get_semaphore = dom_summary._get_summary_semaphore
     active = {}
     checkpoint = None
     image_token = None
@@ -115,7 +117,9 @@ async def summarize_object_documents(
                 objects.total = totals["objects"]
                 objects.n = totals["done_objects"]
                 objects.set_postfix_str(" | ".join(
-                    f"{state['name']}: {state['done']}/{state['total']} ({perf_counter() - state['started']:.0f}s)" for state in active.values()),
+                    f"{state['name']}: objects {state['done']}/{state['total']}, "
+                    f"{state['phase']}, queued={state['queued']}, running={state['running']} "
+                    f"({perf_counter() - state['started']:.0f}s)" for state in active.values()),
                     refresh=False)
                 objects.refresh()
                 documents.refresh()
@@ -125,12 +129,35 @@ async def summarize_object_documents(
                     await asyncio.sleep(progress_interval)
                     render()
 
+            @asynccontextmanager
+            async def semaphore_with_progress():
+                # Observe the existing shared limit without changing scheduling.
+                state = document_progress.get()
+                if state is None:
+                    async with get_semaphore():
+                        yield
+                    return
+                if dom_summary._summary_stage.get() == 'final document summary':
+                    state['phase'] = 'final document summary'
+                state['queued'] += 1
+                try:
+                    await get_semaphore().acquire()
+                finally:
+                    state['queued'] -= 1
+                state['running'] += 1
+                try:
+                    yield
+                finally:
+                    state['running'] -= 1
+                    get_semaphore().release()
+
             def extract_with_progress(file):
                 tree = extract_tree(file)
                 state = document_progress.get()
                 if state is not None:
                     state["total"] = sum(1 for _ in dom_summary._object_nodes(tree))
                     totals["objects"] += state["total"]
+                    state["phase"] = "summarizing tree"
                 return tree
 
             async def summarize_with_progress(*args, **kwargs):
@@ -139,6 +166,8 @@ async def summarize_object_documents(
                 if state is not None:
                     state["done"] += 1
                     totals["done_objects"] += 1
+                    if state["done"] == state["total"]:
+                        state["phase"] = "objects done; prose/parents pending"
                 return result
 
             async def process_document(index, file):
@@ -146,7 +175,8 @@ async def summarize_object_documents(
                 output = file.with_name(f"{file.stem}_semantics.json")
                 row = {"corpus": str(corpus), "file": str(file), "status": "failed",
                        "output": str(output), "error": "", "resumed": False}
-                state = {"name": file.name, "total": 0, "done": 0, "started": started}
+                state = {"name": file.name, "total": 0, "done": 0, "started": started,
+                         "phase": "parsing", "queued": 0, "running": 0}
                 active[index] = state
                 token = document_progress.set(state)
                 metrics_token = _document_id.set(str(file))
@@ -182,6 +212,8 @@ async def summarize_object_documents(
                 results[index] = row
                 totals["documents"] += 1
                 totals["status"] = row["status"]
+                if row["status"] == "completed":
+                    progress_factory.write(f"COMPLETED {file} ({row['elapsed_seconds']:.1f}s)")
 
             async def worker():
                 for index, file in pending:
@@ -190,7 +222,8 @@ async def summarize_object_documents(
             # Scope the instrumentation to this batch, just as the natural-text
             # runner does. Context variables keep concurrent documents separate.
             with patch.object(dom_summary, "extract_markdown_object_tree", extract_with_progress), \
-                 patch.object(dom_summary, "_summarize_markdown_object_async", summarize_with_progress):
+                 patch.object(dom_summary, "_summarize_markdown_object_async", summarize_with_progress), \
+                 patch.object(dom_summary, "_get_summary_semaphore", semaphore_with_progress):
                 tasks = []
                 display_task = asyncio.create_task(renderer())
                 try:
