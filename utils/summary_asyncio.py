@@ -16,6 +16,7 @@ import sys
 from time import perf_counter
 from unittest.mock import patch
 
+from httpx import TimeoutException as HTTPTimeoutError
 from ollama import AsyncClient
 from tqdm.auto import tqdm
 
@@ -114,8 +115,21 @@ class RequestMetrics:
 class SummaryAsyncClient(AsyncClient):
     """Shared Ollama client with metrics for non-streaming summary requests."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, request_timeout=None, max_tokens=None, think=None, **kwargs):
+        if request_timeout is not None and (
+            isinstance(request_timeout, bool) or not isinstance(request_timeout, (int, float))
+            or not math.isfinite(request_timeout) or request_timeout <= 0
+        ):
+            raise ValueError("request_timeout must be finite and positive")
+        if max_tokens is not None and (
+            isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1
+        ):
+            raise ValueError("max_tokens must be a positive integer")
+        if request_timeout is not None:
+            kwargs.setdefault("timeout", request_timeout)
         super().__init__(*args, **kwargs)
+        self.request_timeout, self.max_tokens, self.think = request_timeout, max_tokens, think
+        self.active_requests = {}
         self.metrics = RequestMetrics()
 
     def reset_metrics(self):
@@ -126,19 +140,33 @@ class SummaryAsyncClient(AsyncClient):
     async def chat(self, *args, **kwargs):
         if kwargs.get("stream", False):
             raise ValueError("SummaryAsyncClient metrics require stream=False")
+        if self.think is not None:
+            kwargs.setdefault("think", self.think)
+        if self.max_tokens is not None:
+            options = kwargs.get("options") or {}
+            options = options.model_dump(exclude_none=True) if hasattr(options, "model_dump") else dict(options)
+            options.setdefault("num_predict", self.max_tokens)
+            kwargs["options"] = options
         document = _document_id.get()
         started = perf_counter()
+        identity = object()
+        self.active_requests[identity] = (document, started)
         response = None
         status = "error"
         self.metrics.start(document)
         try:
-            response = await super().chat(*args, **kwargs)
+            async with asyncio.timeout(self.request_timeout):
+                response = await super().chat(*args, **kwargs)
             status = "completed"
             return response
+        except (TimeoutError, HTTPTimeoutError) as exc:
+            raise TimeoutError(f"Ollama summary request timed out for {document or 'unassigned document'}; "
+                               "check server load or RIBOSOME_SUMMARY_REQUEST_TIMEOUT") from exc
         except asyncio.CancelledError:
             status = "cancelled"
             raise
         finally:
+            self.active_requests.pop(identity, None)
             self.metrics.finish(document, started, response, status)
 
 

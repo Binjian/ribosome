@@ -81,25 +81,41 @@ async def summarize_object_documents(
             checkpoint_path, model, checkpoint_host, resume,
             settings={"summarizer": "object", "object_schema_version": 4, "lang": lang,
                       "leaf_min_len": leaf_min_len, "min_len": min_len,
-                      "ignored_images_signature": snapshot.signature},
+                      "ignored_images_signature": snapshot.signature,
+                      "generation": ({"think": client.think, "max_tokens": client.max_tokens}
+                                     if isinstance(client, SummaryAsyncClient) else None)},
         ) if checkpoint_path is not None else None)
         results = [checkpoint.completed(file) if checkpoint else None for file in files]
         for row in results:
             if row is not None:
                 row["corpus"] = str(corpus)
         pending = iter((index, file) for index, file in enumerate(files) if results[index] is None)
+        durations = []
+        resumed_count = sum(row is not None for row in results)
+        request_offset = len(client.metrics.records) if isinstance(client, SummaryAsyncClient) else 0
         totals = {"objects": 0, "done_objects": 0,
                   "documents": sum(row is not None for row in results), "status": "starting"}
-        with progress_factory(total=len(files), desc="Documents", unit="doc", position=0) as documents, \
-             progress_factory(total=0, desc="Objects (active documents)", unit="object", position=1) as objects:
+        with progress_factory(total=len(files), desc="Documents", unit="doc", position=0,
+                              bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]") as documents, \
+             progress_factory(total=0, desc="Objects (active documents)", unit="object", position=1,
+                              bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]") as objects:
 
             def render():
                 documents.n = totals["documents"]
-                documents.set_postfix(status=totals["status"], active=len(active), refresh=False)
+                status = dict(status=totals["status"], active=len(active), resumed=resumed_count)
+                if durations:
+                    status.update(last_doc=f"{durations[-1]:.1f}s", mean_doc=f"{sum(durations) / len(durations):.1f}s")
+                if isinstance(client, SummaryAsyncClient):
+                    status.update(requests=len(client.metrics.records) - request_offset,
+                                  in_flight=len(client.active_requests))
+                    if client.active_requests:
+                        oldest = min(started for _, started in client.active_requests.values())
+                        status["oldest_request"] = f"{perf_counter() - oldest:.1f}s"
+                documents.set_postfix(**status, refresh=False)
                 objects.total = totals["objects"]
                 objects.n = totals["done_objects"]
                 objects.set_postfix_str(" | ".join(
-                    f"{state['name']}: {state['done']}/{state['total']}" for state in active.values()),
+                    f"{state['name']}: {state['done']}/{state['total']} ({perf_counter() - state['started']:.0f}s)" for state in active.values()),
                     refresh=False)
                 objects.refresh()
                 documents.refresh()
@@ -130,7 +146,7 @@ async def summarize_object_documents(
                 output = file.with_name(f"{file.stem}_semantics.json")
                 row = {"corpus": str(corpus), "file": str(file), "status": "failed",
                        "output": str(output), "error": "", "resumed": False}
-                state = {"name": file.name, "total": 0, "done": 0}
+                state = {"name": file.name, "total": 0, "done": 0, "started": started}
                 active[index] = state
                 token = document_progress.set(state)
                 metrics_token = _document_id.set(str(file))
@@ -154,9 +170,11 @@ async def summarize_object_documents(
                     _document_id.reset(metrics_token)
                     document_progress.reset(token)
                     active.pop(index)
-                    totals["objects"] -= state["total"] - state["done"]
+                    totals["objects"] -= state["total"]
+                    totals["done_objects"] -= state["done"]
                 row.update(elapsed_seconds=round(perf_counter() - started, 3),
                            object_count=state["total"], completed_objects=state["done"])
+                durations.append(row["elapsed_seconds"])
                 if isinstance(client, SummaryAsyncClient):
                     row.update(client.metrics.snapshot(document=str(file)))
                 if checkpoint:

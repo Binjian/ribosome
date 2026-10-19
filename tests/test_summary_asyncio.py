@@ -450,3 +450,41 @@ def test_checkpoint_retries_failures_and_missing_outputs(tmp_path):
     assert checkpoint.completed(file)['resumed']
     output.write_text('{"changed": true}')
     assert checkpoint.completed(file) is None
+
+
+@pytest.mark.parametrize('outcome', ['success', 'timeout', 'cancel'])
+def test_application_client_request_limits_and_activity_cleanup(monkeypatch, outcome):
+    calls = []
+    async def chat(self, *args, **kwargs):
+        calls.append(kwargs)
+        await asyncio.sleep(0)
+        if outcome != 'success':
+            await asyncio.Event().wait()
+        return {}
+    monkeypatch.setattr(app.AsyncClient, 'chat', chat)
+    async def scenario():
+        client = app.SummaryAsyncClient(request_timeout=0.02, max_tokens=42, think=False)
+        token = app._document_id.set('manual.md')
+        try:
+            task = asyncio.create_task(client.chat(model='offline'))
+            await asyncio.sleep(0)
+            assert len(client.active_requests) == 1
+            if outcome == 'cancel':
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError): await task
+            elif outcome == 'timeout':
+                with pytest.raises(TimeoutError, match='manual.md'): await task
+            else:
+                await task
+            assert not client.active_requests and client.metrics.active == 0
+            assert calls[0]['think'] is False
+            assert calls[0]['options']['num_predict'] == 42
+            if outcome == 'success':
+                await client.chat(model='offline', think=True, options={'num_predict': 7})
+                assert calls[-1]['think'] is True and calls[-1]['options']['num_predict'] == 7
+            else:
+                assert client.metrics.records[-1]['status'] == ('error' if outcome == 'timeout' else 'cancelled')
+        finally:
+            app._document_id.reset(token)
+            await client._client.aclose()
+    asyncio.run(scenario())

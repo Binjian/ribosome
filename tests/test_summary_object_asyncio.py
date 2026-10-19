@@ -28,7 +28,9 @@ class Progress:
     def __enter__(self): return self
     def __exit__(self, *args): self.closed = True
     def refresh(self): self.refreshes += 1
-    def set_postfix(self, **kwargs): assert kwargs['refresh'] is False
+    def set_postfix(self, **kwargs):
+        assert kwargs['refresh'] is False
+        self.status = kwargs
     def set_postfix_str(self, text, *, refresh): assert refresh is False
     @classmethod
     def write(cls, message): cls.messages.append(message)
@@ -317,7 +319,8 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
     namespace = {}
     exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), namespace)
-    assert captured == {'host': 'http://configured:11434', 'headers': {'Authorization': 'Bearer test-key'}}
+    assert captured == {'host': 'http://configured:11434', 'headers': {'Authorization': 'Bearer test-key'},
+                        'request_timeout': 300.0, 'max_tokens': 2048, 'think': False}
     assert namespace['SUMMARY_MODEL'] == 'vision'
     assert [p.name for p in namespace['INPUT_DIRS']] == ['md.json.semantics.coding.4.0', 'md.json.semantics.coding.5.0']
     assert namespace['IGNORED_IMAGES_DIR'] == tmp_path / 'assets' / 'images_ignored'
@@ -368,3 +371,37 @@ def test_saved_output_preview_includes_nested_rows_and_accepts_only_intentional_
     table['subnodes'] = []
     with pytest.raises(ValueError, match='Row hierarchy mismatch'):
         scope['summary_records'](invalid)
+
+
+def test_batch_progress_reports_actual_durations_and_excludes_resumed(tmp_path):
+    file = document(tmp_path)
+    options = dict(checkpoint_path=tmp_path / 'checkpoint.json')
+    row = run([file], **options)[0]
+    documents, objects = Progress.instances[-2:]
+    assert documents.status['mean_doc'] == f"{row['elapsed_seconds']:.1f}s"
+    assert documents.status['resumed'] == 0
+    assert objects.n == objects.total == 0
+    run([file], **options)
+    documents = Progress.instances[-2]
+    assert documents.status['resumed'] == 1
+    assert 'mean_doc' not in documents.status
+
+
+def test_generation_settings_invalidate_checkpoint(tmp_path):
+    file = document(tmp_path)
+    async def scenario():
+        client = shared.SummaryAsyncClient(host='http://offline', max_tokens=42, think=False)
+        options = dict(checkpoint_path=tmp_path / 'checkpoint.json',
+                       progress_factory=Progress, leaf_min_len=99999)
+        try:
+            async def batch():
+                return (await app.summarize_object_documents([file], client, 'offline', **options))[0]
+            assert not (await batch())['resumed']
+            assert (await batch())['resumed']
+            client.max_tokens = 84
+            assert not (await batch())['resumed']
+            client.think = True
+            assert not (await batch())['resumed']
+        finally:
+            await client._client.aclose()
+    asyncio.run(scenario())
