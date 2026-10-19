@@ -205,10 +205,11 @@ def test_manual_ollama_configuration_uses_project_env(tmp_path, monkeypatch):
     def client(**kwargs):
         captured.update(kwargs)
         return object()
-    monkeypatch.setattr(sut, 'AsyncClient', client)
+    monkeypatch.setattr(sut, '_NotebookSummaryClient', client)
     _, model = sut._configured_ollama_summary_client()
     assert model == 'vision-model'
-    assert captured == {'host': 'http://configured:11434', 'headers': {'Authorization': 'Bearer test-key'}}
+    assert captured == {'host': 'http://configured:11434', 'headers': {'Authorization': 'Bearer test-key'},
+                        'request_timeout': 300.0, 'max_tokens': 2048}
     (tmp_path / '.env').write_text('OLLAMA_HOST=http://configured:11434\n')
     with pytest.raises(ValueError, match='OLLAMA_SUMMARY_MODEL'):
         sut._configured_ollama_summary_client()
