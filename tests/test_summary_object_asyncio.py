@@ -1,6 +1,8 @@
 """Offline coverage for two-corpus object summarization and its notebook."""
 import ast
 import asyncio
+from collections import Counter
+from copy import deepcopy
 import json
 from pathlib import Path
 import sys
@@ -318,9 +320,51 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     assert captured == {'host': 'http://configured:11434', 'headers': {'Authorization': 'Bearer test-key'}}
     assert namespace['SUMMARY_MODEL'] == 'vision'
     assert [p.name for p in namespace['INPUT_DIRS']] == ['md.json.semantics.coding.4.0', 'md.json.semantics.coding.5.0']
+    assert namespace['IGNORED_IMAGES_DIR'] == tmp_path / 'assets' / 'images_ignored'
+    assert namespace['PREVIEW_OUTPUTS'] == 3
+    assert namespace['os'].environ['PROJ_ROOT'] == str(tmp_path)
     env.write_text('OLLAMA_HOST=http://configured:11434\n')
     with pytest.raises(ValueError, match='OLLAMA_SUMMARY_MODEL'):
         exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), {})
     env.unlink()
     with pytest.raises(FileNotFoundError, match='Missing configuration'):
         exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), {})
+
+
+def test_saved_output_preview_includes_nested_rows_and_accepts_only_intentional_empty_summaries(tmp_path, monkeypatch):
+    from PIL import Image
+    monkeypatch.setenv('PROJ_ROOT', str(tmp_path))
+    references = tmp_path / 'assets' / 'images_ignored'
+    references.mkdir(parents=True)
+    Image.new('RGB', (40, 20), 'red').save(references / 'logo.png')
+    (tmp_path / 'logo.png').write_bytes((references / 'logo.png').read_bytes())
+    file = document(tmp_path, source=(
+        '# Manual\n\n![ignored](logo.png)\n图 1 Logo\n\n'
+        '| Header |\n| --- |\n| value |\n\n'
+        '<table><tr><td rowspan="3">A</td><td rowspan="2">B</td><td>one</td></tr>'
+        '<tr><td>two</td></tr><tr><td>three</td></tr></table>\n'))
+    tree = asyncio.run(dom_summary.summarize_markdown_object_tree_async(
+        file, object(), 'offline', leaf_min_len=99999))
+    notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
+    source = next(cell.source for cell in notebook.cells
+                  if cell.cell_type == 'code' and 'def summary_records(' in cell.source)
+    scope = {'results': [], 'PREVIEW_OUTPUTS': 0}
+    exec(compile(source, '<object-output-preview>', 'exec'), scope)
+    records = scope['summary_records'](tree)
+    assert Counter(record['type'] for record in records) == {
+        'figure': 1, 'table': 2, 'table_row': 5, 'table_row_group': 2}
+    ignored, = [record for record in records if record['status'] == 'ignored']
+    assert ignored['summary'] == '' and ignored['ignored_images'] == 1
+    assert max(record['depth'] for record in records) == 3
+    assert all(record['summary'].strip() for record in records if record['status'] == 'summarized')
+    assert [record['is_header'] for record in records if record['type'] == 'table_row'].count(True) == 1
+    invalid = deepcopy(tree)
+    figure = next(dom_summary._object_nodes(invalid))
+    figure['object'].pop('summary_ignored')
+    with pytest.raises(ValueError, match='Invalid summary for figure'):
+        scope['summary_records'](invalid)
+    invalid = deepcopy(tree)
+    table = next(node for node in dom_summary._object_nodes(invalid) if node['object']['type'] == 'table')
+    table['subnodes'] = []
+    with pytest.raises(ValueError, match='Row hierarchy mismatch'):
+        scope['summary_records'](invalid)
