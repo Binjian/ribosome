@@ -217,7 +217,9 @@ def test_manual_ollama_configuration_uses_project_env(tmp_path, monkeypatch):
         sut._configured_ollama_summary_client()
 
 
-def test_sx322018_notebook_function_uses_configured_root_and_exports(tmp_path, monkeypatch):
+@pytest.mark.parametrize('ignored_figure', [False, True])
+def test_sx322018_notebook_function_uses_configured_root_and_exports(tmp_path, monkeypatch, ignored_figure):
+    from copy import deepcopy
     import json
     import os
     notebook = json.loads(Path('nbs/01.core.dom.summary.object.ipynb').read_text())
@@ -230,13 +232,26 @@ def test_sx322018_notebook_function_uses_configured_root_and_exports(tmp_path, m
     monkeypatch.setenv('PROJ_ROOT', str(tmp_path))
     records = [{'id': i, 'type': kind, 'summary': ''}
                for i, kind in enumerate(['figure', 'table', 'list'], 1)]
+    records[0]['images'] = [{'src': 'logo.png', 'alt': 'logo'}]
+    records[1]['children'] = [{'id': '2.group.1-2', 'type': 'table_row_group', 'summary': '',
+                              'children': [{'id': '2.row.1', 'type': 'table_row', 'summary': ''}]}]
     client = object()
     async def summarize(path, actual_client, model, **kwargs):
         assert path == file and actual_client is client and model == 'configured-model'
         assert kwargs == {'lang': 'zh', 'show_progress': True}
+        def summarized(record):
+            result = deepcopy(record)
+            result['summary'] = '摘要'
+            for child in result.get('children', []):
+                child.update(summarized(child))
+            if ignored_figure and result['type'] == 'figure':
+                result.update(summary='', summary_ignored=True)
+                result['images'][0]['ignored_reference'] = 'assets/images_ignored/logo.png'
+            return result
+        objects = [summarized(record) for record in records]
         return {'blocks': [{'t': 'Section', 'c': [
-            {'t': 'Div', 'c': [[], []], 's': '摘要',
-             'object': {**record, 'summary': '摘要'}} for record in records],
+            {'t': 'Div', 'c': [[], []], 's': record['summary'],
+             'object': record} for record in objects],
             'subnodes': []}], 'summary': '文档摘要'}
     def eq(a, b):
         assert a == b
@@ -251,3 +266,37 @@ def test_sx322018_notebook_function_uses_configured_root_and_exports(tmp_path, m
     output = file.with_name(file.stem + '_semantics.json')
     assert json.loads(output.read_text(encoding='utf-8')) == result
     assert file.read_text(encoding='utf-8') == 'unchanged source'
+
+
+@pytest.mark.parametrize('case', ['ignored_figure', 'normal', 'empty', 'mismatched', 'ignored_table'])
+def test_manual_preview_cell_accepts_only_intentionally_empty_figure_summaries(tmp_path, case):
+    import ast
+    import json
+    notebook = json.loads(Path('nbs/01.core.dom.summary.object.ipynb').read_text())
+    source = next(''.join(cell['source']) for cell in notebook['cells']
+                  if "object_summaries = await summarize_markdown_object_tree_async(" in ''.join(cell.get('source', [])))
+    ignored = case in {'ignored_figure', 'ignored_table'}
+    summary = '' if ignored or case == 'empty' else 'summary'
+    record = {'id': 1, 'type': 'table' if case == 'ignored_table' else 'figure', 'summary': summary}
+    if ignored:
+        record['summary_ignored'] = True
+    tree = {'blocks': [{'t': 'Div', 'c': [[], []], 'object': record,
+                        's': 'different summary' if case == 'mismatched' else summary}],
+            'summary': 'document summary'}
+    async def summarize(*args, **kwargs): return tree
+    output = tmp_path / 'manual_semantics.json'
+    output.write_text('previous')
+    scope = {'_configured_ollama_summary_client': lambda: (object(), 'offline'),
+             'summarize_markdown_object_tree_async': summarize, 'sample_file': tmp_path / 'manual.md',
+             '_object_nodes': sut._object_nodes, '_write_semantics_tree': sut._write_semantics_tree,
+             'semantics_file': output}
+    def run():
+        asyncio.run(eval(compile(source, '<manual-preview-cell>', 'exec',
+                                 flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT), scope))
+    if case in {'ignored_figure', 'normal'}:
+        run()
+        assert json.loads(output.read_text()) == tree
+    else:
+        with pytest.raises(AssertionError):
+            run()
+        assert output.read_text() == 'previous'
