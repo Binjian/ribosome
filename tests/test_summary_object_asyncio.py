@@ -188,7 +188,7 @@ def test_checkpoint_resume_and_configuration_invalidation(tmp_path, monkeypatch)
     assert checkpoint.completed(file) is None
 
 
-def test_added_recursion_reuses_completed_documents_and_summarizes_pending_ones(tmp_path, monkeypatch):
+def test_added_recursion_fills_completed_documents_and_summarizes_pending_ones(tmp_path, monkeypatch):
     first = document(tmp_path, 'completed.md', '- parent\n  - child\n')
     pending = document(tmp_path, 'pending.md', '- next\n  - nested\n')
     state = tmp_path / '.object-summary-checkpoint.json'
@@ -207,15 +207,20 @@ def test_added_recursion_reuses_completed_documents_and_summarizes_pending_ones(
     previous = output.read_bytes()
     requests = []
     async def summarize(client, content, **kwargs):
-        assert '- parent' not in content and '- child' not in content
+        if shared._document_id.get() == str(first):
+            assert content.startswith('Summarize this list item')
         requests.append(content)
         return 'new summary'
     monkeypatch.setattr(dom_summary, 'get_summary_response_async', summarize)
     rows = run([first, pending], **options)
-    assert [row['resumed'] for row in rows] == [True, False]
+    assert [row['resumed'] for row in rows] == [False, False]
+    assert rows[0]['incremental'] and rows[0]['filled_summaries'] == 2
     assert all(row['status'] == 'completed' for row in rows)
-    assert output.read_bytes() == previous
-    assert len(requests) == 3  # Two new items and their list; no work for the saved document.
+    assert output.read_bytes() != previous
+    upgraded = json.loads(output.read_text())
+    assert upgraded['summary'] == tree['summary']
+    assert next(dom_summary._object_nodes(upgraded))['s'] == wrapper['s']
+    assert len(requests) == 5  # Two missing items, two pending items and the pending list.
     result = json.loads(pending.with_name('pending_semantics.json').read_text())
     wrapper, = dom_summary._object_nodes(result)
     assert wrapper['subnodes'][0]['subnodes'][0]['object']['type'] == 'list_item'

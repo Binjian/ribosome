@@ -6,6 +6,7 @@ Importing this module does not import DOM modules or contact a model provider.
 import asyncio
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+import json
 import math
 from pathlib import Path
 from time import perf_counter
@@ -43,6 +44,88 @@ async def check_model(client, model, host):
     return model
 
 
+def _prepare_incremental_tree(file, tree, dom_summary):
+    """Reconcile current object children with saved records without rebuilding the DOM.
+
+    Identity includes source content so a summary is never moved to a different
+    item. Record and wrapper summaries both supply reusable text; annotations,
+    original Pandoc subtrees, and existing ancestor summaries are retained.
+    """
+    if not isinstance(tree, dict) or not isinstance(tree.get("blocks"), list):
+        raise ValueError(f"Invalid saved object tree: {file}")
+    has_summary = dom_summary.object_utils._has_object_summary
+
+    def key(record):
+        return record["type"], str(record["id"]), record["content"]
+
+    expected = {key(record): record for record in dom_summary.extract_markdown_objects(file)}
+    roots = list(dom_summary._object_nodes(tree))
+    if len(roots) != len(expected) or {key(node["object"]) for node in roots} != set(expected):
+        raise ValueError(f"Saved object locations do not match current Markdown: {file}")
+    work, missing, changed = [], 0, False
+    for root in roots:
+        records, wrappers = {}, {}
+
+        def remember_record(record):
+            identity = key(record)
+            saved = records.setdefault(identity, dict(record))
+            if not has_summary(saved) and has_summary(record):
+                saved.update(summary=record["summary"])
+            for child in record.get("children", []):
+                remember_record(child)
+
+        def remember_wrapper(node):
+            record = node["object"]
+            remember_record(record)
+            identity = key(record)
+            wrappers.setdefault(identity, node)
+            if not has_summary(records[identity]) and isinstance(node.get("s"), str) and node["s"].strip():
+                records[identity]["summary"] = node["s"]
+            for child in node.get("subnodes", []):
+                remember_wrapper(child)
+
+        remember_wrapper(root)
+        used = set()
+        root_missing = 0
+
+        def merge(record):
+            nonlocal root_missing
+            identity = key(record)
+            used.add(identity)
+            merged = {**record, **records.get(identity, {})}
+            if "children" in record:
+                merged["children"] = [merge(child) for child in record["children"]]
+            if not has_summary(merged):
+                root_missing += 1
+            return merged
+
+        def wrap(record):
+            node = dict(wrappers.get(key(record), {"t": "Div", "c": [["", [], []], []]}))
+            node.update(object=record, s=record.get("summary", ""))
+            if "children" in record:
+                node["subnodes"] = [wrap(child) for child in record["children"]]
+            return node
+
+        merged = merge(expected[key(root["object"])])
+        if any(has_summary(record) for identity, record in records.items() if identity not in used):
+            raise ValueError(f"Saved object descendants cannot be preserved for {file}: {root['object']['id']}")
+        updated = wrap(merged)
+        changed = changed or updated != root
+        root.clear()
+        root.update(updated)
+        if root_missing:
+            work.append(root)
+            missing += root_missing
+    return work, missing, changed
+
+
+def _sync_object_summaries(node):
+    """Refresh mirrored s fields after missing object summaries have been filled."""
+    node["s"] = node["object"]["summary"]
+    for child in node.get("subnodes", []):
+        _sync_object_summaries(child)
+
+
 async def summarize_object_documents(
     files, client, model, *, corpus="", concurrency=4, progress_interval=0.25,
     checkpoint_path=None, resume=True, checkpoint_host=None, lang="zh",
@@ -54,8 +137,11 @@ async def summarize_object_documents(
     succeeds. Failures are reported independently; cancellation awaits outstanding
     requests and saves completed-document checkpoints. AST caches are not written.
     Reuse completed documents across additive summarizer features and schema
-    versions. New recursion applies to pending documents; existing outputs remain
-    as saved. Set resume=False only when intentionally rebuilding every document.
+    versions. Completed outputs are checked for missing object descendants and
+    summaries; fill only those gaps while retaining existing summaries, including
+    parent/prose/document text. Publish upgrades atomically and checkpoint them;
+    failures retain the previous completed output and checkpoint for retry.
+    Set resume=False only when intentionally rebuilding every document.
     """
     from ribosome.core.dom.summary import object as dom_summary
 
@@ -90,16 +176,14 @@ async def summarize_object_documents(
                       "generation": ({"think": client.think, "max_tokens": client.max_tokens}
                                      if isinstance(client, SummaryAsyncClient) else None)},
         ) if checkpoint_path is not None else None)
-        results = [checkpoint.completed(file) if checkpoint else None for file in files]
-        for row in results:
-            if row is not None:
-                row["corpus"] = str(corpus)
-        pending = iter((index, file) for index, file in enumerate(files) if results[index] is None)
+        saved_rows = [checkpoint.completed(file) if checkpoint else None for file in files]
+        results = [None] * len(files)
+        pending = iter(enumerate(files))
         durations = []
-        resumed_count = sum(row is not None for row in results)
+        resumed_count = 0
         request_offset = len(client.metrics.records) if isinstance(client, SummaryAsyncClient) else 0
         totals = {"objects": 0, "done_objects": 0,
-                  "documents": sum(row is not None for row in results), "status": "starting"}
+                  "documents": 0, "status": "starting"}
         with progress_factory(total=len(files), desc="Documents", unit="doc", position=0,
                               bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]") as documents, \
              progress_factory(total=0, desc="Objects (active documents)", unit="object", position=1,
@@ -176,25 +260,54 @@ async def summarize_object_documents(
                 return result
 
             async def process_document(index, file):
+                nonlocal resumed_count
                 started = perf_counter()
                 output = file.with_name(f"{file.stem}_semantics.json")
                 row = {"corpus": str(corpus), "file": str(file), "status": "failed",
-                       "output": str(output), "error": "", "resumed": False}
+                       "output": str(output), "error": "", "resumed": False,
+                       "incremental": False, "filled_summaries": 0}
                 state = {"name": file.name, "total": 0, "done": 0, "started": started,
                          "phase": "parsing", "queued": 0, "running": 0}
                 active[index] = state
                 token = document_progress.set(state)
                 metrics_token = _document_id.set(str(file))
                 try:
-                    tree = await dom_summary.summarize_markdown_object_tree_async(
-                        file, client, model, lang=lang, show_progress=False,
-                        leaf_min_len=leaf_min_len, min_len=min_len)
+                    if saved_rows[index] is not None:
+                        state["phase"] = "checking saved summaries"
+                        tree = json.loads(output.read_text(encoding="utf-8"))
+                        work, missing, changed = _prepare_incremental_tree(file, tree, dom_summary)
+                        if not work and not changed:
+                            results[index] = dict(saved_rows[index], corpus=str(corpus),
+                                                  incremental=False, filled_summaries=0)
+                            resumed_count += 1
+                            totals["documents"] += 1
+                            totals["status"] = "resumed"
+                            return
+                        row["incremental"] = True
+                        state["total"] = len(work)
+                        totals["objects"] += state["total"]
+                        state["phase"] = "filling missing summaries"
+
+                        async def fill_object(position, node):
+                            await summarize_with_progress(
+                                node["object"], client, model, lang,
+                                require_summary=True, reuse_existing=True)
+                            _sync_object_summaries(node)
+
+                        await dom_summary._ordered_summary_map(fill_object, work)
+                        state["phase"] = "missing summaries filled; publishing"
+                    else:
+                        tree = await dom_summary.summarize_markdown_object_tree_async(
+                            file, client, model, lang=lang, show_progress=False,
+                            leaf_min_len=leaf_min_len, min_len=min_len)
                     if not tree.get("blocks"):
                         raise ValueError("Empty Markdown document: no blocks to summarize")
                     if not isinstance(tree.get("summary"), str) or not tree["summary"].strip():
                         raise ValueError("Summarization returned no document summary")
                     dom_summary._write_semantics_tree(output, tree)
                     row["status"] = "completed"
+                    if row["incremental"]:
+                        row["filled_summaries"] = missing
                 except asyncio.CancelledError:
                     progress_factory.write(f"Cancelled while processing: {file}")
                     raise
@@ -212,7 +325,9 @@ async def summarize_object_documents(
                 durations.append(row["elapsed_seconds"])
                 if isinstance(client, SummaryAsyncClient):
                     row.update(client.metrics.snapshot(document=str(file)))
-                if checkpoint:
+                # A failed upgrade must retain the reusable completed entry;
+                # otherwise its next rerun would regenerate the whole document.
+                if checkpoint and (saved_rows[index] is None or row["status"] == "completed"):
                     checkpoint.record(file, row)
                 results[index] = row
                 totals["documents"] += 1
