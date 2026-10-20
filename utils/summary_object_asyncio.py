@@ -81,7 +81,7 @@ async def summarize_object_documents(
         image_token = dom_summary._ignored_images.set(snapshot)
         checkpoint = (SummaryCheckpoint(
             checkpoint_path, model, checkpoint_host, resume, ignore_host=True,
-            settings={"summarizer": "object", "object_schema_version": 4, "lang": lang,
+            settings={"summarizer": "object", "object_schema_version": 5, "lang": lang,
                       "leaf_min_len": leaf_min_len, "min_len": min_len,
                       "ignored_images_signature": snapshot.signature,
                       "generation": ({"think": client.think, "max_tokens": client.max_tokens}

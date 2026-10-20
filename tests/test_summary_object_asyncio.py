@@ -171,8 +171,8 @@ def test_checkpoint_resume_and_configuration_invalidation(tmp_path, monkeypatch)
     assert not run([file], **options)[0]['resumed']
     assert run([file], **options)[0]['resumed']
     old_checkpoint = json.loads(state.read_text())
-    assert old_checkpoint['config']['settings']['object_schema_version'] == 4
-    old_checkpoint['config']['settings']['object_schema_version'] = 3
+    assert old_checkpoint['config']['settings']['object_schema_version'] == 5
+    old_checkpoint['config']['settings']['object_schema_version'] = 4
     state.write_text(json.dumps(old_checkpoint))
     assert not run([file], **options)[0]['resumed']
     assert run([file], **options)[0]['resumed']
@@ -336,7 +336,7 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
         exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), {})
 
 
-def test_saved_output_preview_includes_nested_rows_and_accepts_only_intentional_empty_summaries(tmp_path, monkeypatch):
+def test_saved_output_preview_includes_nested_rows_and_items_and_accepts_only_intentional_empty_summaries(tmp_path, monkeypatch):
     from PIL import Image
     monkeypatch.setenv('PROJ_ROOT', str(tmp_path))
     references = tmp_path / 'assets' / 'images_ignored'
@@ -347,7 +347,8 @@ def test_saved_output_preview_includes_nested_rows_and_accepts_only_intentional_
         '# Manual\n\n![ignored](logo.png)\n图 1 Logo\n\n'
         '| Header |\n| --- |\n| value |\n\n'
         '<table><tr><td rowspan="3">A</td><td rowspan="2">B</td><td>one</td></tr>'
-        '<tr><td>two</td></tr><tr><td>three</td></tr></table>\n'))
+        '<tr><td>two</td></tr><tr><td>three</td></tr></table>\n\n'
+        'Steps:\n\n3. First\n   - Nested\n4. Second\n'))
     tree = asyncio.run(dom_summary.summarize_markdown_object_tree_async(
         file, object(), 'offline', leaf_min_len=99999))
     notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
@@ -357,12 +358,17 @@ def test_saved_output_preview_includes_nested_rows_and_accepts_only_intentional_
     exec(compile(source, '<object-output-preview>', 'exec'), scope)
     records = scope['summary_records'](tree)
     assert Counter(record['type'] for record in records) == {
-        'figure': 1, 'table': 2, 'table_row': 5, 'table_row_group': 2}
+        'figure': 1, 'table': 2, 'table_row': 5, 'table_row_group': 2,
+        'list': 1, 'list_item': 3}
     ignored, = [record for record in records if record['status'] == 'ignored']
     assert ignored['summary'] == '' and ignored['ignored_images'] == 1
     assert max(record['depth'] for record in records) == 3
     assert all(record['summary'].strip() for record in records if record['status'] == 'summarized')
     assert [record['is_header'] for record in records if record['type'] == 'table_row'].count(True) == 1
+    items = [record for record in records if record['type'] == 'list_item']
+    assert [record['ordinal'] for record in items] == [3, None, 4]
+    assert [record['depth'] for record in items] == [1, 2, 1]
+    assert items[1]['parent_id'] == items[0]['id']
     invalid = deepcopy(tree)
     figure = next(dom_summary._object_nodes(invalid))
     figure['object'].pop('summary_ignored')
@@ -371,7 +377,12 @@ def test_saved_output_preview_includes_nested_rows_and_accepts_only_intentional_
     invalid = deepcopy(tree)
     table = next(node for node in dom_summary._object_nodes(invalid) if node['object']['type'] == 'table')
     table['subnodes'] = []
-    with pytest.raises(ValueError, match='Row hierarchy mismatch'):
+    with pytest.raises(ValueError, match='Object hierarchy mismatch'):
+        scope['summary_records'](invalid)
+    invalid = deepcopy(tree)
+    list_node = next(node for node in dom_summary._object_nodes(invalid) if node['object']['type'] == 'list')
+    list_node['subnodes'][0]['subnodes'] = []
+    with pytest.raises(ValueError, match='Object hierarchy mismatch'):
         scope['summary_records'](invalid)
 
 

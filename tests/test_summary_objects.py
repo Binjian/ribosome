@@ -73,7 +73,7 @@ def test_summaries_are_captioned_and_ordered_with_table_rows(tmp_path, monkeypat
     monkeypatch.setattr(sut, 'get_summary_response_async', text)
     results = asyncio.run(sut.summarize_markdown_objects_async(file, object(), 'offline'))
     assert [o['id'] for o in results] == [1, 2, 3]
-    assert len(visuals) == 2 and len(prompts) == 4
+    assert len(visuals) == 2 and len(prompts) == 6
     assert all(Path(p).parent == tmp_path for p in visuals)
     assert all(x in results[0]['summary'] for x in ['图 1 pair', 'visual:a.png', 'visual:b.png'])
     assert '<table>' in results[1]['summary'] and '表 1 data' in results[1]['summary']

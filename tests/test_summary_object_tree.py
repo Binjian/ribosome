@@ -88,7 +88,7 @@ def test_summaries_include_rows_and_propagate_to_all_ancestors(tmp_path, monkeyp
     monkeypatch.setattr(sut, 'get_image_summary_async', image)
     result = asyncio.run(sut.summarize_markdown_object_tree_async(file, object(), 'offline', leaf_min_len=1))
     wrappers = list(sut._object_nodes(result))
-    assert len([x for x in calls if x.startswith('Summarize this')]) == 4
+    assert len([x for x in calls if x.startswith('Summarize this')]) == 7
     assert len(images) == 2
     for before, after in zip(sut._object_nodes(original), wrappers):
         assert before['c'] == after['c']
