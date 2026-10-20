@@ -248,7 +248,9 @@ def test_notebook_configuration_preserves_overrides_and_detects_stale_imports(mo
     for name in names:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delitem(sys.modules, 'ribosome.core.dom.summary.natural_text')
-    assert list(app.configure_summary_limits().values()) == [4, 8, 32]
+    assert list(app.configure_summary_limits().values()) == [8, 8, 32]
+    monkeypatch.setenv(names[0], '4')
+    assert app.configure_summary_limits()[names[0]] == 4
     monkeypatch.setenv(names[1], '2')
     assert app.configure_summary_limits()[names[1]] == 2
     monkeypatch.setitem(sys.modules, 'ribosome.core.dom.summary.natural_text',

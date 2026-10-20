@@ -30,7 +30,7 @@ def configure_summary_limits(summary_module="natural_text"):
     if summary_module not in {"natural_text", "object"}:
         raise ValueError("summary_module must be 'natural_text' or 'object'")
     defaults = {
-        "RIBOSOME_DOCUMENT_CONCURRENCY": 4,
+        "RIBOSOME_DOCUMENT_CONCURRENCY": 8,
         "RIBOSOME_SUMMARY_CONCURRENCY": 8,
         "RIBOSOME_SUMMARY_TASK_LIMIT": 32,
     }

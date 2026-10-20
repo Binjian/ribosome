@@ -325,7 +325,9 @@ def test_limits_validate_selected_object_module(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setitem(sys.modules, 'ribosome.core.dom.summary.object',
                         SimpleNamespace(_SUMMARY_CONCURRENCY=8, _SUMMARY_TASK_LIMIT=32))
-    assert list(shared.configure_summary_limits(summary_module='object').values()) == [4, 8, 32]
+    assert list(shared.configure_summary_limits(summary_module='object').values()) == [8, 8, 32]
+    monkeypatch.setenv('RIBOSOME_DOCUMENT_CONCURRENCY', '4')
+    assert shared.configure_summary_limits(summary_module='object')['RIBOSOME_DOCUMENT_CONCURRENCY'] == 4
     monkeypatch.setenv('RIBOSOME_SUMMARY_CONCURRENCY', '2')
     with pytest.raises(RuntimeError, match='Restart the kernel'):
         shared.configure_summary_limits(summary_module='object')
