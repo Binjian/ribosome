@@ -430,12 +430,13 @@ def test_batch_progress_reports_actual_durations_and_excludes_resumed(tmp_path):
     file = document(tmp_path)
     options = dict(checkpoint_path=tmp_path / 'checkpoint.json')
     row = run([file], **options)[0]
-    documents, objects = Progress.instances[-2:]
+    documents, objects = Progress.instances[:2]
     assert documents.status['mean_doc'] == f"{row['elapsed_seconds']:.1f}s"
     assert documents.status['resumed'] == 0
     assert objects.n == objects.total == 0
+    next_batch = len(Progress.instances)
     run([file], **options)
-    documents = Progress.instances[-2]
+    documents = Progress.instances[next_batch]
     assert documents.status['resumed'] == 1
     assert 'mean_doc' not in documents.status
 

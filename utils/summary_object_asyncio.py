@@ -4,7 +4,7 @@ Importing this module does not import DOM modules or contact a model provider.
 """
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from contextvars import ContextVar
 import json
 import math
@@ -18,6 +18,28 @@ from utils.summary_asyncio import SummaryAsyncClient, SummaryCheckpoint, _docume
 
 
 _batch_active = False
+
+
+
+# Badges remain visible in both notebook widgets and terminal progress output.
+_SERVER_STYLES = (
+    ("🔵", "#2563eb"), ("🟠", "#ea580c"), ("🟢", "#16a34a"),
+    ("🟣", "#9333ea"), ("🔴", "#dc2626"), ("🟡", "#ca8a04"),
+)
+
+
+def _server_progress(client, document=None):
+    """Describe actual server activity; a document can use several servers."""
+    labels, busiest, colour = [], 0, None
+    for index, (host, metrics) in enumerate(zip(
+            getattr(client, 'hosts', ()), getattr(client, 'server_metrics', ()))):
+        badge, server_colour = _SERVER_STYLES[index % len(_SERVER_STYLES)]
+        count = metrics.active if document is None else metrics.document_active.get(document, 0)
+        if document is None or count:
+            labels.append(f"{badge} S{index + 1} {host}: {count}")
+        if count > busiest:
+            busiest, colour = count, server_colour
+    return " | ".join(labels), colour
 
 
 def discover_markdown(input_dir):
@@ -187,7 +209,11 @@ async def summarize_object_documents(
         with progress_factory(total=len(files), desc="Documents", unit="doc", position=0,
                               bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]") as documents, \
              progress_factory(total=0, desc="Objects (active documents)", unit="object", position=1,
-                              bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]") as objects:
+                              bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]") as objects, ExitStack() as file_displays:
+            file_bars = [file_displays.enter_context(progress_factory(
+                total=0, desc=f"File slot {slot + 1}", unit="object", position=slot + 2,
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} {postfix}", leave=False,
+            )) for slot in range(min(concurrency, len(files)))]
 
             def render():
                 documents.n = totals["documents"]
@@ -198,7 +224,7 @@ async def summarize_object_documents(
                     status.update(requests=len(client.metrics.records) - request_offset,
                                   in_flight=len(client.active_requests))
                     if callable(getattr(client, "server_status", None)):
-                        status["servers"] = client.server_status()
+                        status["servers"] = _server_progress(client)[0] or client.server_status()
                     if client.active_requests:
                         oldest = min(started for _, started in client.active_requests.values())
                         status["oldest_request"] = f"{perf_counter() - oldest:.1f}s"
@@ -210,6 +236,22 @@ async def summarize_object_documents(
                     f"{state['phase']}, queued={state['queued']}, running={state['running']} "
                     f"({perf_counter() - state['started']:.0f}s)" for state in active.values()),
                     refresh=False)
+                for slot, bar in enumerate(file_bars):
+                    state = next((state for state in active.values() if state['slot'] == slot), None)
+                    bar.total = state['total'] if state else 0
+                    bar.n = state['done'] if state else 0
+                    status_text = (
+                        f"{state['name']}: objects {state['done']}/{state['total']}, "
+                        f"{state['phase']}, queued={state['queued']}, running={state['running']} "
+                        f"({perf_counter() - state['started']:.0f}s)"
+                        if state else 'Idle')
+                    server_text, server_colour = _server_progress(
+                        client, state['name']) if state else ('', None)
+                    bar.colour = server_colour
+                    if server_text:
+                        status_text += f" | {server_text}"
+                    bar.set_postfix_str(status_text, refresh=False)
+                    bar.refresh()
                 objects.refresh()
                 documents.refresh()
 
@@ -259,14 +301,14 @@ async def summarize_object_documents(
                         state["phase"] = "objects done; prose/parents pending"
                 return result
 
-            async def process_document(index, file):
+            async def process_document(index, file, slot):
                 nonlocal resumed_count
                 started = perf_counter()
                 output = file.with_name(f"{file.stem}_semantics.json")
                 row = {"corpus": str(corpus), "file": str(file), "status": "failed",
                        "output": str(output), "error": "", "resumed": False,
                        "incremental": False, "filled_summaries": 0}
-                state = {"name": file.name, "total": 0, "done": 0, "started": started,
+                state = {"slot": slot, "name": str(file), "total": 0, "done": 0, "started": started,
                          "phase": "parsing", "queued": 0, "running": 0}
                 active[index] = state
                 token = document_progress.set(state)
@@ -335,9 +377,9 @@ async def summarize_object_documents(
                 if row["status"] == "completed":
                     progress_factory.write(f"COMPLETED {file} ({row['elapsed_seconds']:.1f}s)")
 
-            async def worker():
+            async def worker(slot):
                 for index, file in pending:
-                    await process_document(index, file)
+                    await process_document(index, file, slot)
 
             # Scope the instrumentation to this batch, just as the natural-text
             # runner does. Context variables keep concurrent documents separate.
@@ -348,7 +390,7 @@ async def summarize_object_documents(
                 display_task = asyncio.create_task(renderer())
                 try:
                     render()
-                    tasks = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(files)))]
+                    tasks = [asyncio.create_task(worker(slot)) for slot in range(min(concurrency, len(files)))]
                     await asyncio.gather(*tasks)
                 finally:
                     for task in tasks:
