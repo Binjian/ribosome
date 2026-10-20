@@ -263,10 +263,18 @@ def test_cancellation_awaits_requests_restores_hooks_and_resumes(tmp_path, monke
     assert dom_summary.extract_markdown_object_tree is original_extract
     assert all(bar.closed for bar in Progress.instances)
     assert json.loads(state.read_text())['entries'][str(first)]['row']['status'] == 'completed'
+    partial = app._partial_path(second)
+    assert partial.is_file()
+    saved_tree = json.loads(partial.read_text())['tree']
+    assert list(dom_summary._object_nodes(saved_tree))
     async def text_success(client, content, **kwargs): return 'summary'
     monkeypatch.setattr(dom_summary, 'get_summary_response_async', text_success)
     rows = run([first, second], checkpoint_path=state, concurrency=1)
-    assert [row['resumed'] for row in rows] == [True, False]
+    # Both completed-document and interrupted-document checkpoints are resumed.
+    assert [row['resumed'] for row in rows] == [True, True]
+    assert all(row['status'] == 'completed' for row in rows)
+    assert not partial.exists()
+    assert json.loads(output.read_text())['summary']
 
 
 def test_document_and_request_concurrency_limits(tmp_path, monkeypatch):
