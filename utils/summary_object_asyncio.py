@@ -110,6 +110,8 @@ async def summarize_object_documents(
                 if isinstance(client, SummaryAsyncClient):
                     status.update(requests=len(client.metrics.records) - request_offset,
                                   in_flight=len(client.active_requests))
+                    if callable(getattr(client, "server_status", None)):
+                        status["servers"] = client.server_status()
                     if client.active_requests:
                         oldest = min(started for _, started in client.active_requests.values())
                         status["oldest_request"] = f"{perf_counter() - oldest:.1f}s"

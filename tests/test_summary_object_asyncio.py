@@ -310,8 +310,9 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     def client(**kwargs): captured.update(kwargs); return object()
     def limits(**kwargs):
         assert kwargs == {'summary_module': 'object'}
-        return {'RIBOSOME_DOCUMENT_CONCURRENCY': 4}
-    monkeypatch.setattr(shared, 'SummaryAsyncClient', client)
+        return {'RIBOSOME_DOCUMENT_CONCURRENCY': 4, 'RIBOSOME_SUMMARY_CONCURRENCY': 8}
+    from utils import summary_ollama_pool
+    monkeypatch.setattr(summary_ollama_pool, 'OllamaSummaryPool', client)
     monkeypatch.setattr(shared, 'configure_summary_limits', limits)
     # Keep load_dotenv's environment changes inside this test.
     for key in ['OLLAMA_HOST', 'OLLAMA_SUMMARY_MODEL', 'OLLAMA_API_KEY']:
@@ -319,7 +320,8 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
     namespace = {}
     exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), namespace)
-    assert captured == {'host': 'http://configured:11434', 'headers': {'Authorization': 'Bearer test-key'},
+    assert captured == {'hosts': ['http://127.0.0.1:11434', 'http://configured:11434'],
+                        'concurrency_per_server': 4, 'headers': {'Authorization': 'Bearer test-key'},
                         'request_timeout': 300.0, 'max_tokens': 2048, 'think': False}
     assert namespace['SUMMARY_MODEL'] == 'vision'
     assert [p.name for p in namespace['INPUT_DIRS']] == ['md.json.semantics.coding.4.0', 'md.json.semantics.coding.5.0']

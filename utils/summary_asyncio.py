@@ -156,7 +156,7 @@ class SummaryAsyncClient(AsyncClient):
         self.metrics.start(document)
         try:
             async with asyncio.timeout(self.request_timeout):
-                response = await super().chat(*args, **kwargs)
+                response = await self._chat_request(*args, **kwargs)
             status = "completed"
             return response
         except (TimeoutError, HTTPTimeoutError) as exc:
@@ -168,6 +168,10 @@ class SummaryAsyncClient(AsyncClient):
         finally:
             self.active_requests.pop(identity, None)
             self.metrics.finish(document, started, response, status)
+
+    async def _chat_request(self, *args, **kwargs):
+        """Transport hook; subclasses retain common limits and document metrics."""
+        return await super().chat(*args, **kwargs)
 
 
 def count_summary_nodes(value):
