@@ -8,6 +8,8 @@ from contextlib import ExitStack, asynccontextmanager
 from contextvars import ContextVar
 import json
 import math
+import os
+import tempfile
 from pathlib import Path
 from time import perf_counter
 from unittest.mock import patch
@@ -148,6 +150,50 @@ def _sync_object_summaries(node):
         _sync_object_summaries(child)
 
 
+def _complete_object(record, dom_summary):
+    return (dom_summary.object_utils._has_object_summary(record)
+            and all(_complete_object(child, dom_summary) for child in record.get('children', [])))
+
+
+def _partial_path(file):
+    return file.with_name(f"{file.stem}_summary-progress.json")
+
+
+def _save_partial(file, checkpoint, tree):
+    """Keep unpublished work separate from the completed semantics/checkpoint."""
+    path = _partial_path(file)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent,
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(dict(config=checkpoint.config, signature=checkpoint.signature(file),
+                           tree=tree), stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _load_partial(file, checkpoint):
+    path = _partial_path(file)
+    if not path.exists():
+        return None
+    saved = json.loads(path.read_text(encoding='utf-8'))
+    def compatible(config):
+        config = dict(config)
+        config.pop('host', None)
+        config['settings'] = {k: v for k, v in config.get('settings', {}).items()
+                              if k != 'object_schema_version'}
+        return config
+    if (compatible(saved['config']) == compatible(checkpoint.config)
+            and saved['signature'] == checkpoint.signature(file)):
+        return saved['tree']
+    return None
+
+
 async def summarize_object_documents(
     files, client, model, *, corpus="", concurrency=4, progress_interval=0.25,
     checkpoint_path=None, resume=True, checkpoint_host=None, lang="zh",
@@ -157,7 +203,8 @@ async def summarize_object_documents(
 
     Results follow input order. A document is published only after its full tree
     succeeds. Failures are reported independently; cancellation awaits outstanding
-    requests and saves completed-document checkpoints. AST caches are not written.
+    requests and saves completed-document checkpoints. Unpublished per-file progress
+    retains completed objects and descendants on interruption. AST caches are not written.
     Reuse completed documents across additive summarizer features and schema
     versions. Completed outputs are checked for missing object descendants and
     summaries; fill only those gaps while retaining existing summaries, including
@@ -283,20 +330,35 @@ async def summarize_object_documents(
                     get_semaphore().release()
 
             def extract_with_progress(file):
-                tree = extract_tree(file)
                 state = document_progress.get()
+                tree = state.get('partial') if state is not None else None
+                if tree is None:
+                    tree = extract_tree(file)
                 if state is not None:
                     state["total"] = sum(1 for _ in dom_summary._object_nodes(tree))
                     totals["objects"] += state["total"]
+                    state['tree'] = tree
+                    roots = list(dom_summary._object_nodes(tree))
+                    state['reused_ids'] = {
+                        str(node['object']['id']) for node in roots
+                        if _complete_object(node['object'], dom_summary)}
+                    state['done'] = len(state['reused_ids'])
+                    totals['done_objects'] += state['done']
                     state["phase"] = "summarizing tree"
                 return tree
 
             async def summarize_with_progress(*args, **kwargs):
-                result = await summarize_object(*args, **kwargs)
                 state = document_progress.get()
+                if state is not None and checkpoint is not None:
+                    kwargs['reuse_existing'] = True
+                result = await summarize_object(*args, **kwargs)
                 if state is not None:
-                    state["done"] += 1
-                    totals["done_objects"] += 1
+                    obj = args[0] if args else kwargs['obj']
+                    if str(obj['id']) not in state.get('reused_ids', set()):
+                        state["done"] += 1
+                        totals["done_objects"] += 1
+                    if checkpoint is not None and state.get('tree') is not None:
+                        _save_partial(Path(state['name']), checkpoint, state['tree'])
                     if state["done"] == state["total"]:
                         state["phase"] = "objects done; prose/parents pending"
                 return result
@@ -314,6 +376,11 @@ async def summarize_object_documents(
                 token = document_progress.set(state)
                 metrics_token = _document_id.set(str(file))
                 try:
+                    if checkpoint is not None and resume and saved_rows[index] is None:
+                        state['partial'] = _load_partial(file, checkpoint)
+                        if state['partial'] is not None:
+                            _prepare_incremental_tree(file, state['partial'], dom_summary)
+                            row['resumed'] = True
                     if saved_rows[index] is not None:
                         state["phase"] = "checking saved summaries"
                         tree = json.loads(output.read_text(encoding="utf-8"))
@@ -357,6 +424,11 @@ async def summarize_object_documents(
                     row["error"] = f"{type(exc).__name__}: {exc}"
                     progress_factory.write(f"FAILED {file}: {row['error']}")
                 finally:
+                    if checkpoint is not None and state.get('tree') is not None and row['status'] != 'completed':
+                        try:
+                            _save_partial(file, checkpoint, state['tree'])
+                        except Exception as exc:
+                            progress_factory.write(f"Could not save partial progress for {file}: {exc}")
                     _document_id.reset(metrics_token)
                     document_progress.reset(token)
                     active.pop(index)
@@ -371,6 +443,8 @@ async def summarize_object_documents(
                 # otherwise its next rerun would regenerate the whole document.
                 if checkpoint and (saved_rows[index] is None or row["status"] == "completed"):
                     checkpoint.record(file, row)
+                if checkpoint is not None and row['status'] == 'completed':
+                    _partial_path(file).unlink(missing_ok=True)
                 results[index] = row
                 totals["documents"] += 1
                 totals["status"] = row["status"]
