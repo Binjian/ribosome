@@ -177,7 +177,7 @@ def test_checkpoint_resume_and_configuration_invalidation(tmp_path, monkeypatch)
     assert not run([file], **options)[0]['resumed']
     assert run([file], **options)[0]['resumed']
     assert not run([file], lang='en', **options)[0]['resumed']
-    assert not run([file], lang='en', checkpoint_path=state, checkpoint_host='different')[0]['resumed']
+    assert run([file], lang='en', checkpoint_path=state, checkpoint_host='different')[0]['resumed']
     assert not run([file], resume=False, **options)[0]['resumed']
     file.write_text(file.read_text() + '\nChanged prose.\n')
     assert not run([file], **options)[0]['resumed']

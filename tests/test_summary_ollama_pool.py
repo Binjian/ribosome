@@ -192,7 +192,8 @@ def test_pool_integrates_with_object_batch_metrics_and_checkpoint(tmp_path, monk
             pool.reset_metrics()
             assert all(row['resumed'] for row in await batch(HOSTS))
             assert pool.metrics.snapshot()['request_count'] == 0
-            assert all(not row['resumed'] for row in await batch(HOSTS[:1]))
+            assert all(row['resumed'] for row in await batch(HOSTS[:1]))
+            assert pool.metrics.snapshot()['request_count'] == 0
         finally:
             await pool.aclose()
     asyncio.run(scenario())

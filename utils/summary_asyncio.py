@@ -207,7 +207,7 @@ async def _setup_document(dom):
 class SummaryCheckpoint:
     """Atomic document-level progress; only unchanged successes are reusable."""
 
-    def __init__(self, path, model, host, resume, *, settings=None):
+    def __init__(self, path, model, host, resume, *, settings=None, ignore_host=False):
         self.path = Path(path)
         self.config = {"model": model, "host": host}
         if settings is not None:
@@ -217,7 +217,14 @@ class SummaryCheckpoint:
             saved = json.loads(self.path.read_text(encoding="utf-8"))
             if saved.get("version") != 1:
                 raise ValueError(f"Unsupported summary checkpoint: {self.path}")
-            if saved.get("config") == self.config:
+            saved_config = saved.get("config")
+            current_config = self.config
+            if ignore_host and isinstance(saved_config, dict):
+                # Routing does not affect object-summary compatibility. Keep the
+                # current host metadata when saving migrated legacy checkpoints.
+                saved_config = {k: v for k, v in saved_config.items() if k != "host"}
+                current_config = {k: v for k, v in current_config.items() if k != "host"}
+            if saved_config == current_config:
                 self.entries = saved["entries"]
 
     @staticmethod
