@@ -52,6 +52,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
     output.write_text('previous output')
     original = {'blocks': [{'object': {'id': str(i), 'summary': '', 'children': []}}
                            for i in range(2)], 'summary': ''}
+    original['subnodes'] = [{'t': 'Section', 'c': []}]
     calls, observed, completion_updates = [], [], []
     interrupt = True
 
@@ -79,6 +80,8 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
         await asyncio.sleep(.01)
         for node in tree['blocks']:
             await dom._summarize_markdown_object_async(node['object'])
+        dom._record_summary_progress('Section', '$.blocks[0]', file, {'count': 0}, {'count': 0})
+        await asyncio.sleep(.01)
         tree['summary'] = 'document summary'
         return tree
 
@@ -108,9 +111,21 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
         assert calls == ['1']
         assert rows[0]['status'] == 'completed' and rows[0]['resumed']
         assert rows[0]['completed_objects'] == 2
+        assert rows[0]['section_count'] == rows[0]['completed_sections'] == 1
+        assert any('sections 0/1' in text for _, _, text in observed)
+        assert any('sections 1/1' in text for _, _, text in observed)
         assert any(n == 1 and total == 2 for n, total, _ in observed)
         assert not app._partial_path(file).exists()
         assert completion_updates[0] == []
         assert completion_updates[-1][0]['file'] == str(file)
         assert completion_updates[-1][0]['status'] == 'completed'
     asyncio.run(scenario())
+
+
+def test_section_count_includes_nested_sections_but_not_object_source():
+    from utils.summary_object_asyncio import _section_count
+    tree = {'blocks': [{'t': 'Section', 'c': [{'t': 'Header', 'c': []}],
+                        'subnodes': [{'t': 'Section', 'c': []},
+                                     {'t': 'Div', 'object': {},
+                                      'c': [{'t': 'Section', 'c': []}]}]}]}
+    assert _section_count(tree) == 2

@@ -150,6 +150,18 @@ def _sync_object_summaries(node):
         _sync_object_summaries(child)
 
 
+def _section_count(tree):
+    """Count semantic sections, excluding retained source ASTs inside objects."""
+    def count(node):
+        if isinstance(node, list):
+            return sum(count(child) for child in node)
+        if not isinstance(node, dict) or 'object' in node:
+            return 0
+        return int(node.get('t') == 'Section') + sum(
+            count(node.get(key, [])) for key in ('blocks', 'c', 'subnodes'))
+    return count(tree)
+
+
 def _complete_object(record, dom_summary):
     return (dom_summary.object_utils._has_object_summary(record)
             and all(_complete_object(child, dom_summary) for child in record.get('children', [])))
@@ -229,6 +241,7 @@ async def summarize_object_documents(
     extract_tree = dom_summary.extract_markdown_object_tree
     summarize_object = dom_summary._summarize_markdown_object_async
     get_semaphore = dom_summary._get_summary_semaphore
+    record_progress = dom_summary._record_summary_progress
     active = {}
     checkpoint = None
     image_token = None
@@ -264,7 +277,9 @@ async def summarize_object_documents(
 
             def render():
                 documents.n = totals["documents"]
-                status = dict(status=totals["status"], active=len(active), resumed=resumed_count)
+                status = dict(status=totals["status"], active=len(active), resumed=resumed_count,
+                              sections=f"{sum(state['sections_done'] for state in active.values())}/"
+                                       f"{sum(state['sections_total'] for state in active.values())}")
                 if durations:
                     status.update(last_doc=f"{durations[-1]:.1f}s", mean_doc=f"{sum(durations) / len(durations):.1f}s")
                 if isinstance(client, SummaryAsyncClient):
@@ -280,7 +295,7 @@ async def summarize_object_documents(
                 objects.n = totals["done_objects"]
                 objects.set_postfix_str(" | ".join(
                     f"{state['name']}: objects {state['done']}/{state['total']}, "
-                    f"{state['phase']}, queued={state['queued']}, running={state['running']} "
+                    f"{state['phase']}, sections {state['sections_done']}/{state['sections_total']}, queued={state['queued']}, running={state['running']} "
                     f"({perf_counter() - state['started']:.0f}s)" for state in active.values()),
                     refresh=False)
                 for slot, bar in enumerate(file_bars):
@@ -289,7 +304,7 @@ async def summarize_object_documents(
                     bar.n = state['done'] if state else 0
                     status_text = (
                         f"{state['name']}: objects {state['done']}/{state['total']}, "
-                        f"{state['phase']}, queued={state['queued']}, running={state['running']} "
+                        f"{state['phase']}, sections {state['sections_done']}/{state['sections_total']}, queued={state['queued']}, running={state['running']} "
                         f"({perf_counter() - state['started']:.0f}s)"
                         if state else 'Idle')
                     server_text, server_colour = _server_progress(
@@ -347,6 +362,7 @@ async def summarize_object_documents(
                     state["total"] = sum(1 for _ in dom_summary._object_nodes(tree))
                     totals["objects"] += state["total"]
                     state['tree'] = tree
+                    state['sections_total'] = _section_count(tree)
                     roots = list(dom_summary._object_nodes(tree))
                     state['reused_ids'] = {
                         str(node['object']['id']) for node in roots
@@ -355,6 +371,16 @@ async def summarize_object_documents(
                     totals['done_objects'] += state['done']
                     state["phase"] = "summarizing tree"
                 return tree
+
+            def record_with_progress(node_type, path, file_path, table_count, section_count):
+                state = document_progress.get()
+                if node_type == 'Section' and state is not None:
+                    section_count['count'] += 1
+                    if path not in state['section_paths']:
+                        state['section_paths'].add(path)
+                        state['sections_done'] += 1
+                else:
+                    record_progress(node_type, path, file_path, table_count, section_count)
 
             async def summarize_with_progress(*args, **kwargs):
                 state = document_progress.get()
@@ -380,7 +406,8 @@ async def summarize_object_documents(
                        "output": str(output), "error": "", "resumed": False,
                        "incremental": False, "filled_summaries": 0}
                 state = {"slot": slot, "name": str(file), "total": 0, "done": 0, "started": started,
-                         "phase": "parsing", "queued": 0, "running": 0}
+                         "phase": "parsing", "queued": 0, "running": 0,
+                         "sections_total": 0, "sections_done": 0, "section_paths": set()}
                 active[index] = state
                 token = document_progress.set(state)
                 metrics_token = _document_id.set(str(file))
@@ -394,6 +421,7 @@ async def summarize_object_documents(
                         state["phase"] = "checking saved summaries"
                         tree = json.loads(output.read_text(encoding="utf-8"))
                         work, missing, changed = _prepare_incremental_tree(file, tree, dom_summary)
+                        state['sections_total'] = state['sections_done'] = _section_count(tree)
                         if not work and not changed:
                             results[index] = dict(saved_rows[index], corpus=str(corpus),
                                                   incremental=False, filled_summaries=0)
@@ -444,7 +472,8 @@ async def summarize_object_documents(
                     totals["objects"] -= state["total"]
                     totals["done_objects"] -= state["done"]
                 row.update(elapsed_seconds=round(perf_counter() - started, 3),
-                           object_count=state["total"], completed_objects=state["done"])
+                           object_count=state["total"], completed_objects=state["done"],
+                           section_count=state["sections_total"], completed_sections=state["sections_done"])
                 durations.append(row["elapsed_seconds"])
                 if isinstance(client, SummaryAsyncClient):
                     row.update(client.metrics.snapshot(document=str(file)))
@@ -468,7 +497,8 @@ async def summarize_object_documents(
             # runner does. Context variables keep concurrent documents separate.
             with patch.object(dom_summary, "extract_markdown_object_tree", extract_with_progress), \
                  patch.object(dom_summary, "_summarize_markdown_object_async", summarize_with_progress), \
-                 patch.object(dom_summary, "_get_summary_semaphore", semaphore_with_progress):
+                 patch.object(dom_summary, "_get_summary_semaphore", semaphore_with_progress), \
+                 patch.object(dom_summary, "_record_summary_progress", record_with_progress):
                 tasks = []
                 display_task = asyncio.create_task(renderer())
                 try:
