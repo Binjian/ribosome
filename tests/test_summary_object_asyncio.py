@@ -174,7 +174,7 @@ def test_checkpoint_resume_and_configuration_invalidation(tmp_path, monkeypatch)
     assert old_checkpoint['config']['settings']['object_schema_version'] == 5
     old_checkpoint['config']['settings']['object_schema_version'] = 4
     state.write_text(json.dumps(old_checkpoint))
-    assert not run([file], **options)[0]['resumed']
+    assert run([file], **options)[0]['resumed']
     assert run([file], **options)[0]['resumed']
     assert not run([file], lang='en', **options)[0]['resumed']
     assert run([file], lang='en', checkpoint_path=state, checkpoint_host='different')[0]['resumed']
@@ -186,6 +186,40 @@ def test_checkpoint_resume_and_configuration_invalidation(tmp_path, monkeypatch)
     checkpoint = shared.SummaryCheckpoint(state, 'other-model', 'local', True,
                                         settings={'summarizer': 'object'})
     assert checkpoint.completed(file) is None
+
+
+def test_added_recursion_reuses_completed_documents_and_summarizes_pending_ones(tmp_path, monkeypatch):
+    first = document(tmp_path, 'completed.md', '- parent\n  - child\n')
+    pending = document(tmp_path, 'pending.md', '- next\n  - nested\n')
+    state = tmp_path / '.object-summary-checkpoint.json'
+    options = dict(checkpoint_path=state, checkpoint_host='local')
+    assert run([first], **options)[0]['status'] == 'completed'
+    saved = json.loads(state.read_text())
+    saved['config']['settings']['object_schema_version'] = 4
+    output = first.with_name('completed_semantics.json')
+    tree = json.loads(output.read_text())
+    wrapper, = dom_summary._object_nodes(tree)
+    wrapper['object'].pop('children')
+    wrapper.pop('subnodes')
+    output.write_text(json.dumps(tree))
+    saved['entries'][str(first)]['signature'] = shared.SummaryCheckpoint.signature(first)
+    state.write_text(json.dumps(saved))
+    previous = output.read_bytes()
+    requests = []
+    async def summarize(client, content, **kwargs):
+        assert '- parent' not in content and '- child' not in content
+        requests.append(content)
+        return 'new summary'
+    monkeypatch.setattr(dom_summary, 'get_summary_response_async', summarize)
+    rows = run([first, pending], **options)
+    assert [row['resumed'] for row in rows] == [True, False]
+    assert all(row['status'] == 'completed' for row in rows)
+    assert output.read_bytes() == previous
+    assert len(requests) == 3  # Two new items and their list; no work for the saved document.
+    result = json.loads(pending.with_name('pending_semantics.json').read_text())
+    wrapper, = dom_summary._object_nodes(result)
+    assert wrapper['subnodes'][0]['subnodes'][0]['object']['type'] == 'list_item'
+    assert all(row['resumed'] for row in run([first, pending], **options))
 
 
 def test_cancellation_awaits_requests_restores_hooks_and_resumes(tmp_path, monkeypatch):
@@ -327,6 +361,7 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     assert [p.name for p in namespace['INPUT_DIRS']] == ['md.json.semantics.coding.4.0', 'md.json.semantics.coding.5.0']
     assert namespace['IGNORED_IMAGES_DIR'] == tmp_path / 'assets' / 'images_ignored'
     assert namespace['PREVIEW_OUTPUTS'] == 3
+    assert namespace['RESUME'] is True
     assert namespace['os'].environ['PROJ_ROOT'] == str(tmp_path)
     env.write_text('OLLAMA_HOST=http://configured:11434\n')
     with pytest.raises(ValueError, match='OLLAMA_SUMMARY_MODEL'):

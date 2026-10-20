@@ -207,7 +207,8 @@ async def _setup_document(dom):
 class SummaryCheckpoint:
     """Atomic document-level progress; only unchanged successes are reusable."""
 
-    def __init__(self, path, model, host, resume, *, settings=None, ignore_host=False):
+    def __init__(self, path, model, host, resume, *, settings=None, ignore_host=False,
+                 ignore_settings=()):
         self.path = Path(path)
         self.config = {"model": model, "host": host}
         if settings is not None:
@@ -219,11 +220,16 @@ class SummaryCheckpoint:
                 raise ValueError(f"Unsupported summary checkpoint: {self.path}")
             saved_config = saved.get("config")
             current_config = self.config
-            if ignore_host and isinstance(saved_config, dict):
-                # Routing does not affect object-summary compatibility. Keep the
-                # current host metadata when saving migrated legacy checkpoints.
-                saved_config = {k: v for k, v in saved_config.items() if k != "host"}
-                current_config = {k: v for k, v in current_config.items() if k != "host"}
+            if isinstance(saved_config, dict):
+                # Compare compatibility without changing saved entries or the
+                # current metadata written when migrating a checkpoint.
+                saved_config, current_config = dict(saved_config), dict(current_config)
+                for config in (saved_config, current_config):
+                    if ignore_host:
+                        config.pop("host", None)
+                    if ignore_settings and isinstance(config.get("settings"), dict):
+                        config["settings"] = {k: v for k, v in config["settings"].items()
+                                              if k not in ignore_settings}
             if saved_config == current_config:
                 self.entries = saved["entries"]
 

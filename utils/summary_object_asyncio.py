@@ -53,7 +53,9 @@ async def summarize_object_documents(
     Results follow input order. A document is published only after its full tree
     succeeds. Failures are reported independently; cancellation awaits outstanding
     requests and saves completed-document checkpoints. AST caches are not written.
-    Set resume=False after image or summarizer changes to rebuild every document.
+    Reuse completed documents across additive summarizer features and schema
+    versions. New recursion applies to pending documents; existing outputs remain
+    as saved. Set resume=False only when intentionally rebuilding every document.
     """
     from ribosome.core.dom.summary import object as dom_summary
 
@@ -81,6 +83,7 @@ async def summarize_object_documents(
         image_token = dom_summary._ignored_images.set(snapshot)
         checkpoint = (SummaryCheckpoint(
             checkpoint_path, model, checkpoint_host, resume, ignore_host=True,
+            ignore_settings=("object_schema_version",),
             settings={"summarizer": "object", "object_schema_version": 5, "lang": lang,
                       "leaf_min_len": leaf_min_len, "min_len": min_len,
                       "ignored_images_signature": snapshot.signature,
