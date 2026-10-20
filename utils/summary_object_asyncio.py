@@ -197,7 +197,7 @@ def _load_partial(file, checkpoint):
 async def summarize_object_documents(
     files, client, model, *, corpus="", concurrency=4, progress_interval=0.25,
     checkpoint_path=None, resume=True, checkpoint_host=None, lang="zh",
-    leaf_min_len=100, min_len=None, progress_factory=tqdm,
+    leaf_min_len=100, min_len=None, progress_factory=tqdm, completed_callback=None,
 ):
     """Summarize Markdown directly into atomic, recursively structured outputs.
 
@@ -301,6 +301,15 @@ async def summarize_object_documents(
                     bar.refresh()
                 objects.refresh()
                 documents.refresh()
+                if completed_callback is not None:
+                    completed = {
+                        file: dict(entry['row'], file=file)
+                        for file, entry in (checkpoint.entries.items() if checkpoint else ())
+                        if entry.get('row', {}).get('status') == 'completed'}
+                    for row in results:
+                        if row is not None and row['status'] == 'completed':
+                            completed[row['file']] = row
+                    completed_callback(list(completed.values()))
 
             async def renderer():
                 while True:

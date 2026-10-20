@@ -52,7 +52,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
     output.write_text('previous output')
     original = {'blocks': [{'object': {'id': str(i), 'summary': '', 'children': []}}
                            for i in range(2)], 'summary': ''}
-    calls, observed = [], []
+    calls, observed, completion_updates = [], [], []
     interrupt = True
 
     class Progress:
@@ -89,7 +89,8 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
     monkeypatch.setattr(dom, 'summarize_markdown_object_tree_async', tree_summary)
     monkeypatch.setattr(app, '_prepare_incremental_tree', lambda *args: ([], 0, False))
     options = dict(checkpoint_path=tmp_path / 'checkpoint.json', progress_factory=Progress,
-                   progress_interval=.001, concurrency=1)
+                   progress_interval=.001, concurrency=1,
+                   completed_callback=lambda rows: completion_updates.append(rows))
     async def scenario():
         nonlocal interrupt
         try:
@@ -109,4 +110,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
         assert rows[0]['completed_objects'] == 2
         assert any(n == 1 and total == 2 for n, total, _ in observed)
         assert not app._partial_path(file).exists()
+        assert completion_updates[0] == []
+        assert completion_updates[-1][0]['file'] == str(file)
+        assert completion_updates[-1][0]['status'] == 'completed'
     asyncio.run(scenario())
