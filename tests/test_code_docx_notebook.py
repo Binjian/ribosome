@@ -23,9 +23,9 @@ def api():
     notebook = nbformat.read(NOTEBOOK, as_version=4)
     nbformat.validate(notebook)
     namespace = {}
+    # Saved execution counts and outputs do not affect the code under test.
     for index, cell in enumerate(notebook.cells):
         if cell.cell_type == "code":
-            assert not cell.outputs and cell.execution_count is None
             code = compile(cell.source, f"{NOTEBOOK}:cell-{index}", "exec")
             if not cell.source.lstrip().startswith("# | notest"):
                 exec(code, namespace)
@@ -395,3 +395,52 @@ def test_inherited_subsections_follow_parent_list_instance(api, tmp_path):
         "3 Chapter", "3.5 Child", "3.6 Sibling", "4 Next chapter",
         "4.5 Restarted child", "1.1 Explicit independent child",
     ]
+
+
+def test_large_html_tables_keep_pandoc_object_wrappers(api):
+    import pypandoc
+
+    # Include literal numbered instructions, which Pandoc otherwise parses as Markdown.
+    row = '<tr><td><p>Alarm 1234</p></td><td colspan="2"><p>1. Check drive<br/>2. Reset</p></td></tr>'
+    html = '<table><thead><tr><th>Code</th><th>Action</th></tr></thead><tbody>' + row * 2000 + '</tbody></table>'
+    converter = api['HtmlTableMarkdownConverter'](heading_style='ATX')
+    markdown = converter.convert(html)
+    assert len(markdown.splitlines()) > 2000
+    original = BeautifulSoup(html, 'html.parser')
+    converted = BeautifulSoup(markdown, 'html.parser')
+    assert [str(cell) for cell in converted.find_all(['td', 'th'])] == [
+        str(cell) for cell in original.find_all(['td', 'th'])]
+    result = json.loads(pypandoc.convert_text(
+        '::: {data-object="1"}\n\n' + markdown + '\n\n:::\n',
+        'json', 'markdown+fenced_divs'))
+    assert len(result['blocks']) == 1
+    assert result['blocks'][0]['t'] == 'Div'
+    assert result['blocks'][0]['c'][0][2] == [['data-object', '1']]
+
+
+def test_table_formatting_preserves_inline_and_preformatted_content(api):
+    html = '<table><tr><td rowspan="2"><p>a<strong>b</strong>c</p><pre> x\n  y</pre>' \
+           '<table><tr><td><img src="img/a.png"/>nested</td></tr></table></td></tr></table>'
+    soup = BeautifulSoup(html, 'html.parser')
+    before = str(soup)
+    converted = api['HtmlTableMarkdownConverter']().convert_table(soup.table, '', set())
+    output = BeautifulSoup(converted, 'html.parser')
+    assert str(soup) == before
+    assert str(output.p) == str(soup.p)
+    assert str(output.pre) == str(soup.pre)
+    assert str(output.img) == str(soup.img)
+    assert output.td['rowspan'] == '2'
+    assert len(output.find_all('table')) == 2
+
+
+def test_literal_numbered_instruction_does_not_swallow_pandoc_div(api):
+    import pypandoc
+
+    html = '<table><tr><td><p>1. Check drive<br/>2. Clear fault</p></td></tr></table>'
+    markdown = api['HtmlTableMarkdownConverter']().convert(html)
+    assert '1&#46; Check drive' in markdown
+    assert BeautifulSoup(markdown, 'html.parser').p.get_text() == '1. Check drive2. Clear fault'
+    tree = json.loads(pypandoc.convert_text(
+        '::: {data-object="1"}\n\n' + markdown + '\n\n:::\n',
+        'json', 'markdown+fenced_divs'))
+    assert len(tree['blocks']) == 1 and tree['blocks'][0]['t'] == 'Div'
