@@ -325,9 +325,9 @@ def test_limits_validate_selected_object_module(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setitem(sys.modules, 'ribosome.core.dom.summary.object',
                         SimpleNamespace(_SUMMARY_CONCURRENCY=8, _SUMMARY_TASK_LIMIT=32))
-    assert list(shared.configure_summary_limits(summary_module='object').values()) == [8, 8, 32]
-    monkeypatch.setenv('RIBOSOME_DOCUMENT_CONCURRENCY', '4')
-    assert shared.configure_summary_limits(summary_module='object')['RIBOSOME_DOCUMENT_CONCURRENCY'] == 4
+    assert list(shared.configure_summary_limits(summary_module='object').values()) == [4, 8, 32]
+    monkeypatch.setenv('RIBOSOME_DOCUMENT_CONCURRENCY', '6')
+    assert shared.configure_summary_limits(summary_module='object')['RIBOSOME_DOCUMENT_CONCURRENCY'] == 6
     monkeypatch.setenv('RIBOSOME_SUMMARY_CONCURRENCY', '2')
     with pytest.raises(RuntimeError, match='Restart the kernel'):
         shared.configure_summary_limits(summary_module='object')
@@ -344,7 +344,7 @@ def test_notebook_validates_compiles_and_uses_both_corpora():
             compile(cell.source, '<object-batch-notebook>', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
     config = notebook.cells[2].source
     assert config.index('configure_summary_limits(summary_module="object")') < config.index('from utils.summary_object_asyncio')
-    assert 'md.json.semantics.coding.4.0' in config and 'md.json.semantics.coding.5.0' in config
+    assert 'code-docs.4.0' in config and 'code-docs.5.0' in config
     assert '.object-summary-checkpoint.json' in config
     assert 'await summarize_object_documents(' in notebook.cells[6].source
     assert 'DOMClass' not in config and 'chromadb' not in config
@@ -373,7 +373,10 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
                         'concurrency_per_server': 4, 'headers': {'Authorization': 'Bearer test-key'},
                         'request_timeout': 300.0, 'max_tokens': 2048, 'think': False}
     assert namespace['SUMMARY_MODEL'] == 'vision'
-    assert [p.name for p in namespace['INPUT_DIRS']] == ['md.json.semantics.coding.4.0', 'md.json.semantics.coding.5.0']
+    assert namespace['INPUT_DIRS'] == [
+        tmp_path / 'assets' / 'code-docs.4.0' / '.md',
+        tmp_path / 'assets' / 'code-docs.5.0' / '.md',
+    ]
     assert namespace['IGNORED_IMAGES_DIR'] == tmp_path / 'assets' / 'images_ignored'
     assert namespace['PREVIEW_OUTPUTS'] == 3
     assert namespace['RESUME'] is True
