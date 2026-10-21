@@ -379,3 +379,19 @@ def test_single_file_cannot_overwrite_its_source(api, tmp_path):
     with pytest.raises(ValueError, match="target must be a .md"):
         api["convert_docx_to_markdown"](source, source, overwrite=True, show_progress=False)
     assert source.read_bytes() == original
+
+
+def test_inherited_subsections_follow_parent_list_instance(api, tmp_path):
+    body = (
+        paragraph("Chapter", "HeadingOne", numbered(8, 0))
+        + paragraph("Child", "HeadingTwo")
+        + paragraph("Sibling", "HeadingTwo")
+        + paragraph("Next chapter", "HeadingOne", numbered(8, 0))
+        + paragraph("Restarted child", "HeadingTwo")
+        + paragraph("Explicit independent child", "HeadingTwo", numbered(7, 1))
+    )
+    path = make_docx(tmp_path / "parent-instance.docx", body)
+    assert heading_titles(api, path) == [
+        "3 Chapter", "3.5 Child", "3.6 Sibling", "4 Next chapter",
+        "4.5 Restarted child", "1.1 Explicit independent child",
+    ]
