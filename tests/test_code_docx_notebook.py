@@ -444,3 +444,42 @@ def test_literal_numbered_instruction_does_not_swallow_pandoc_div(api):
         '::: {data-object="1"}\n\n' + markdown + '\n\n:::\n',
         'json', 'markdown+fenced_divs'))
     assert len(tree['blocks']) == 1 and tree['blocks'][0]['t'] == 'Div'
+
+
+def test_multiple_source_roots_have_independent_outputs_and_combined_report(api, tmp_path):
+    roots = [tmp_path / 'v4', tmp_path / 'v5']
+    for root in roots:
+        root.mkdir()
+        make_docx(root / 'manual.docx', paragraph(root.name))
+    report = api['convert_code_docs']([str(roots[0]), roots[1], roots[0]], show_progress=False)
+    assert report['discovered'] == 2
+    assert len(report['converted']) == len(report['reports']) == 2
+    for root in roots:
+        assert (root / '.md/manual/manual.md').read_text().strip() == root.name
+    resumed = api['convert_code_docs'](roots, show_progress=False)
+    assert len(resumed['skipped']) == 2 and not resumed['converted']
+
+
+def test_multiple_source_roots_custom_outputs_and_validation(api, tmp_path):
+    roots = [tmp_path / 'v4', tmp_path / 'v5']
+    outputs = [tmp_path / 'out4', tmp_path / 'out5']
+    for root in roots:
+        root.mkdir()
+        make_docx(root / 'manual.docx', paragraph(root.name))
+    with pytest.raises(ValueError, match='matching list'):
+        api['convert_code_docs'](roots, tmp_path / 'shared', show_progress=False)
+    with pytest.raises(ValueError, match='distinct output'):
+        api['convert_code_docs'](roots, [outputs[0]] * 2, show_progress=False)
+    with pytest.raises(ValueError, match='source root or its ancestor'):
+        api['convert_code_docs'](roots, [roots[1], outputs[1]], show_progress=False)
+    with pytest.raises(NotADirectoryError):
+        api['convert_code_docs']([roots[0], tmp_path / 'missing'], show_progress=False)
+    assert not (roots[0] / '.md').exists()
+    report = api['convert_code_docs'](roots, outputs, show_progress=False)
+    assert len(report['converted']) == 2
+    assert all((output / 'manual/manual.md').is_file() for output in outputs)
+
+
+def test_empty_source_root_list_is_rejected(api):
+    with pytest.raises(ValueError, match='at least one'):
+        api['convert_code_docs']([], show_progress=False)
