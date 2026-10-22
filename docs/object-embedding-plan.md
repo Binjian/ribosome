@@ -5,8 +5,9 @@
 Create `nbs/01.core.dom.embedding.object.ipynb` to index every nonempty object
 `summary`, recursively, plus the document summary from `*_semantics.json` files.
 Use Chroma for vector search and SQLite for complete object records and
-relationships. Include configurable corpus indexing and retrieval with raw
-evidence and surrounding context. Answer generation remains future work.
+relationships. Keep reusable APIs and offline functional tests in the core notebook;
+put configurable corpus indexing and retrieval with raw evidence and surrounding
+context in `nbs/05.application.embedding.object.ipynb`. Answer generation remains future work.
 
 ## Package and public API
 
@@ -55,8 +56,9 @@ evidence and surrounding context. Answer generation remains future work.
 
 ## Notebook workflow and retrieval
 
-- Follow existing nbdev documentation/export/offline-test conventions. Keep live
-  examples `notest`, with no provider calls or corpus processing on import.
+- Follow existing nbdev documentation/export/offline-test conventions. Keep the
+  offline end-to-end functional test at the bottom of the core notebook. Application
+  examples are `notest`, with no provider calls or corpus processing on import.
 - Default to Ollama `qwen3-embedding:8b` on local and remote async services,
   a dedicated `object_summaries` collection, and persistent files under
   `db/object_embeddings/qwen3-embedding-8b/`.

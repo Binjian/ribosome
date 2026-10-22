@@ -1,5 +1,4 @@
 """Live concurrent embedding status and notebook cancellation finalization."""
-import ast
 import asyncio
 import sys
 from dataclasses import asdict
@@ -72,7 +71,7 @@ def test_display_updates_one_panel_escapes_sources_and_distinguishes_document_er
     report = [IndexingResult('done<1>.json', 'indexed'), IndexingResult('bad.json', 'failed')]
     monitor.update(current_file='file<script>.json', report=report)
     tick[0] = 15.0
-    monitor.update(current_file='file<script>.json', report=report)
+    monitor.update(current_file='file<script>.json', report=[asdict(row) for row in report])
     assert len(panels) == 1 and panels[0][1] == {'display_id': True}
     html = updates[-1]
     assert 'Requests running 5/8' in html and 'Queued 2' in html
@@ -88,40 +87,30 @@ def test_display_updates_one_panel_escapes_sources_and_distinguishes_document_er
 
 
 @pytest.mark.parametrize('cancel', [False, True])
-def test_notebook_refreshes_during_requests_and_flushes_after_cleanup(tmp_path, monkeypatch, cancel):
-    import utils.embedding_progress as progress_module
-    notebook = read('nbs/01.core.dom.embedding.object.ipynb', as_version=4)
+def test_application_refreshes_during_requests_and_flushes_after_cleanup(tmp_path, monkeypatch, cancel):
+    notebook = read('nbs/05.application.embedding.object.ipynb', as_version=4)
     source = next(cell.source for cell in notebook.cells
-                  if cell.cell_type == 'code' and 'concurrency_display = ' in cell.source)
-    code = compile(source, '<live-embedding-cell>', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
-    file = tmp_path / 'sample_semantics.json'
-    file.write_text('{}')
+                  if cell.cell_type == 'code' and 'def embed_corpora(' in cell.source)
     snapshots = []
     started = asyncio.Event()
     cleaned = []
-    class Pool:
-        def __init__(self, **kwargs): self.active = 0
-        async def check_models(self, model): return model
-        async def aclose(self): pass
-        def server_snapshots(self): return []
+    pool = SimpleNamespace(active=0)
     class Index:
-        def __init__(self, *args, **kwargs): self.pool = kwargs['llm_client']
-        async def index_paths(self, files):
-            self.pool.active = 8
+        async def index_file(self, file):
+            pool.active = 8
             started.set()
             try:
                 if cancel:
                     await asyncio.Future()
                 else:
-                    await asyncio.sleep(0.3)
-                return [IndexingResult(str(files[0]), 'indexed')]
+                    await asyncio.sleep(0.03)
+                return IndexingResult(str(file), 'indexed')
             finally:
-                self.pool.active = 0
+                pool.active = 0
                 cleaned.append(True)
     class Display:
-        def __init__(self, pool, **kwargs): self.pool = pool
         def update(self, *, current_file, report, state='Running'):
-            snapshots.append((self.pool.active, len(report), state))
+            snapshots.append((pool.active, len(report), state))
     class Bar:
         def __init__(self, **kwargs): pass
         def __enter__(self): return self
@@ -130,17 +119,16 @@ def test_notebook_refreshes_during_requests_and_flushes_after_cleanup(tmp_path, 
         def refresh(self): pass
         def update(self, count): pass
         def write(self, text): pass
-    monkeypatch.setattr(progress_module, 'EmbeddingProgressDisplay', Display)
     monkeypatch.setattr('tqdm.auto.tqdm', Bar)
-    namespace = dict(Path=Path, INPUT_DIRS=[tmp_path], INDEX_DIR=tmp_path / 'db',
-                     OLLAMA_HOSTS=HOSTS, SERVER_CONCURRENCY=4, REQUEST_TIMEOUT=300,
-                     EMBED_MODEL='qwen3-embedding:8b', EMBEDDING_CONFIG={},
-                     EMBEDDING_CONCURRENCY=8, headers={}, OllamaEmbeddingPool=Pool,
-                     ObjectEmbeddingIndex=Index, asdict=asdict)
+    namespace = {}
+    exec(compile(source, '<application-embedding-helpers>', 'exec'), namespace)
+    report = []
     async def scenario():
-        task = asyncio.create_task(eval(code, namespace))
+        task = asyncio.create_task(namespace['embed_corpora'](
+            [(tmp_path, [tmp_path / 'sample_semantics.json'])], Index(), report,
+            progress_interval=0.01, status_display=Display()))
         await started.wait()
-        await asyncio.sleep(0.26)
+        await asyncio.sleep(0.02)
         if cancel:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):

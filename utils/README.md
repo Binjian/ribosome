@@ -27,13 +27,16 @@ then retrieve summaries with raw source content and parent/child context. The
 implementation plan is in [object-embedding-plan.md](../docs/object-embedding-plan.md).
 For folder-based batch processing with preflight, progress, failure reports, and
 catalog inspection, run [05.application.embedding.object.ipynb](../nbs/05.application.embedding.object.ipynb).
-Both notebooks default to `qwen3-embedding:8b` with the async
+The application notebook defaults to `qwen3-embedding:8b` with the async
 `OllamaEmbeddingPool` in `embedding_ollama_pool.py`. Requests use
 `http://localhost:11434` and `http://172.27.74.16:11434` concurrently, with four
 requests per server (eight total). Preflight requires the model on every configured host.
 Set `OLLAMA_EMBED_HOSTS` (comma-separated), `OLLAMA_EMBED_MODEL`,
 `RIBOSOME_EMBED_SERVER_CONCURRENCY`, and `RIBOSOME_EMBED_REQUEST_TIMEOUT` in the
-environment or project `.env` to override these settings. Both workflows use
+environment or project `.env` to override these settings. Corpus indexing, the
+live concurrency display, optional fresh-index rebuilds, catalog inspection, and
+evidence retrieval are all in the application notebook. The core notebook contains
+the reusable API and an offline functional test. The workflow uses
 `db/object_embeddings/qwen3-embedding-8b/` by default, preserving earlier indexes.
 The provider host set and model identify the vector space; worker limits do not.
 Offline validation:

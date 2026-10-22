@@ -195,22 +195,15 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
     assert not (tmp_path / 'db').exists()
 
 
-def test_both_notebooks_share_qwen_hosts_catalog_and_vector_identity(tmp_path, monkeypatch):
+def test_application_defaults_to_qwen_dual_host_index_without_processing(tmp_path, monkeypatch):
     (tmp_path / 'pyproject.toml').write_text('')
     monkeypatch.syspath_prepend(str(tmp_path))
-    from ribosome.system import utils as system_utils
-    monkeypatch.setattr(system_utils, 'get_project_root', lambda: tmp_path)
-    core = read('nbs/01.core.dom.embedding.object.ipynb', as_version=4)
-    config = next(c.source for c in core.cells if c.cell_type == 'code' and 'OLLAMA_EMBED_HOSTS' in c.source and 'PROJ_ROOT =' in c.source)
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
         app = {}
         exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
-        core_config = {'Path': Path}
-        exec(compile(config, '<core-embedding-config>', 'exec'), core_config)
-        for key in ['EMBED_MODEL', 'OLLAMA_HOSTS', 'EMBEDDING_CONFIG', 'INDEX_DIR', 'EMBEDDING_CONCURRENCY']:
-            assert core_config[key] == app[key]
         assert app['EMBED_MODEL'] == 'qwen3-embedding:8b'
         assert app['OLLAMA_HOSTS'] == ['http://localhost:11434', 'http://172.27.74.16:11434']
         assert app['EMBEDDING_CONCURRENCY'] == 8
         assert app['INDEX_DIR'] == tmp_path / 'db/object_embeddings/qwen3-embedding-8b'
+        assert app['FORCE_REBUILD'] is False
         assert not app['INDEX_DIR'].exists()

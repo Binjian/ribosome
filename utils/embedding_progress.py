@@ -62,8 +62,9 @@ class EmbeddingProgressDisplay:
         if current_file != self.current_file:
             self.current_file = current_file
             self.file_started = now
-        completed = [str(row.semantics_file) for row in report if row.status in {'indexed', 'unchanged'}]
-        counts = {status: sum(row.status == status for row in report)
+        rows = [row if isinstance(row, dict) else vars(row) for row in report]
+        completed = [str(row['semantics_file']) for row in rows if row['status'] in {'indexed', 'unchanged'}]
+        counts = {status: sum(row['status'] == status for row in rows)
                   for status in ('indexed', 'unchanged', 'failed')}
         content = self._HTML(render_embedding_status(
             self.pool.status_snapshot(), current_file=self.current_file,
