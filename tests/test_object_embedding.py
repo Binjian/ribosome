@@ -4,9 +4,13 @@ import copy
 import hashlib
 import json
 import sqlite3
+import sys
+from pathlib import Path
 
 import chromadb
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ribosome.core.dom.embedding.object import ObjectEmbeddingIndex, collect_object_records
 
@@ -390,3 +394,86 @@ def test_corpus_cancellation_propagates(index, tmp_path):
     provider.fail = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):
         run(store.index_paths([source]))
+
+
+def test_parallel_preparation_uses_both_servers_and_preserves_reuse_counts(tmp_path, monkeypatch):
+    from ollama import AsyncClient
+    from utils.embedding_ollama_pool import OllamaEmbeddingPool
+
+    async def scenario():
+        seen = set()
+        both = asyncio.Event()
+        async def embed(self, model, input):
+            seen.add(str(self._client.base_url).rstrip('/'))
+            if len(seen) == 2:
+                both.set()
+            await asyncio.wait_for(both.wait(), 1)
+            return {'embeddings': [[1.0, 2.0, 3.0]], 'model': model}
+        monkeypatch.setattr(AsyncClient, 'embed', embed)
+        hosts = ['http://localhost:11434', 'http://172.27.74.16:11434']
+        pool = OllamaEmbeddingPool(hosts=hosts)
+        client = chromadb.EphemeralClient()
+        collection = client.create_collection('parallel-objects', metadata={'hnsw:space': 'cosine'}, embedding_function=None)
+        tree = {'summary': 'Doc', 'objects': [record(1, 'figure', 'same'), record(2, 'figure', 'same')]}
+        path = write(tmp_path, tree)
+        try:
+            with ObjectEmbeddingIndex(tmp_path / 'parallel.sqlite3', collection=collection,
+                    llm_client=pool, embedding_concurrency=2) as index:
+                result = await index.index_file(path)
+                assert seen == set(hosts)
+                assert result.embedded == 2 and result.reused == 1
+                assert collection.count() == 3
+                requests = sum(row['completed'] for row in pool.server_snapshots())
+                assert requests == 2
+                assert (await index.index_file(path)).status == 'unchanged'
+                assert sum(row['completed'] for row in pool.server_snapshots()) == requests
+                tree['objects'][0]['content'] = 'metadata edit'
+                write(tmp_path, tree)
+                updated = await index.index_file(path)
+                assert updated.embedded == 0 and updated.reused == 3
+        finally:
+            await pool.aclose()
+            client.delete_collection(collection.name)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('outcome', ['failure', 'cancel'])
+def test_parallel_preparation_cleans_up_workers_and_preserves_publication(tmp_path, outcome):
+    async def scenario():
+        client = chromadb.EphemeralClient()
+        collection = client.create_collection('parallel-cleanup-' + outcome, metadata={'hnsw:space': 'cosine'}, embedding_function=None)
+        provider = Provider()
+        path = write(tmp_path, {'summary': 'Original', 'objects': []})
+        started = asyncio.Event()
+        cleaned = []
+        try:
+            with ObjectEmbeddingIndex(tmp_path / 'cleanup.sqlite3', collection=collection,
+                    llm_client=provider, embedding_concurrency=2) as index:
+                initial = await index.index_file(path)
+                write(tmp_path, {'summary': 'Blocking', 'objects': [record(1, 'figure', 'Failure')]})
+                original_embed = provider.embed
+                async def embed(model, input):
+                    if input == 'Failure' and outcome == 'failure':
+                        await started.wait()
+                        raise RuntimeError('parallel failure')
+                    started.set()
+                    try:
+                        await asyncio.Future()
+                    finally:
+                        cleaned.append(input)
+                provider.embed = embed
+                task = asyncio.create_task(index.index_file(path))
+                await started.wait()
+                if outcome == 'cancel':
+                    task.cancel()
+                with pytest.raises(RuntimeError if outcome == 'failure' else asyncio.CancelledError):
+                    await task
+                assert cleaned
+                assert index._active_generation(initial.document_id) == initial.generation_id
+                assert collection.count() == 1
+                provider.embed = original_embed
+                retried = await index.index_file(path)
+                assert retried.status == 'indexed'
+        finally:
+            client.delete_collection(collection.name)
+    asyncio.run(scenario())

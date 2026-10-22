@@ -57,8 +57,9 @@ evidence and surrounding context. Answer generation remains future work.
 
 - Follow existing nbdev documentation/export/offline-test conventions. Keep live
   examples `notest`, with no provider calls or corpus processing on import.
-- Default to Ollama `bge-m3`, dedicated `object_summaries` collection, and persistent
-  files under `db/object_embeddings/`.
+- Default to Ollama `qwen3-embedding:8b` on local and remote async services,
+  a dedicated `object_summaries` collection, and persistent files under
+  `db/object_embeddings/qwen3-embedding-8b/`.
 - Configure roots matching the object-summary corpus, discover recursively in
   deterministic order, and return per-file success/failure reports.
 - Search using cosine distance, top-k, optional document/type filters, and the

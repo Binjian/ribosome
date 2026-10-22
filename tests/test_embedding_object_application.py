@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import chromadb
@@ -50,7 +49,7 @@ def test_notebook_is_valid_offline_and_all_cells_compile():
 
 def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path, monkeypatch):
     (tmp_path / 'pyproject.toml').write_text('')
-    (tmp_path / '.env').write_text('OLLAMA_HOST=http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
+    (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://localhost:11434,http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
     monkeypatch.syspath_prepend(str(tmp_path))
     import ollama
     monkeypatch.setattr(ollama, 'AsyncClient', lambda **kw: pytest.fail('Configuration opened a provider client'))
@@ -58,11 +57,12 @@ def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path
         namespace = {}
         exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), namespace)
         assert namespace['EMBED_MODEL'] == 'override-model'
-        assert namespace['OLLAMA_HOST'] == 'http://from-file:11434'
+        assert namespace['OLLAMA_HOSTS'] == ['http://localhost:11434', 'http://from-file:11434']
+        assert namespace['EMBEDDING_CONCURRENCY'] == 8
         assert namespace['headers'] == {'Authorization': 'Bearer fake-secret'}
-        assert namespace['EMBEDDING_CONFIG'] == {'provider': 'http://from-file:11434'}
+        assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': ['http://from-file:11434', 'http://localhost:11434']}
         assert namespace['INPUT_DIRS'] == [tmp_path / 'assets/code-docs.4.0/.md', tmp_path / 'assets/code-docs.5.0/.md']
-        assert namespace['CATALOG_PATH'] == tmp_path / 'db/object_embeddings/catalog.sqlite3'
+        assert namespace['CATALOG_PATH'] == tmp_path / 'db/object_embeddings/override-model/catalog.sqlite3'
         assert not namespace['INDEX_DIR'].exists()
 
 
@@ -159,30 +159,58 @@ def test_cancellation_awaits_active_file_and_retains_completed_reports(tmp_path)
     assert [row['semantics_file'] for row in rows] == [str(first)]
 
 
-@pytest.mark.parametrize('capabilities', [['embedding'], ['completion']])
-def test_preflight_checks_embedding_capability_and_closes_on_error(tmp_path, capabilities):
+@pytest.mark.parametrize('failure', [False, True])
+def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
     namespace = helpers()
     semantics(tmp_path, 'a')
     calls = []
 
-    class Client:
-        async def show(self, model):
-            calls.append(('show', model))
-            return SimpleNamespace(capabilities=capabilities)
+    class Pool:
+        def __init__(self, **kwargs):
+            calls.append(('setup', kwargs))
 
-        async def close(self):
+        async def check_models(self, model):
+            calls.append(('check_models', model))
+            if failure:
+                raise RuntimeError('remote model missing')
+            return model
+
+        async def aclose(self):
             calls.append(('close', None))
 
-    client = Client()
-    namespace.update(INPUT_DIRS=[tmp_path], AsyncClient=lambda **kw: client,
-                     OLLAMA_HOST='http://fake', headers={}, REQUEST_TIMEOUT=300, EMBED_MODEL='bge-m3')
-    code = compile(code_with('model_info = await ollama_client.show'), str(NOTEBOOK), 'exec',
+    hosts = ['http://localhost:11434', 'http://172.27.74.16:11434']
+    namespace.update(INPUT_DIRS=[tmp_path], OllamaEmbeddingPool=Pool,
+                     OLLAMA_HOSTS=hosts, SERVER_CONCURRENCY=1, headers={},
+                     REQUEST_TIMEOUT=300, EMBED_MODEL='qwen3-embedding:8b')
+    code = compile(code_with('await ollama_client.check_models'), str(NOTEBOOK), 'exec',
                    flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
-    if 'embedding' in capabilities:
-        asyncio.run(eval(code, namespace))
-        assert calls == [('show', 'bge-m3')]
-    else:
-        with pytest.raises(ValueError, match='embedding support'):
+    if failure:
+        with pytest.raises(RuntimeError, match='remote model missing'):
             asyncio.run(eval(code, namespace))
-        assert calls == [('show', 'bge-m3'), ('close', None)]
+        assert calls[-1] == ('close', None)
+    else:
+        asyncio.run(eval(code, namespace))
+        assert calls[-1] == ('check_models', 'qwen3-embedding:8b')
+    assert calls[0] == ('setup', {'hosts': hosts, 'concurrency_per_server': 1, 'headers': {}, 'request_timeout': 300})
     assert not (tmp_path / 'db').exists()
+
+
+def test_both_notebooks_share_qwen_hosts_catalog_and_vector_identity(tmp_path, monkeypatch):
+    (tmp_path / 'pyproject.toml').write_text('')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    from ribosome.system import utils as system_utils
+    monkeypatch.setattr(system_utils, 'get_project_root', lambda: tmp_path)
+    core = read('nbs/01.core.dom.embedding.object.ipynb', as_version=4)
+    config = next(c.source for c in core.cells if c.cell_type == 'code' and 'OLLAMA_EMBED_HOSTS' in c.source and 'PROJ_ROOT =' in c.source)
+    with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
+        app = {}
+        exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
+        core_config = {'Path': Path}
+        exec(compile(config, '<core-embedding-config>', 'exec'), core_config)
+        for key in ['EMBED_MODEL', 'OLLAMA_HOSTS', 'EMBEDDING_CONFIG', 'INDEX_DIR', 'EMBEDDING_CONCURRENCY']:
+            assert core_config[key] == app[key]
+        assert app['EMBED_MODEL'] == 'qwen3-embedding:8b'
+        assert app['OLLAMA_HOSTS'] == ['http://localhost:11434', 'http://172.27.74.16:11434']
+        assert app['EMBEDDING_CONCURRENCY'] == 8
+        assert app['INDEX_DIR'] == tmp_path / 'db/object_embeddings/qwen3-embedding-8b'
+        assert not app['INDEX_DIR'].exists()
