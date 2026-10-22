@@ -25,6 +25,8 @@ For recursive object embeddings, use `01.core.dom.embedding.object.ipynb` and
 index `*_semantics.json` into a dedicated Chroma collection and SQLite catalog,
 then retrieve summaries with raw source content and parent/child context. The
 implementation plan is in [object-embedding-plan.md](../docs/object-embedding-plan.md).
+For folder-based batch processing with preflight, progress, failure reports, and
+catalog inspection, run [05.application.embedding.object.ipynb](../nbs/05.application.embedding.object.ipynb).
 Offline validation:
 
 ```sh
