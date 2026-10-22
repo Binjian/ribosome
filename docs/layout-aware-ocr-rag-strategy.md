@@ -491,7 +491,7 @@ The UI should deep-link to the page and highlight the cited bboxes. A citation m
 Before the adapter implemented below, the existing DOM pipeline provided useful Markdown parsing and section reorganization, but its embedding path was not sufficient for layout-aware OCR RAG:
 
 - [`DOMClass`](../ribosome/core/dom/model.py) parses Markdown through Pandoc and builds summarized semantic trees.
-- [`embed()`](../ribosome/core/dom/embedding.py) embeds document and node summaries.
+- [`embed()`](../ribosome/core/dom/embedding/natural_text.py) embeds document and node summaries.
 - Current Chroma metadata contains only `embed_model`.
 - The persistent collection is a generic `mitochondria` collection.
 - That generic path does not itself implement exact retrieval, hybrid indexing, reranking, citation assembly, or OCR-quality filtering.

@@ -200,7 +200,7 @@ async def embed_walk_node(node: dict | list, cur_object_path: list[str], collect
 
 
 def main():
-    path = ROOT / 'nbs/01.core.dom.embedding.ipynb'
+    path = ROOT / 'nbs/01.core.dom.embedding.natural_text.ipynb'
     notebook = json.loads(path.read_text())
     replacements = {'7a1aeb88': HELPERS + '\n' + EMBED.removeprefix('# | export\n'),
                     '076222a3': NODE, '3850676e': WALK}

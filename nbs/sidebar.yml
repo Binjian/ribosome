@@ -3,7 +3,8 @@ website:
     contents:
       - index.ipynb
       - 00.core.ipynb
-      - 01.core.dom.embedding.ipynb
+      - 01.core.dom.embedding.natural_text.ipynb
+      - 01.core.dom.embedding.object.ipynb
       - 01.core.dom.model.ipynb
       - 01.core.dom.reorg.ipynb
       - 01.core.dom.summary.object.ipynb

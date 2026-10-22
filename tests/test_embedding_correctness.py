@@ -9,7 +9,7 @@ from unittest.mock import patch
 import chromadb
 import pytest
 
-from ribosome.core.dom.embedding import (
+from ribosome.core.dom.embedding.natural_text import (
     _canonical_json, _child_path, _embed_walk, _node_id, _semantic_payload,
     embed, embed_node, embed_walk_node,
 )

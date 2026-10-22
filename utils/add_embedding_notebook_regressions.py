@@ -72,7 +72,7 @@ def test_embedding_replacement_identity_and_failure_contract():
 test_embedding_replacement_identity_and_failure_contract()
 '''
 def main():
-    p=Path(__file__).resolve().parents[1]/'nbs/01.core.dom.embedding.ipynb'
+    p=Path(__file__).resolve().parents[1]/'nbs/01.core.dom.embedding.natural_text.ipynb'
     n=json.loads(p.read_text())
     cell=next((c for c in n['cells'] if c.get('id')=='embedding-replacement-regressions'),None)
     if cell is None:

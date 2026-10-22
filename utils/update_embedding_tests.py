@@ -60,7 +60,7 @@ def update(s):
 def main():
     for name in ('tests/test_embedding_fastcore.py','tests/test_dom_behavior.py'):
         p=ROOT/name;p.write_text(update(p.read_text()))
-    p=ROOT/'nbs/01.core.dom.embedding.ipynb';n=json.loads(p.read_text())
+    p=ROOT/'nbs/01.core.dom.embedding.natural_text.ipynb';n=json.loads(p.read_text())
     for c in n['cells']:
         s=''.join(c['source'])
         if c['cell_type']=='code' and '# | hide' in s:
