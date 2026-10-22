@@ -6,7 +6,7 @@ from pathlib import Path
 from fastcore.test import test_eq as _test_eq
 from fastcore.test import test_fail as _test_fail
 
-from ribosome.core.dom.embedding import (
+from ribosome.core.dom.embedding.natural_text import (
     embed,
     embed_node,
     embed_walk_node,

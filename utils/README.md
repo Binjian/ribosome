@@ -16,9 +16,9 @@ cells with the captured version. The notebook remains the production source of
 truth; these scripts are development utilities, not runtime dependencies.
 
 The natural-text notebook now exports `ribosome.core.dom.embedding.natural_text`.
-`01.core.dom.embedding.compat.ipynb` generates the package initializer that
-preserves public imports such as `from ribosome.core.dom.embedding import embed`.
-Export the compatibility notebook as well when bootstrapping a fresh checkout.
+Import the existing interfaces directly from that module, for example
+`from ribosome.core.dom.embedding.natural_text import embed`. The embedding
+package initializer does not re-export the natural-text interfaces.
 
 For recursive object embeddings, use `01.core.dom.embedding.object.ipynb` and
 `ribosome.core.dom.embedding.object.ObjectEmbeddingIndex`. Its manual examples

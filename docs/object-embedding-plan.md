@@ -11,8 +11,9 @@ evidence and surrounding context. Answer generation remains future work.
 ## Package and public API
 
 - Convert `ribosome.core.dom.embedding` into a package with `natural_text` and
-  `object` modules and an nbdev-generated compatibility initializer preserving
-  existing public imports. Update private imports, links, sidebar and module index.
+  `object` modules. Import the existing interfaces directly from `natural_text`;
+  the package initializer does not re-export them. Update callers, tests, links,
+  sidebar and module index.
 - Preserve the pending natural-text notebook rename and remove the obsolete
   generated `embedding.py` after export.
 - Export `ObjectEmbeddingIndex` with asynchronous `index_file`, `index_paths`,
@@ -73,7 +74,7 @@ evidence and surrounding context. Answer generation remains future work.
   model mismatches, provider/storage failure, cancellation, and retry.
 - Use fake providers with temporary SQLite and real ephemeral Chroma. Verify
   active-generation filters and context lookup.
-- Run nbdev export/notebook tests and embedding/DOM compatibility tests; verify
+- Run nbdev export/notebook tests and embedding/DOM integration tests; verify
   inputs remain byte-for-byte unchanged. Do not run live corpus embedding.
 - IDs are stable for the same file location and source ID; moving a file creates
-  a new document identity. Preserve existing natural-text public imports.
+  a new document identity. Preserve existing natural-text interface signatures under `embedding.natural_text`.

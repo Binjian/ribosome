@@ -332,14 +332,6 @@ def test_search_rejects_invalid_arguments(index, kwargs):
         run(index[0].search('question', **kwargs))
 
 
-def test_public_natural_text_imports_survive_package_migration():
-    from ribosome.core.dom import embedding
-    from ribosome.core.dom.embedding import natural_text
-    assert embedding.embed is natural_text.embed
-    assert embedding.normalize_embeddings is natural_text.normalize_embeddings
-    assert 'embed' in embedding.__all__
-
-
 def test_original_json_text_preserves_crlf_and_unicode(index, tmp_path):
     store, _, _ = index
     path = tmp_path / 'unicode_semantics.json'
