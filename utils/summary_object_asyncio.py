@@ -367,7 +367,9 @@ async def summarize_object_documents(
                     state['reused_ids'] = {
                         str(node['object']['id']) for node in roots
                         if _complete_object(node['object'], dom_summary)}
-                    state['done'] = len(state['reused_ids'])
+                    state['known_ids'] = {str(node['object']['id']) for node in roots}
+                    state['done_ids'] = set(state['reused_ids'])
+                    state['done'] = len(state['done_ids'])
                     totals['done_objects'] += state['done']
                     state["phase"] = "summarizing tree"
                 return tree
@@ -384,12 +386,21 @@ async def summarize_object_documents(
 
             async def summarize_with_progress(*args, **kwargs):
                 state = document_progress.get()
-                if state is not None and checkpoint is not None:
-                    kwargs['reuse_existing'] = True
-                result = await summarize_object(*args, **kwargs)
                 if state is not None:
                     obj = args[0] if args else kwargs['obj']
-                    if str(obj['id']) not in state.get('reused_ids', set()):
+                    identity = str(obj['id'])
+                    # Nested cell/list/image calls are discovered during traversal.
+                    # Reserve their work before awaiting, so n never exceeds total.
+                    if identity not in state['known_ids']:
+                        state['known_ids'].add(identity)
+                        state['total'] += 1
+                        totals['objects'] += 1
+                    if checkpoint is not None:
+                        kwargs['reuse_existing'] = True
+                result = await summarize_object(*args, **kwargs)
+                if state is not None:
+                    if identity not in state['done_ids']:
+                        state['done_ids'].add(identity)
                         state["done"] += 1
                         totals["done_objects"] += 1
                     if checkpoint is not None and state.get('tree') is not None:
@@ -407,6 +418,7 @@ async def summarize_object_documents(
                        "incremental": False, "filled_summaries": 0}
                 state = {"slot": slot, "name": str(file), "total": 0, "done": 0, "started": started,
                          "phase": "parsing", "queued": 0, "running": 0,
+                         "known_ids": set(), "done_ids": set(),
                          "sections_total": 0, "sections_done": 0, "section_paths": set()}
                 active[index] = state
                 token = document_progress.set(state)
@@ -430,7 +442,8 @@ async def summarize_object_documents(
                             totals["status"] = "resumed"
                             return
                         row["incremental"] = True
-                        state["total"] = len(work)
+                        state['known_ids'] = {str(node['object']['id']) for node in work}
+                        state["total"] = len(state['known_ids'])
                         totals["objects"] += state["total"]
                         state["phase"] = "filling missing summaries"
 

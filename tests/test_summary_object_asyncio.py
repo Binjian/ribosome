@@ -558,3 +558,38 @@ def test_queue_progress_and_cancellation_release_shared_slots(tmp_path, monkeypa
         semaphore.release()
         assert not app._batch_active
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('checkpointed', [False, True])
+def test_nested_cell_work_dynamically_expands_progress_totals(tmp_path, monkeypatch, checkpointed):
+    file = document(tmp_path, source=(
+        '# Title\n\n<table><tr><td><ul><li>Parent'
+        '<img src="inner.png"><ol><li>Nested</li></ol>'
+        '</li></ul></td></tr></table>\n'))
+    samples = []
+
+    class ObservedProgress(Progress):
+        def refresh(self):
+            super().refresh()
+            assert 0 <= self.n <= self.total
+            if self is Progress.instances[2]:
+                samples.append((self.n, self.total))
+
+    async def text(**kwargs):
+        await asyncio.sleep(.005)
+        return 'summary'
+
+    async def image(**kwargs):
+        await asyncio.sleep(.005)
+        return 'image description'
+
+    monkeypatch.setattr(dom_summary, 'get_summary_response_async', text)
+    monkeypatch.setattr(dom_summary, 'get_image_summary_async', image)
+    options = dict(progress_factory=ObservedProgress, progress_interval=.001)
+    if checkpointed:
+        options['checkpoint_path'] = tmp_path / 'checkpoint.json'
+    row = run([file], **options)[0]
+    assert row['status'] == 'completed'
+    assert row['object_count'] == row['completed_objects'] == 7
+    assert max(total for _, total in samples) == 7
+    assert any(0 < done < total for done, total in samples)
