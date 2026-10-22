@@ -246,3 +246,46 @@ def test_pipe_tables_ignore_code_and_stay_inside_enclosing_lists(tmp_path):
     assert '| nested |' in objects[0]['content']
     assert objects[1]['content'] == '| real |\n| --- |\n| y |\n'
     assert objects[2]['content'].startswith('<table>')
+
+
+def test_html_table_wrapper_retry_preserves_source_and_caption(tmp_path, monkeypatch):
+    content = '<table><tr><td>literal ``` and :::</td></tr></table>'
+    file = write(tmp_path, '# Section\n\n表 1 data\n\n' + content + '\n\nAfter.\n')
+    original = sut.pypandoc.convert_text
+    calls = []
+
+    def lose_wrapper_once(source, *args, **kwargs):
+        calls.append(source)
+        result = original(source, *args, **kwargs)
+        if len(calls) == 1:
+            tree = json.loads(result)
+            # Reproduce Pandoc abandoning a Div around a complex HTML table.
+            tree['blocks'] = [child for block in tree['blocks']
+                              for child in (block['c'][1] if block['t'] == 'Div' else [block])]
+            return json.dumps(tree)
+        return result
+
+    monkeypatch.setattr(sut.pypandoc, 'convert_text', lose_wrapper_once)
+    before = file.read_bytes()
+    tree = sut.extract_markdown_object_tree(file)
+    wrapper, = sut._object_nodes(tree)
+    assert len(calls) == 2
+    assert wrapper['object'] == sut.extract_markdown_objects(file)[0]
+    assert wrapper['object']['caption'] == '表 1 data'
+    assert any(n.get('t') == 'RawBlock' and n['c'] == ['html', content]
+               for n in nodes(wrapper))
+    assert wrapper['subnodes']
+    assert file.read_bytes() == before
+
+
+def test_supplied_large_alarm_tables_preserve_all_objects():
+    root = Path('assets/code-docs.4.0/.md')
+    file = next(root.rglob('SX322001*B-5).md'), None)
+    if file is None:
+        pytest.skip('Local manual asset unavailable')
+    before = file.read_bytes()
+    tree = sut.extract_markdown_object_tree(file)
+    wrappers = list(sut._object_nodes(tree))
+    assert len(wrappers) == 926
+    assert [n['object'] for n in wrappers] == sut.extract_markdown_objects(file)
+    assert file.read_bytes() == before
