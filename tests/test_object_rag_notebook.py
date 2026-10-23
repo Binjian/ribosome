@@ -1,4 +1,5 @@
 import pytest
+import json
 import ast
 from pathlib import Path
 import nbformat
@@ -84,14 +85,12 @@ def test_content_summary_accompanies_supported_and_unsupported_answers(supported
         app.last_result = dict(hits=[hit], context='[E1] Exact evidence')
         return app.last_result
     requests = []
-    expected_answer = (
-        'General operation, C-1 [E1]\n```text\nSET_FRAME <user_frame_number>\n```'
-        if supported else 'Insufficient evidence for code.'
-    )
+    payload = example_payload(supported=supported)
+    expected_answer = payload['explanation']
     class Generator:
         async def chat(self, **kwargs):
             requests.append(kwargs)
-            return {'message': {'content': expected_answer}}
+            return {'message': {'content': json.dumps(payload)}}
 
     app.retrieve = retrieve
     app.generator = Generator()
@@ -99,15 +98,23 @@ def test_content_summary_accompanies_supported_and_unsupported_answers(supported
     assert 'Sets the user coordinate number.' in result['retrieved_summary']
     assert 'manual.md' in result['retrieved_summary']
     assert 'C-1' in result['retrieved_summary']
-    assert result['answer'] == expected_answer
+    assert expected_answer in result['answer']
+    if supported:
+        assert result['example_status'] == 'included'
+        assert 'Environment and prerequisites' in result['answer']
+        assert result['answer'].endswith('```text\n' + payload['code'] + '\n```')
+    else:
+        assert result['answer'] == expected_answer
+        assert result['example_status'] == 'unsupported'
     request = requests[0]
     system, user = request['messages']
     assert 'Selected category: general_operation' in user['content']
     assert 'Question: question' in user['content']
     assert '[E1] Exact evidence' in user['content']
     assert 'actual code statement' in system['content']
-    assert 'Immediately before the final code block' in system['content']
-    assert 'If the evidence does not support the requested instruction' in system['content']
+    assert 'follow-up' in system['content']
+    assert request['format']['properties']['supported'] == {'type': 'boolean'}
+    assert 'instruction_statement' in request['format']['required']
     assert request['stream'] is False
     assert request['options']['num_predict'] == 128
 
@@ -122,3 +129,79 @@ def test_empty_evidence_still_returns_content_summary():
     result = asyncio.run(app.answer('question', 'general_operation'))
     assert 'No relevant indexed content' in result['retrieved_summary']
     assert 'No eligible evidence' in result['answer']
+
+
+def example_payload(supported=True):
+    # Synthetic manual syntax; these are test fixtures, not controller examples.
+    return dict(
+        supported=supported,
+        explanation='Assign the prepared value.' if supported else 'Missing documented assignment syntax.',
+        scenario='Copy an input into the working variable.',
+        environment='Synthetic manual: source and result are integer variables.',
+        expected_result='result holds the copied value.',
+        code='SET source, 5\nSET target, source\nSET result, target' if supported else '',
+        instruction_statement='SET target, source' if supported else '',
+        language='text', manual='Synthetic C-1, corpus 5.0', citations=['E1'],
+    )
+
+
+@pytest.mark.parametrize('invalid', ['single_line', 'no_fence_fields', 'unknown_citation'])
+@pytest.mark.parametrize('recovers', [True, False])
+def test_contextual_example_validation_retries_and_rejects_incomplete_examples(invalid, recovers):
+    import asyncio
+    from ribosome.rag.object import ObjectRAG
+    app = object.__new__(ObjectRAG)
+    app.rag_model, app.max_output_tokens = 'fake', 2048
+    calls = []
+    bad = example_payload()
+    if invalid == 'single_line':
+        bad['code'] = bad['instruction_statement']
+    elif invalid == 'no_fence_fields':
+        bad.pop('environment')
+    else:
+        bad['citations'] = ['E999']
+    async def retrieve(*args, **kwargs):
+        app.last_result = dict(hits=[], context='[E1] Synthetic manual evidence')
+        return app.last_result
+    class Generator:
+        async def chat(self, **kwargs):
+            calls.append(kwargs)
+            payload = example_payload() if recovers and len(calls) == 2 else bad
+            return {'message': {'content': json.dumps(payload)}}
+    app.retrieve, app.generator = retrieve, Generator()
+    result = asyncio.run(app.answer('Copy source to target', 'general_operation'))
+    assert len(calls) == 2
+    assert len(calls[0]['messages']) == 2
+    assert len(calls[1]['messages']) == 4
+    assert 'retrieved_summary' in result
+    if recovers:
+        assert result['example_status'] == 'included'
+        assert result['answer'].endswith('```')
+        assert 'SET target, source' in result['answer']
+    else:
+        assert result['example_status'] == 'unavailable'
+        assert 'Validation issue:' in result['answer']
+        assert '```' not in result['answer']
+
+
+def test_row_evidence_includes_surrounding_table_syntax():
+    import asyncio
+    from ribosome.rag.object import ObjectRAG
+    app = object.__new__(ObjectRAG)
+    app.embed_model, app.dimension, app.max_context_chars = 'fake', 2, 24000
+    table = dict(id='table', document_id='doc', type='table', parent_id=None,
+                 content='Function: assignment. Syntax: SET target, source. Example: SET I1, 5.',
+                 attributes=dict(line_start=1, line_end=20))
+    row = dict(id='row', document_id='doc', type='table_row', parent_id='table',
+               content='Function: assignment.', source_file='synthetic.md',
+               children_ids=[], attributes=dict(line_start=2, line_end=3))
+    records = {('g','table'): (table,None), ('g','row'): (row,'vector')}
+    app.snapshot = lambda category: (records, {('g','doc'): dict(profile='5.0',revision='C-1')}, {})
+    class Embedder:
+        async def embed(self, **kwargs): return dict(embeddings=[[1,0]])
+    class Collection:
+        def query(self, **kwargs): return dict(ids=[['vector']], distances=[[0.1]])
+    app.embedder, app.collection = Embedder(), Collection()
+    result = asyncio.run(app.retrieve('assignment', 'general_operation'))
+    assert 'Syntax: SET target, source' in result['context']
+    assert 'Parent table context, source lines 1-20' in result['context']
