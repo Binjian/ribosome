@@ -11,6 +11,7 @@ import math
 import os
 import tempfile
 from pathlib import Path
+from queue import SimpleQueue, Empty
 from time import perf_counter
 from unittest.mock import patch
 
@@ -20,6 +21,39 @@ from utils.summary_asyncio import SummaryAsyncClient, SummaryCheckpoint, _docume
 
 
 _batch_active = False
+
+
+async def _run_resume_work(function, *args, on_progress, interval):
+    """Keep rendering while local resume work runs; await it on cancellation."""
+    events = SimpleQueue()
+    task = asyncio.create_task(asyncio.to_thread(function, *args, progress=lambda *event: events.put(event)))
+
+    def drain():
+        latest = None
+        while True:
+            try:
+                latest = events.get_nowait()
+            except Empty:
+                break
+        if latest is not None:
+            on_progress(*latest)
+
+    try:
+        while True:
+            done, _ = await asyncio.wait((task,), timeout=interval)
+            drain()
+            if done:
+                return task.result()
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.wait((task,), timeout=interval)
+                drain()
+            except asyncio.CancelledError:
+                continue
+        if not task.cancelled():
+            task.exception()
+        raise
 
 
 
@@ -68,7 +102,7 @@ async def check_model(client, model, host):
     return model
 
 
-def _prepare_incremental_tree(file, tree, dom_summary):
+def _prepare_incremental_tree(file, tree, dom_summary, *, progress=None):
     """Reconcile current object children with saved records without rebuilding the DOM.
 
     Identity includes source content so a summary is never moved to a different
@@ -82,12 +116,16 @@ def _prepare_incremental_tree(file, tree, dom_summary):
     def key(record):
         return record["type"], str(record["id"]), record["content"]
 
+    if progress:
+        progress('resume: parsing source objects', 0, 0, 'objects')
     expected = {key(record): record for record in dom_summary.extract_markdown_objects(file)}
     roots = list(dom_summary._object_nodes(tree))
     if len(roots) != len(expected) or {key(node["object"]) for node in roots} != set(expected):
         raise ValueError(f"Saved object locations do not match current Markdown: {file}")
     work, missing, changed = [], 0, False
-    for root in roots:
+    if progress:
+        progress('resume: checking saved objects', 0, len(roots), 'objects')
+    for position, root in enumerate(roots, 1):
         records, wrappers = {}, {}
 
         def remember_record(record):
@@ -145,6 +183,8 @@ def _prepare_incremental_tree(file, tree, dom_summary):
         if root_missing:
             work.append(root)
             missing += root_missing
+        if progress:
+            progress('resume: checking saved objects', position, len(roots), 'objects')
     return work, missing, changed
 
 
@@ -197,11 +237,25 @@ def _save_partial(file, checkpoint, tree):
             temporary.unlink(missing_ok=True)
 
 
-def _load_partial(file, checkpoint):
+def _load_partial(file, checkpoint, *, progress=None):
     path = _partial_path(file)
     if not path.exists():
         return None
-    saved = json.loads(path.read_text(encoding='utf-8'))
+    size = path.stat().st_size
+    chunks, loaded = [], 0
+    if progress:
+        progress('resume: reading partial progress', 0, size, 'bytes')
+    with path.open('rb') as stream:
+        while chunk := stream.read(1024 * 1024):
+            chunks.append(chunk)
+            loaded += len(chunk)
+            if progress:
+                progress('resume: reading partial progress', loaded, size, 'bytes')
+    if progress:
+        progress('resume: decoding partial JSON', 0, 0, 'objects')
+    saved = json.loads(b''.join(chunks))
+    if progress:
+        progress('resume: verifying signatures/settings', 0, 0, 'objects')
     def compatible(config):
         config = dict(config)
         config.pop('host', None)
@@ -309,13 +363,20 @@ async def summarize_object_documents(
                     refresh=False)
                 for slot, bar in enumerate(file_bars):
                     state = next((state for state in active.values() if state['slot'] == slot), None)
-                    bar.total = state['total'] if state else 0
-                    bar.n = state['done'] if state else 0
+                    resume_progress = state.get('resume_progress') if state else None
+                    bar.total = resume_progress[1] if resume_progress else state['total'] if state else 0
+                    bar.n = resume_progress[0] if resume_progress else state['done'] if state else 0
                     status_text = (
                         f"{state['name']}: objects {state['done']}/{state['total']}, "
                         f"{state['phase']}, sections {state['sections_done']}/{state['sections_total']}, queued={state['queued']}, running={state['running']} "
                         f"({perf_counter() - state['started']:.0f}s)"
                         if state else 'Idle')
+                    if resume_progress:
+                        done, total, unit = resume_progress
+                        if unit == 'bytes':
+                            status_text += f' | resume {done / 1048576:.1f}/{total / 1048576:.1f} MiB'
+                        elif total:
+                            status_text += f' | resume {done}/{total} {unit}'
                     server_text, server_colour = _server_progress(
                         client, state['name']) if state else ('', None)
                     bar.colour = server_colour
@@ -432,12 +493,25 @@ async def summarize_object_documents(
                 active[index] = state
                 token = document_progress.set(state)
                 metrics_token = _document_id.set(str(file))
+
+                def resume_progress(phase, done, total, unit):
+                    state['phase'] = phase
+                    state['resume_progress'] = (done, total, unit)
+                    render()
+
                 try:
-                    if checkpoint is not None and resume and saved_rows[index] is None:
-                        state['partial'] = _load_partial(file, checkpoint)
+                    if (checkpoint is not None and resume and saved_rows[index] is None
+                            and _partial_path(file).is_file()):
+                        resume_progress('resume: locating partial progress', 0, 0, 'objects')
+                        state['partial'] = await _run_resume_work(
+                            _load_partial, file, checkpoint, on_progress=resume_progress,
+                            interval=progress_interval)
                         if state['partial'] is not None:
-                            _prepare_incremental_tree(file, state['partial'], dom_summary)
+                            await _run_resume_work(
+                                _prepare_incremental_tree, file, state['partial'], dom_summary,
+                                on_progress=resume_progress, interval=progress_interval)
                             row['resumed'] = True
+                        state.pop('resume_progress', None)
                     if saved_rows[index] is not None:
                         state["phase"] = "checking saved summaries"
                         tree = json.loads(output.read_text(encoding="utf-8"))

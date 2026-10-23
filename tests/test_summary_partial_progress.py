@@ -90,7 +90,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
     monkeypatch.setattr(dom, '_object_nodes', lambda tree: iter(tree['blocks']))
     monkeypatch.setattr(dom, '_summarize_markdown_object_async', summarize)
     monkeypatch.setattr(dom, 'summarize_markdown_object_tree_async', tree_summary)
-    monkeypatch.setattr(app, '_prepare_incremental_tree', lambda *args: ([], 0, False))
+    monkeypatch.setattr(app, '_prepare_incremental_tree', lambda *args, **kwargs: ([], 0, False))
     options = dict(checkpoint_path=tmp_path / 'checkpoint.json', progress_factory=Progress,
                    progress_interval=.001, concurrency=1,
                    completed_callback=lambda rows: completion_updates.append(rows))
@@ -115,6 +115,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
         assert any('sections 0/1' in text for _, _, text in observed)
         assert any('sections 1/1' in text for _, _, text in observed)
         assert any(n == 1 and total == 2 for n, total, _ in observed)
+        assert any('resume:' in text for _, _, text in observed)
         assert not app._partial_path(file).exists()
         assert completion_updates[0] == []
         assert completion_updates[-1][0]['file'] == str(file)
@@ -229,4 +230,61 @@ def test_partial_reuse_keeps_saved_ancestors_and_document_while_filling_descenda
         assert section['c'][3]['summary_skipped'] is True
         assert calls == ['missing child']
         assert dom._reuse_summary_nodes.get() is False
+    asyncio.run(scenario())
+
+
+def test_partial_read_reports_bytes_and_compatibility_stages(tmp_path):
+    file = tmp_path / 'large.md'
+    file.write_text('source')
+    checkpoint = SummaryCheckpoint(tmp_path / 'checkpoint.json', 'model', 'server', True)
+    tree = {'blocks': [], 'summary': 'large saved summary ' * 100000}
+    _save_partial(file, checkpoint, tree)
+    events = []
+    assert _load_partial(file, checkpoint, progress=lambda *event: events.append(event)) == tree
+    reads = [event for event in events if event[3] == 'bytes']
+    assert len(reads) >= 3
+    assert reads[0][1] == 0 and reads[-1][1] == reads[-1][2]
+    assert all(a[1] <= b[1] for a, b in zip(reads, reads[1:]))
+    assert any('decoding' in event[0] for event in events)
+    assert 'verifying' in events[-1][0]
+
+
+def test_resume_worker_keeps_loop_live_and_awaits_cancelled_thread():
+    import asyncio
+    import threading
+    from utils.summary_object_asyncio import _run_resume_work
+
+    async def scenario():
+        release, stopped = threading.Event(), threading.Event()
+        visible = asyncio.Event()
+        events = []
+        def work(*, progress):
+            progress('resume: checking saved objects', 1, 2, 'objects')
+            try:
+                assert release.wait(3)
+                progress('resume: checking saved objects', 2, 2, 'objects')
+                return 'ready'
+            finally:
+                stopped.set()
+        def update(*event):
+            events.append(event)
+            visible.set()
+        task = asyncio.create_task(_run_resume_work(work, on_progress=update, interval=.001))
+        try:
+            await asyncio.wait_for(visible.wait(), 2)
+            assert events[0][1:3] == (1, 2) and not task.done()
+            task.cancel()
+            await asyncio.sleep(.01)
+            assert not task.done() and not stopped.is_set()
+            release.set()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            else:
+                raise AssertionError('Cancellation should propagate')
+            assert stopped.is_set()
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
     asyncio.run(scenario())
