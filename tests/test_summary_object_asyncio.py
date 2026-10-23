@@ -374,7 +374,8 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), namespace)
     assert captured == {'hosts': ['http://127.0.0.1:11434', 'http://configured:11434'],
                         'concurrency_per_server': 4, 'headers': {'Authorization': 'Bearer test-key'},
-                        'request_timeout': 300.0, 'max_tokens': 2048, 'think': False}
+                        'request_timeout': 300.0, 'max_tokens': 2048, 'think': False,
+                        'request_retries': 2}
     assert namespace['SUMMARY_MODEL'] == 'vision'
     assert namespace['INPUT_DIRS'] == [
         tmp_path / 'assets' / 'code-docs.4.0' / '.md',

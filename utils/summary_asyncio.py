@@ -155,12 +155,14 @@ class SummaryAsyncClient(AsyncClient):
         status = "error"
         self.metrics.start(document)
         try:
-            async with asyncio.timeout(self.request_timeout):
-                response = await self._chat_request(*args, **kwargs)
+            response = await self._chat_with_timeout(*args, **kwargs)
             status = "completed"
             return response
         except (TimeoutError, HTTPTimeoutError) as exc:
-            raise TimeoutError(f"Ollama summary request timed out for {document or 'unassigned document'}; "
+            deadline = f" after {self.request_timeout:g}s" if self.request_timeout is not None else ""
+            detail = f" ({exc})" if str(exc) else ""
+            raise TimeoutError(f"Ollama summary request timed out{deadline} for "
+                               f"{document or 'unassigned document'}{detail}; "
                                "check server load or RIBOSOME_SUMMARY_REQUEST_TIMEOUT") from exc
         except asyncio.CancelledError:
             status = "cancelled"
@@ -168,6 +170,11 @@ class SummaryAsyncClient(AsyncClient):
         finally:
             self.active_requests.pop(identity, None)
             self.metrics.finish(document, started, response, status)
+
+    async def _chat_with_timeout(self, *args, **kwargs):
+        """Bound one attempt; pools start the deadline after acquiring a server."""
+        async with asyncio.timeout(self.request_timeout):
+            return await self._chat_request(*args, **kwargs)
 
     async def _chat_request(self, *args, **kwargs):
         """Transport hook; subclasses retain common limits and document metrics."""

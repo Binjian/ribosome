@@ -129,3 +129,104 @@ def test_section_count_includes_nested_sections_but_not_object_source():
                                      {'t': 'Div', 'object': {},
                                       'c': [{'t': 'Section', 'c': []}]}]}]}
     assert _section_count(tree) == 2
+
+
+def test_resuming_partial_prose_requests_only_missing_summaries(tmp_path, monkeypatch):
+    import asyncio
+    import json
+    from ribosome.core.dom.summary import object as dom
+    from utils import summary_object_asyncio as app
+    from tqdm.auto import tqdm
+
+    file = tmp_path / 'manual.md'
+    file.write_text('# 安全说明\n\n已经完成的安全说明。\n\n超时后需要补全的说明。\n', encoding='utf-8')
+    output = file.with_name('manual_semantics.json')
+    output.write_text('previous output')
+    calls = []
+    interrupted = True
+
+    class Progress(tqdm):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs, disable=True)
+
+    async def summary(client, content, **kwargs):
+        calls.append(content)
+        if interrupted and '超时后' in content:
+            raise TimeoutError('Ollama stalled')
+        return '已保存摘要：' + content
+
+    monkeypatch.setattr(dom, '_SUMMARY_TASK_LIMIT', 1)
+    monkeypatch.setattr(dom, '_SUMMARY_CONCURRENCY', 1)
+    monkeypatch.setattr(dom, 'get_summary_response_async', summary)
+    options = dict(checkpoint_path=tmp_path / 'checkpoint.json', leaf_min_len=1,
+                   progress_factory=Progress)
+
+    async def scenario():
+        nonlocal interrupted
+        first = await app.summarize_object_documents([file], object(), 'offline', **options)
+        assert first[0]['status'] == 'failed'
+        assert output.read_text() == 'previous output'
+        partial = json.loads(app._partial_path(file).read_text())['tree']
+
+        def summaries(node, path='$'):
+            result = {}
+            if isinstance(node, dict):
+                if dom._has_node_summary(node):
+                    result[path] = node['s']
+                for key in ('blocks', 'c', 'subnodes'):
+                    if key in node:
+                        result.update(summaries(node[key], path + '.' + key))
+            elif isinstance(node, list):
+                for index, child in enumerate(node):
+                    result.update(summaries(child, f'{path}[{index}]'))
+            return result
+
+        saved = summaries(partial)
+        assert any('已经完成' in value for value in saved.values())
+        calls.clear()
+        interrupted = False
+        rows = await app.summarize_object_documents([file], object(), 'offline', **options)
+        assert rows[0]['status'] == 'completed' and rows[0]['resumed']
+        assert '已经完成的安全说明。' not in calls
+        restored = summaries(json.loads(output.read_text()))
+        assert all(restored[path] == value for path, value in saved.items())
+        assert not app._partial_path(file).exists()
+        assert dom._reuse_summary_nodes.get() is False
+    asyncio.run(scenario())
+
+
+def test_partial_reuse_keeps_saved_ancestors_and_document_while_filling_descendant(tmp_path, monkeypatch):
+    import asyncio
+    from ribosome.core.dom.summary import object as dom
+
+    file = tmp_path / 'manual.md'
+    tree = {'title': 'manual', 'summary': 'saved document', 'blocks': [
+        {'t': 'Section', 's': 'saved section', 'c': [
+            {'t': 'Para', 's': 'saved prose', 'c': [
+                {'t': 'Str', 'c': 'source text', 's': 'saved leaf'}]},
+            {'t': 'Para', 's': 'saved parent with missing child', 'c': [
+                {'t': 'Str', 'c': 'missing child'}]},
+            {'t': 'Image', 'c': [[], [], ['unavailable.png', '']], 's': 'saved image'},
+            {'t': 'Para', 'c': [], 's': '', 'summary_skipped': True},
+        ], 'subnodes': []},
+    ]}
+    calls = []
+    async def summary(client, content, **kwargs):
+        calls.append(content)
+        return 'filled child'
+    monkeypatch.setattr(dom, 'extract_markdown_object_tree', lambda file: tree)
+    monkeypatch.setattr(dom, 'get_summary_response_async', summary)
+
+    async def scenario():
+        result = await dom.summarize_markdown_object_tree_async(
+            file, object(), 'offline', leaf_min_len=1, reuse_existing=True)
+        section = result['blocks'][0]
+        assert result['summary'] == 'saved document'
+        assert section['s'] == 'saved section'
+        assert [node['s'] for node in section['c']] == [
+            'saved prose', 'saved parent with missing child', 'saved image', '']
+        assert section['c'][1]['c'][0]['s'] == 'filled child'
+        assert section['c'][3]['summary_skipped'] is True
+        assert calls == ['missing child']
+        assert dom._reuse_summary_nodes.get() is False
+    asyncio.run(scenario())

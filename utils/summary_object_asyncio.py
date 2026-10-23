@@ -224,7 +224,8 @@ async def summarize_object_documents(
     Results follow input order. A document is published only after its full tree
     succeeds. Failures are reported independently; cancellation awaits outstanding
     requests and saves completed-document checkpoints. Unpublished per-file progress
-    retains completed objects and descendants on interruption. AST caches are not written.
+    retains completed objects, descendants, prose and sections on interruption.
+    AST caches are not written.
     Reuse completed documents across additive summarizer features and schema
     versions. Completed outputs are checked for missing object descendants and
     summaries; fill only those gaps while retaining existing summaries, including
@@ -466,7 +467,8 @@ async def summarize_object_documents(
                     else:
                         tree = await dom_summary.summarize_markdown_object_tree_async(
                             file, client, model, lang=lang, show_progress=False,
-                            leaf_min_len=leaf_min_len, min_len=min_len)
+                            leaf_min_len=leaf_min_len, min_len=min_len,
+                            reuse_existing=state.get('partial') is not None)
                     if not tree.get("blocks"):
                         raise ValueError("Empty Markdown document: no blocks to summarize")
                     summary = tree.get("summary")

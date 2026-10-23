@@ -105,7 +105,8 @@ def test_failure_and_queued_cancellation_return_slots(monkeypatch, outcome):
             await asyncio.Event().wait()
         monkeypatch.setattr(AsyncClient, 'chat', chat)
         pool = OllamaSummaryPool(hosts=HOSTS, concurrency_per_server=1,
-                                 request_timeout=0.05 if outcome == 'timeout' else 3)
+                                 request_timeout=0.05 if outcome == 'timeout' else 3,
+                                 request_retries=0)
         tasks = [asyncio.create_task(pool.chat(model='offline')) for _ in range(3)]
         try:
             if outcome == 'cancel':
@@ -154,7 +155,9 @@ def test_preflight_checks_all_servers_concurrently(monkeypatch, failure):
 
 
 @pytest.mark.parametrize('options', [dict(hosts=[]), dict(hosts=['invalid']),
-    dict(hosts=[HOSTS[0], HOSTS[0] + '/']), dict(hosts=HOSTS, concurrency_per_server=0)])
+    dict(hosts=[HOSTS[0], HOSTS[0] + '/']), dict(hosts=HOSTS, concurrency_per_server=0),
+    dict(hosts=HOSTS, request_retries=-1), dict(hosts=HOSTS, request_retries=True),
+    dict(hosts=HOSTS, request_retries=1.5)])
 def test_invalid_pool_configuration(options):
     with pytest.raises(ValueError): OllamaSummaryPool(**options)
 
@@ -194,6 +197,110 @@ def test_pool_integrates_with_object_batch_metrics_and_checkpoint(tmp_path, monk
             assert pool.metrics.snapshot()['request_count'] == 0
             assert all(row['resumed'] for row in await batch(HOSTS[:1]))
             assert pool.metrics.snapshot()['request_count'] == 0
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('timeout_kind', ['deadline', 'http'])
+def test_timeout_retries_next_server_and_counts_each_attempt(monkeypatch, caplog, timeout_kind):
+    from httpx import ReadTimeout
+
+    async def scenario():
+        calls = []
+        async def chat(self, **kwargs):
+            calls.append((host(self), kwargs))
+            if host(self) == HOSTS[0]:
+                if timeout_kind == 'http':
+                    raise ReadTimeout('read stalled')
+                await asyncio.Event().wait()
+            return {'message': {'content': 'recovered'}}
+        monkeypatch.setattr(AsyncClient, 'chat', chat)
+        pool = OllamaSummaryPool(hosts=HOSTS, concurrency_per_server=1,
+                                 request_timeout=.02, request_retries=1)
+        token = _document_id.set('manual.md')
+        try:
+            response = await pool.chat(model='vision', messages=[{'role': 'user', 'content': 'saved prose'}])
+            assert response['message']['content'] == 'recovered'
+            assert [server for server, _ in calls] == HOSTS
+            assert calls[0][1] == calls[1][1]
+            stats = pool.metrics.snapshot(document='manual.md')
+            assert stats['request_count'] == 2 and stats['request_errors'] == 1
+            assert stats['cancelled_requests'] == 0
+            assert [m.records[0]['status'] for m in pool.server_metrics] == ['error', 'completed']
+            assert HOSTS[0] in caplog.text and 'manual.md' in caplog.text
+            assert pool._slots.qsize() == 2 and not pool.active_requests
+        finally:
+            _document_id.reset(token)
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+def test_timeout_retry_limit_reports_server_and_releases_state(monkeypatch):
+    from httpx import ReadTimeout
+
+    async def scenario():
+        calls = []
+        async def chat(self, **kwargs):
+            calls.append(host(self))
+            raise ReadTimeout('stalled')
+        monkeypatch.setattr(AsyncClient, 'chat', chat)
+        pool = OllamaSummaryPool(hosts=HOSTS[:1], request_retries=1)
+        try:
+            with pytest.raises(TimeoutError, match=HOSTS[0] + '.*exhausted 2 attempt'):
+                await pool.chat(model='vision')
+            assert len(calls) == 2
+            assert pool.metrics.snapshot()['request_errors'] == 2
+            assert pool._slots.qsize() == pool.concurrency_per_server
+            assert not pool.active_requests and not pool._pending_requests
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+def test_cancellation_during_backoff_stops_retries_and_blocks_close(monkeypatch):
+    from httpx import ReadTimeout
+
+    async def scenario():
+        calls = []
+        async def chat(self, **kwargs):
+            calls.append(host(self))
+            raise ReadTimeout('stalled')
+        monkeypatch.setattr(AsyncClient, 'chat', chat)
+        pool = OllamaSummaryPool(hosts=HOSTS, request_retries=2)
+        task = asyncio.create_task(pool.chat(model='vision'))
+        try:
+            await asyncio.sleep(0)  # The first attempt fails and enters its backoff.
+            assert len(calls) == 1 and not task.done() and pool.metrics.active == 0
+            with pytest.raises(RuntimeError, match='active'):
+                await pool.aclose()
+            with pytest.raises(RuntimeError, match='active'):
+                pool.reset_metrics()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert len(calls) == 1 and not pool._pending_requests
+            assert pool._slots.qsize() == 2 * pool.concurrency_per_server
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+def test_waiting_for_local_server_slot_does_not_consume_attempt_deadline(monkeypatch):
+    async def scenario():
+        async def chat(self, **kwargs):
+            await asyncio.sleep(.03)
+            return {'message': {'content': 'summary'}}
+        monkeypatch.setattr(AsyncClient, 'chat', chat)
+        pool = OllamaSummaryPool(hosts=HOSTS[:1], concurrency_per_server=1,
+                                 request_timeout=.08, request_retries=0)
+        try:
+            responses = await asyncio.gather(*(pool.chat(model='vision') for _ in range(4)))
+            assert len(responses) == 4
+            assert pool.metrics.snapshot()['request_errors'] == 0
+            assert pool.server_metrics[0].peak == 1
         finally:
             await pool.aclose()
     asyncio.run(scenario())
