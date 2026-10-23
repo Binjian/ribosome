@@ -1,3 +1,4 @@
+import pytest
 import ast
 from pathlib import Path
 import nbformat
@@ -67,3 +68,40 @@ def test_reusable_notebook_exports_without_application_globals():
     assert parameters['max_output_tokens'].default == 2048
     application = nbformat.read(NOTEBOOK, as_version=4)
     assert all('class ObjectRAG' not in c.source for c in application.cells)
+
+
+@pytest.mark.parametrize('supported', [True, False])
+def test_content_summary_accompanies_supported_and_unsupported_answers(supported):
+    import asyncio
+    from ribosome.rag.object import ObjectRAG
+    app = object.__new__(ObjectRAG)
+    app.rag_model = 'fake'
+    app.max_output_tokens = 128
+    hit = dict(generation='g', record=dict(id='row', summary='Sets the user coordinate number.',
+               source_file='manual.md', attributes=dict(line_start=10, line_end=12)),
+               manual=dict(profile='5.0', revision='C-1'))
+    async def retrieve(*args, **kwargs):
+        app.last_result = dict(hits=[hit], context='[E1] Exact evidence')
+        return app.last_result
+    class Generator:
+        async def chat(self, **kwargs):
+            return {'message': {'content': 'Supported snippet [E1]' if supported else 'Insufficient evidence for code.'}}
+    app.retrieve = retrieve
+    app.generator = Generator()
+    result = asyncio.run(app.answer('question', 'general_operation'))
+    assert 'Sets the user coordinate number.' in result['retrieved_summary']
+    assert 'manual.md' in result['retrieved_summary']
+    assert 'C-1' in result['retrieved_summary']
+    assert result['answer']
+
+
+def test_empty_evidence_still_returns_content_summary():
+    import asyncio
+    from ribosome.rag.object import ObjectRAG
+    app = object.__new__(ObjectRAG)
+    async def retrieve(*args, **kwargs):
+        return dict(hits=[], context='')
+    app.retrieve = retrieve
+    result = asyncio.run(app.answer('question', 'general_operation'))
+    assert 'No relevant indexed content' in result['retrieved_summary']
+    assert 'No eligible evidence' in result['answer']
