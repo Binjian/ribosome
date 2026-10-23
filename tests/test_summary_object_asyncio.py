@@ -346,7 +346,10 @@ def test_notebook_validates_compiles_and_uses_both_corpora():
     assert config.index('configure_summary_limits(summary_module="object")') < config.index('from utils.summary_object_asyncio')
     assert 'code-docs.4.0' in config and 'code-docs.5.0' in config
     assert '.object-summary-checkpoint.json' in config
-    assert 'await summarize_object_documents(' in notebook.cells[6].source
+    assert any(
+        'await summarize_object_documents(' in cell.source
+        for cell in notebook.cells if cell.cell_type == 'code'
+    )
     assert 'DOMClass' not in config and 'chromadb' not in config
 
 
