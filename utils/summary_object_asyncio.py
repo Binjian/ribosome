@@ -456,6 +456,7 @@ async def summarize_object_documents(
 
             async def summarize_with_progress(*args, **kwargs):
                 state = document_progress.get()
+                reused = False
                 if state is not None:
                     obj = args[0] if args else kwargs['obj']
                     identity = str(obj['id'])
@@ -467,16 +468,27 @@ async def summarize_object_documents(
                         totals['objects'] += 1
                     if checkpoint is not None:
                         kwargs['reuse_existing'] = True
-                result = await summarize_object(*args, **kwargs)
+                        # Reconciled partial trees already include current descendants.
+                        # Skip a complete subtree, including its checkpoint rewrite.
+                        reused = _complete_object(obj, dom_summary)
+                if reused:
+                    result = obj
+                    state['reused_checked'] = state.get('reused_checked', 0) + 1
+                    state['phase'] = f"reusing saved objects: {state['reused_checked']} checked"
+                else:
+                    result = await summarize_object(*args, **kwargs)
                 if state is not None:
                     if identity not in state['done_ids']:
                         state['done_ids'].add(identity)
                         state["done"] += 1
                         totals["done_objects"] += 1
-                    if checkpoint is not None and state.get('tree') is not None:
+                    if not reused and checkpoint is not None and state.get('tree') is not None:
                         _save_partial(Path(state['name']), checkpoint, state['tree'])
-                    if state["done"] == state["total"]:
+                    if not reused and state["done"] == state["total"]:
                         state["phase"] = "objects done; prose/parents pending"
+                    # Reused summaries may complete without any provider awaits.
+                    # Let the renderer and cancellation run during long traversals.
+                    await asyncio.sleep(0)
                 return result
 
             async def process_document(index, file, slot):

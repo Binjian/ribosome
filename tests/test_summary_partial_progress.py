@@ -53,8 +53,15 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
     original = {'blocks': [{'object': {'id': str(i), 'summary': '', 'children': []}}
                            for i in range(2)], 'summary': ''}
     original['subnodes'] = [{'t': 'Section', 'c': []}]
-    calls, observed, completion_updates = [], [], []
+    calls, observed, completion_updates, saves, reuse_yields = [], [], [], [], []
     interrupt = True
+    save_partial = app._save_partial
+
+    def save(*args):
+        saves.append(args[0])
+        return save_partial(*args)
+
+    monkeypatch.setattr(app, '_save_partial', save)
 
     class Progress:
         def __init__(self, total, **kwargs): self.total, self.n = total, 0
@@ -79,7 +86,13 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
         # Force an observable refresh before processing resumed objects.
         await asyncio.sleep(.01)
         for node in tree['blocks']:
+            yielded = []
+            already_complete = bool(node['object']['summary'])
+            if already_complete:
+                asyncio.get_running_loop().call_soon(lambda: yielded.append(True))
             await dom._summarize_markdown_object_async(node['object'])
+            if already_complete:
+                reuse_yields.append(bool(yielded))
         dom._record_summary_progress('Section', '$.blocks[0]', file, {'count': 0}, {'count': 0})
         await asyncio.sleep(.01)
         tree['summary'] = 'document summary'
@@ -106,9 +119,12 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
         assert app._partial_path(file).exists()
         calls.clear()
         observed.clear()
+        saves.clear()
         interrupt = False
         rows = await app.summarize_object_documents([file], object(), 'offline', **options)
         assert calls == ['1']
+        assert saves == [file]  # Only the newly completed object writes progress.
+        assert reuse_yields == [True]
         assert rows[0]['status'] == 'completed' and rows[0]['resumed']
         assert rows[0]['completed_objects'] == 2
         assert rows[0]['section_count'] == rows[0]['completed_sections'] == 1
