@@ -8,6 +8,8 @@ def namespace():
     nb = nbformat.read(NOTEBOOK, as_version=4)
     ns = {}
     exec(nb.cells[2].source, ns)
+    from ribosome.rag.object import canonical, load_mapping
+    ns.update(canonical=canonical, load_mapping=lambda: load_mapping(ns['PROJ_ROOT'] / 'assets/coding_categories'))
     return ns
 
 def test_notebook_valid_and_compiles():
@@ -47,3 +49,21 @@ def test_real_catalog_read_only_coverage():
             app.connection.execute('CREATE TABLE forbidden(x)')
     finally:
         app.close()
+
+def test_reusable_notebook_exports_without_application_globals():
+    import inspect
+    from ribosome.rag.object import ObjectRAG
+    core = nbformat.read('nbs/01.rag.object.ipynb', as_version=4)
+    nbformat.validate(core)
+    ns = {}
+    for cell in core.cells:
+        if cell.cell_type == 'code':
+            compile(cell.source, '01.rag.object.ipynb', 'exec')
+            exec(cell.source, ns)
+    assert not {'PROJ_ROOT', 'HOSTS', 'RAG_MODEL', 'INDEX_DIR'} & ns.keys()
+    parameters = inspect.signature(ObjectRAG).parameters
+    assert parameters['mapping_dir'].kind == inspect.Parameter.KEYWORD_ONLY
+    assert parameters['max_context_chars'].default == 24000
+    assert parameters['max_output_tokens'].default == 2048
+    application = nbformat.read(NOTEBOOK, as_version=4)
+    assert all('class ObjectRAG' not in c.source for c in application.cells)
