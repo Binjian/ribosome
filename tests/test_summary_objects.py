@@ -75,14 +75,15 @@ def test_summaries_are_captioned_and_ordered_with_table_rows(tmp_path, monkeypat
     results = asyncio.run(sut.summarize_markdown_objects_async(file, object(), 'offline'))
     assert [o['id'] for o in results] == [1, 2, 3]
     assert {Path(p).name for p in visuals} == {'a.png', 'b.png', 'inner.png'}
-    assert len(visuals) == 3 and len(prompts) == 8
+    assert len(visuals) == 3 and len(prompts) == 7
     row, = results[1]['children']
     cell, = row['children']
     figure, = cell['children']
     assert figure['type'] == 'figure'
     assert 'visual:inner.png' in figure['summary']
     assert json.loads(cell['summary'].split('\n', 1)[1])['child_summaries'] == [figure['summary']]
-    assert 'visual:inner.png' in row['summary']
+    assert row['summary'] == '' and row['summary_skipped']
+    assert 'visual:inner.png' in sut.object_utils._first_summary(row)
     assert all(Path(p).parent == tmp_path for p in visuals)
     assert all(x in results[0]['summary'] for x in ['图 1 pair', 'visual:a.png', 'visual:b.png'])
     assert '<table>' in results[1]['summary'] and '表 1 data' in results[1]['summary']

@@ -27,7 +27,9 @@ def test_cell_lists_and_images_are_recursive_and_summarized(tmp_path, monkeypatc
     monkeypatch.setattr(sut, 'get_summary_response_async', text)
     monkeypatch.setattr(sut, 'get_image_summary_async', image)
     asyncio.run(sut._summarize_markdown_object_async(table, None, 'test', 'en'))
-    assert figure['summary'] == cell['summary'] == table['summary'] == 'summary'
+    assert figure['summary'] == 'summary'
+    assert cell['summary'] == table['summary'] == ''
+    assert cell['summary_skipped'] and table['summary_skipped']
     assert any(p.get('image_descriptions', [{}])[0].get('description') == 'image description' for p in calls)
     before = len(calls)
     nested['children'][0]['summary'] = ''

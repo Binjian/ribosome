@@ -220,7 +220,7 @@ def test_added_recursion_fills_completed_documents_and_summarizes_pending_ones(t
     upgraded = json.loads(output.read_text())
     assert upgraded['summary'] == tree['summary']
     assert next(dom_summary._object_nodes(upgraded))['s'] == wrapper['s']
-    assert len(requests) == 5  # Two missing items, two pending items and the pending list.
+    assert len(requests) == 4  # Two missing items and two pending items; the one-child list is skipped.
     result = json.loads(pending.with_name('pending_semantics.json').read_text())
     wrapper, = dom_summary._object_nodes(result)
     assert wrapper['subnodes'][0]['subnodes'][0]['object']['type'] == 'list_item'

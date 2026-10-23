@@ -94,7 +94,7 @@ def _prepare_incremental_tree(file, tree, dom_summary):
             identity = key(record)
             saved = records.setdefault(identity, dict(record))
             if not has_summary(saved) and has_summary(record):
-                saved.update(summary=record["summary"])
+                saved.update({k: record[k] for k in ("summary", "summary_skipped", "summary_ignored") if k in record})
             for child in record.get("children", []):
                 remember_record(child)
 
@@ -105,6 +105,8 @@ def _prepare_incremental_tree(file, tree, dom_summary):
             wrappers.setdefault(identity, node)
             if not has_summary(records[identity]) and isinstance(node.get("s"), str) and node["s"].strip():
                 records[identity]["summary"] = node["s"]
+            if not has_summary(records[identity]) and node.get("summary_skipped") is True and node.get("s") == "":
+                records[identity].update(summary="", summary_skipped=True)
             for child in node.get("subnodes", []):
                 remember_wrapper(child)
 
@@ -126,6 +128,9 @@ def _prepare_incremental_tree(file, tree, dom_summary):
         def wrap(record):
             node = dict(wrappers.get(key(record), {"t": "Div", "c": [["", [], []], []]}))
             node.update(object=record, s=record.get("summary", ""))
+            node.pop("summary_skipped", None)
+            if record.get("summary_skipped"):
+                node["summary_skipped"] = True
             if "children" in record:
                 node["subnodes"] = [wrap(child) for child in record["children"]]
             return node
@@ -146,6 +151,9 @@ def _prepare_incremental_tree(file, tree, dom_summary):
 def _sync_object_summaries(node):
     """Refresh mirrored s fields after missing object summaries have been filled."""
     node["s"] = node["object"]["summary"]
+    node.pop("summary_skipped", None)
+    if node["object"].get("summary_skipped"):
+        node["summary_skipped"] = True
     for child in node.get("subnodes", []):
         _sync_object_summaries(child)
 
@@ -461,7 +469,8 @@ async def summarize_object_documents(
                             leaf_min_len=leaf_min_len, min_len=min_len)
                     if not tree.get("blocks"):
                         raise ValueError("Empty Markdown document: no blocks to summarize")
-                    if not isinstance(tree.get("summary"), str) or not tree["summary"].strip():
+                    summary = tree.get("summary")
+                    if not (isinstance(summary, str) and (summary.strip() or (tree.get("summary_skipped") is True and summary == ""))):
                         raise ValueError("Summarization returned no document summary")
                     dom_summary._write_semantics_tree(output, tree)
                     row["status"] = "completed"
