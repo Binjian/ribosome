@@ -83,16 +83,33 @@ def test_content_summary_accompanies_supported_and_unsupported_answers(supported
     async def retrieve(*args, **kwargs):
         app.last_result = dict(hits=[hit], context='[E1] Exact evidence')
         return app.last_result
+    requests = []
+    expected_answer = (
+        'General operation, C-1 [E1]\n```text\nSET_FRAME <user_frame_number>\n```'
+        if supported else 'Insufficient evidence for code.'
+    )
     class Generator:
         async def chat(self, **kwargs):
-            return {'message': {'content': 'Supported snippet [E1]' if supported else 'Insufficient evidence for code.'}}
+            requests.append(kwargs)
+            return {'message': {'content': expected_answer}}
+
     app.retrieve = retrieve
     app.generator = Generator()
     result = asyncio.run(app.answer('question', 'general_operation'))
     assert 'Sets the user coordinate number.' in result['retrieved_summary']
     assert 'manual.md' in result['retrieved_summary']
     assert 'C-1' in result['retrieved_summary']
-    assert result['answer']
+    assert result['answer'] == expected_answer
+    request = requests[0]
+    system, user = request['messages']
+    assert 'Selected category: general_operation' in user['content']
+    assert 'Question: question' in user['content']
+    assert '[E1] Exact evidence' in user['content']
+    assert 'actual code statement' in system['content']
+    assert 'Immediately before the final code block' in system['content']
+    assert 'If the evidence does not support the requested instruction' in system['content']
+    assert request['stream'] is False
+    assert request['options']['num_predict'] == 128
 
 
 def test_empty_evidence_still_returns_content_summary():
