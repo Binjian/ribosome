@@ -347,3 +347,15 @@ def test_missing_magick_explains_inkscape_dependency(tmp_path, monkeypatch):
     monkeypatch.delenv("ProgramFiles(x86)", raising=False)
     with pytest.raises(FileNotFoundError, match="Inkscape converter also requires ImageMagick"):
         win._find_magick()
+
+
+def test_import_does_not_require_private_env_file(tmp_path):
+    import os
+    import subprocess
+    env = {**os.environ, 'PROJ_ROOT': str(tmp_path)}
+    result = subprocess.run(
+        [sys.executable, '-c',
+         'from ribosome.preprocessing.parsing.ms_office.markitdown import utils; '
+         'assert not utils.ENV_FILE.exists()'],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr

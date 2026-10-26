@@ -23,13 +23,24 @@ def test_notebook_valid_and_compiles():
             compile(cell.source, str(NOTEBOOK), 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
             # Saved outputs are valid after interactive notebook use.
 
-def test_aliases_and_mapping():
+def test_aliases_and_mapping(tmp_path):
+    # Category loading is a unit test, not a dependency on a private corpus.
+    import pandas as pd
+    mapping = tmp_path / 'assets/coding_categories'
+    mapping.mkdir(parents=True)
+    (mapping / 'category_names.csv').write_text(
+        'category,chinese_name\nvision,视觉\ngeneral_operation,通用操作\n', encoding='utf-8')
+    pd.DataFrame([
+        {'category': 'vision', 'path': 'assets/code-docs.4.0/.md/manual.md', 'version': 'A'},
+        {'category': 'vision', 'path': 'assets/md.json.semantics.coding.5.0/manual.md', 'version': 'B'},
+    ]).to_excel(mapping / 'coding_manuals_markdown.all.xlsx', index=False)
     ns = namespace()
+    ns['PROJ_ROOT'] = tmp_path
     canonical = ns['canonical']
     assert canonical('assets/code-docs.4.0/.md/manual_semantics.json') == ('manual','4.0')
     assert canonical('assets/md.json.semantics.coding.5.0/manual.md') == ('manual','5.0')
     categories, entries = ns['load_mapping']()
-    assert len(categories) == 18
+    assert categories == {"vision": "视觉", "general_operation": "通用操作"}
     assert {e['profile'] for e in entries} >= {'4.0','5.0'}
 
 def test_real_catalog_read_only_coverage():
