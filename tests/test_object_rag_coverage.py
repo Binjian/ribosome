@@ -22,7 +22,8 @@ def coverage_namespace():
     notebook = nbformat.read(NOTEBOOK, as_version=4)
     ns = {}
     exec(notebook.cells[2].source, ns)
-    for cell_id in ['coverage-prompt-bank', 'coverage-test-helpers', 'general-operation-prompt-bank']:
+    for cell_id in ['coverage-prompt-bank', 'coverage-test-helpers',
+                    'general-operation-prompt-bank', 'arc-welding-prompt-bank']:
         exec(next(c.source for c in notebook.cells if c.id == cell_id), ns)
     return notebook, ns
 
@@ -94,7 +95,9 @@ def synthetic_evidence(case, *, content=None, profile=None):
                            summary='Stored summary for this question.',
                            content=content if content is not None else ' '.join(case['anchors']),
                            attributes=dict(line_start=10, line_end=12),
-                           section_headings=[case['section']+' Test section'] if case['section'] else []),
+                           section_headings=[case['section']+' '+title for title in case['heading_path']]
+                           if case.get('heading_path') else
+                           ([case['section']+' Test section'] if case['section'] else [])),
                manual=dict(profile=profile or case['profile'] or '4.0', revision=case['revision'] or 'B-5'))
     return dict(question=case['question'], category=case['category'], hits=[hit],
                 context='[E1] Only retrieved evidence belongs in the answer prompt.',
@@ -170,7 +173,7 @@ def test_batch_continues_after_failures_replays_evidence_and_does_not_leak_refer
 
 def test_category_and_manual_sections_keep_separate_selections_top_k_and_results():
     notebook, ns = coverage_namespace()
-    cases = ns['COVERAGE_CASES'] + ns['GENERAL_OPERATION_CASES']
+    cases = ns['COVERAGE_CASES'] + ns['GENERAL_OPERATION_CASES'] + ns['ARC_WELDING_CASES']
     retrieval_calls, generation_calls = [], []
 
     async def retrieve(question, category, *, top_k=8):
@@ -220,17 +223,150 @@ def test_category_and_manual_sections_keep_separate_selections_top_k_and_results
         await execute_async('general-operation-answers')
         assert ns['coverage_answer_results'] is category_results
         assert category_results == saved_results
+        manual_results = ns['general_operation_answer_results']
+        saved_manual_results = deepcopy(manual_results)
+        execute('arc-welding-selection',
+                ('ARC_WELDING_CASE_IDS = None', "ARC_WELDING_CASE_IDS = ['arc_50_alarm_20081']"),
+                ('ARC_WELDING_TOP_K = 8', 'ARC_WELDING_TOP_K = 7'))
+        await execute_async('arc-welding-retrieval')
+        await execute_async('arc-welding-answers')
+        assert ns['coverage_answer_results'] is category_results
+        assert category_results == saved_results
+        assert ns['general_operation_answer_results'] is manual_results
+        assert manual_results == saved_manual_results
 
     asyncio.run(run())
     assert [case['id'] for case in ns['coverage_cases']] == ['category_arc_welding']
     assert [case['id'] for case in ns['general_operation_cases']] == ['general_50_alarm_6035']
-    assert retrieval_calls == [('category_arc_welding', 3), ('general_50_alarm_6035', 5)]
-    assert len(generation_calls) == 2
+    assert retrieval_calls == [('category_arc_welding', 3), ('general_50_alarm_6035', 5),
+                               ('arc_50_alarm_20081', 7)]
+    assert len(generation_calls) == 3
     assert ns['general_operation_answer_errors'] == {}
     assert set(ns['coverage_answer_results']) == {'category_arc_welding'}
     assert set(ns['general_operation_answer_results']) == {'general_50_alarm_6035'}
+    assert ns['arc_welding_answer_errors'] == {}
+    assert set(ns['arc_welding_answer_results']) == {'arc_50_alarm_20081'}
     manual_index = next(i for i, c in enumerate(notebook.cells) if c.id == 'general-operation-tests')
+    arc_index = next(i for i, c in enumerate(notebook.cells) if c.id == 'arc-welding-tests')
     cleanup_index = next(i for i, c in enumerate(notebook.cells) if c.id == 'e7686d54')
-    assert manual_index < cleanup_index
+    assert manual_index < arc_index < cleanup_index
     assert not any(c.cell_type == 'markdown' and c.source.startswith('## ')
-                   for c in notebook.cells[manual_index+1:cleanup_index])
+                   for c in notebook.cells[arc_index+1:cleanup_index])
+
+
+def test_arc_cases_match_source_rows_and_reproduce_stratified_samples():
+    _, ns = coverage_namespace()
+    cases = ns['ARC_WELDING_CASES']
+    assert len(cases) == len({c['id'] for c in cases}) == 30
+    assert Counter((c['profile'], c['kind']) for c in cases) == {
+        ('4.0', 'instruction'): 10, ('5.0', 'instruction'): 10,
+        ('4.0', 'alarm'): 2, ('5.0', 'alarm'): 8}
+    assert {c['requested_section'] for c in cases if c['kind'] == 'instruction'} == {
+        '2', '3', '4', '5', '6', '7', '10'}
+    assert {c['section'] for c in cases if c['profile'] == '5.0' and c['kind'] == 'instruction'} == {
+        '3', '4', '5', '6', '7'}
+    assert Counter((c['profile'], c['classification']) for c in cases if c['kind'] == 'alarm') == {
+        ('4.0', '报警信息'): 2, ('5.0', '报警信息'): 8}
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+
+    def cells(row):
+        return ['\n'.join(''.join(t.text or '' for t in p.iter(w+'t')) for p in tc.findall(w+'p'))
+                for tc in row.findall(w+'tc')]
+
+    for profile, sampling in ns['ARC_WELDING_SAMPLING'].items():
+        source = ns['PROJ_ROOT']/sampling['source_docx']
+        if not source.exists():
+            pytest.skip('Arc-welding source manuals are not installed')
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == sampling['sha256']
+        with zipfile.ZipFile(source) as docx:
+            body = ET.fromstring(docx.read('word/document.xml')).find(w+'body')
+        tables, chapter, title, headings = {}, 0, '', []
+        for index, node in enumerate(body):
+            if node.tag == w+'p':
+                style = node.find(w+'pPr/'+w+'pStyle')
+                sid = style.get(w+'val') if style is not None else ''
+                text = ''.join(t.text or '' for t in node.iter(w+'t')).strip()
+                if sid == '2':
+                    chapter += 1
+                    title, headings = text, []
+                elif sid in ['3', '4', '5', '6']:
+                    headings = headings[:int(sid)-3] + [text]
+            elif node.tag == w+'tbl':
+                tables[index] = (chapter, [title, *headings], [cells(r) for r in node.findall(w+'tr')])
+        version_cases = [c for c in cases if c['profile'] == profile]
+        for case in version_cases:
+            ref = case['references'][0]
+            chapter, path, rows = tables[ref['body_block']]
+            assert case['heading_path'] == path
+            assert case['section'].split('.')[0] == str(chapter)
+            assert ref['excerpt'] == '\n'.join(' | '.join(rows[i]) for i in ref['rows'])
+            assert case['category'] == 'arc_welding'
+            if case['kind'] == 'alarm':
+                row = rows[ref['rows'][0]]
+                assert len(row) == len(rows[0])
+                assert case['reference_alarm'] == dict(zip(rows[0], row))
+                assert case['alarm_code'] == row[0]
+                assert case['classification'] in case['question']
+        seen = set()
+        for stratum in sampling['instruction_strata']:
+            pool, unique = [], set(seen)
+            for block, (chapter, _, rows) in tables.items():
+                if str(chapter) != stratum['section']:
+                    continue
+                for i, row in enumerate(rows):
+                    if len(row) < 3 or row[1].strip() != '功能' or not row[0].strip() or i+1 >= len(rows):
+                        continue
+                    if len(rows[i+1]) < 3 or rows[i+1][1].strip() != '格式':
+                        continue
+                    label = ' '.join(row[0].split())
+                    if label == 'GRADU APT ON MULTI APT ON GROAPT ON' or '=' in label:
+                        continue
+                    name = ' '.join(rows[i+1][0].split()) if label == '点激光传感指令' else label
+                    if name not in unique:
+                        unique.add(name)
+                        pool.append(dict(body_block=block, row=i, instruction=name))
+            selected = sorted(random.Random(stratum['seed']).sample(pool, stratum['count']),
+                              key=lambda entry: (entry['body_block'], entry['row']))
+            assert len(pool) == stratum['population']
+            assert selected == stratum['selected']
+            selected_cases = [c for c in version_cases if c['kind'] == 'instruction'
+                              and c['section'] == stratum['section']]
+            assert [(c['references'][0]['body_block'], c['references'][0]['rows'][0], c['instruction'])
+                    for c in selected_cases] == [(s['body_block'], s['row'], s['instruction']) for s in selected]
+            seen.update(entry['instruction'] for entry in selected)
+        assert len(seen) == 10
+        for stratum in sampling['alarm_strata']:
+            _, _, rows = tables[stratum['body_block']]
+            pool, seen_codes = [], set()
+            for i, row in enumerate(rows[1:], 1):
+                code = row[0].strip()
+                if re.fullmatch(r'\d+', code) and code not in seen_codes:
+                    seen_codes.add(code)
+                    pool.append(i)
+            assert len(pool) == stratum['population']
+            assert sorted(random.Random(stratum['seed']).sample(pool, stratum['count'])) == stratum['rows']
+            assert [c['references'][0]['rows'][0] for c in version_cases
+                    if c['kind'] == 'alarm' and c['classification'] == stratum['classification']] == stratum['rows']
+
+
+def test_arc_heading_checks_accept_renumbered_titles_but_reject_wrong_chapters_and_revisions():
+    _, ns = coverage_namespace()
+    case = next(c for c in ns['ARC_WELDING_CASES'] if c['profile'] == '4.0' and c['section'] == '2')
+    evidence = synthetic_evidence(case)
+    evidence['hits'][0]['record']['section_headings'] = [
+        '1 '+case['heading_path'][0],
+        *['1.7.'+str(i)+' '+title for i, title in enumerate(case['heading_path'][1:], 1)]]
+    assert ns['coverage_case_metrics'](case, evidence)['expected_section_hit']
+    wrong_title = deepcopy(evidence)
+    wrong_title['hits'][0]['record']['section_headings'][0] = '2 Wrong chapter'
+    assert not ns['coverage_case_metrics'](case, wrong_title)['expected_section_hit']
+    wrong_revision = deepcopy(evidence)
+    wrong_revision['hits'][0]['manual']['profile'] = '5.0'
+    assert not ns['coverage_case_metrics'](case, wrong_revision)['expected_manual_hit']
+    assert ns['coverage_heading_title']('1 智能焊接—激光篇') == ns['coverage_heading_title']('智能焊接-激光篇')
+    assert ns['coverage_heading_title']('3D寻位') == '3D寻位'
+    assert not ns['coverage_heading_path_matches'](['三维寻位', '三维寻位'], ['4.2 三维寻位'])
+    assert ns['coverage_heading_path_matches'](['三维寻位', '三维寻位'],
+                                              ['4.2 三维寻位', '4.2.4 三维寻位'])
+    assert not ns['coverage_heading_path_matches'](['辅助焊接功能', '摆动库'],
+                                                  ['1 摆动库', '1.2 辅助焊接功能'])
