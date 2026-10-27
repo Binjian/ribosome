@@ -21,6 +21,9 @@ classifiers = [
 dependencies = [
     'fastcore',
     'pandas',
+    'numpy>=2.5.1,<3',
+    'nbdev>=3',
+    'jupyterlab>=4',
     'gradio',
     'mypy',
     'ipywidgets',
@@ -44,7 +47,6 @@ dependencies = [
     "mermaid-py>=0.8.4",
     "pytest>=9.0.3",
     "markitdown[all]>=0.1.5",
-    "ts4code[notebook,slides]",
 ]
 [project.optional-dependencies]
 dev = [ "ipywidgets", "nbdev-numpy", "nbdev-stdlib", "pandas", "matplotlib", "black", "svg.py", "nbclassic",
@@ -54,9 +56,6 @@ ocr-layout = ["glmocr[selfhosted]>=0.1.5"]
 [project.urls]
 Repository = "https://github.com/binjian/ribosome"
 Documentation = "https://binjian.github.io/ribosome"
-
-[tool.uv.sources]
-ts4code = { path = "vendor/ts4code" }
 
 [project.entry-points.nbdev]
 ribosome = "ribosome._modidx:d"
