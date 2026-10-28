@@ -35,8 +35,15 @@ def coverage_namespace():
 
 def test_every_category_and_both_manual_subsection_layouts_are_covered():
     _, ns = coverage_namespace()
-    from ribosome.rag.object import load_mapping
-    categories, _ = load_mapping(ns['PROJ_ROOT']/'assets/coding_categories')
+    # The supported taxonomy is an independent expectation, not a dependency on
+    # private category CSVs and workbooks absent from standalone checkouts.
+    categories = {
+        'adhesive_dispensing', 'arc_welding', 'fds', 'general_operation',
+        'grinding', 'laser_welding', 'load_analysis', 'material_handling',
+        'offline_interface', 'palletizing', 'pneumatic_spot_welding',
+        'spot_welding', 'spr_riveting', 'stud_welding', 'teaching_free_welding',
+        'tool_quick_change', 'tracking', 'vision',
+    }
     cases = ns['COVERAGE_CASES'] + ns['GENERAL_OPERATION_CASES']
     assert len(ns['COVERAGE_CASES']) == 17
     assert all(case['category'] != 'general_operation' for case in ns['COVERAGE_CASES'])
