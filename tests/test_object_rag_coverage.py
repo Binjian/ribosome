@@ -20,7 +20,12 @@ NOTEBOOK = Path('nbs/05.application.rag.object.ipynb')
 
 def coverage_namespace():
     notebook = nbformat.read(NOTEBOOK, as_version=4)
-    ns = {}
+    evaluation = nbformat.read('nbs/06.test.rag.object.ipynb', as_version=4)
+    nbformat.validate(evaluation)
+    # Exercise legacy helpers against the moved banks without opening services.
+    notebook.cells = notebook.cells[:-2] + [c for c in evaluation.cells if c.id.startswith(
+        ('general-operation-', 'arc-welding-'))] + notebook.cells[-2:]
+    ns = {'USE_PERSISTENT_EVALUATION': False}
     exec(notebook.cells[2].source, ns)
     for cell_id in ['coverage-prompt-bank', 'coverage-test-helpers',
                     'general-operation-prompt-bank', 'arc-welding-prompt-bank']:

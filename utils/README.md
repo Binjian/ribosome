@@ -46,3 +46,43 @@ Offline validation:
 .venv/bin/nbdev-test --path nbs/01.core.dom.embedding.object.ipynb
 .venv/bin/pytest -q tests/test_object_embedding.py
 ```
+
+Object RAG evaluation lives in
+[06.test.rag.object.ipynb](../nbs/06.test.rag.object.ipynb). The application
+notebook retains the category demonstration; the evaluation notebook contains
+the two relocated manual suites and 20 additional questions per CSV source.
+Run from the repository root:
+
+```sh
+.venv/bin/python utils/run_object_rag_evaluation.py run --concurrency 2
+.venv/bin/python utils/review_object_rag_evaluation.py --host http://172.27.74.16:11434 --concurrency 2 --watch
+.venv/bin/python utils/run_object_rag_evaluation.py publish
+```
+
+The review command can run in a second terminal while answers are being generated.
+It uses a separate source-based judge and labels its assessments as model-assisted.
+By default the qualitative review covers all 68 original cases and three different
+tasks per CSV file (182 cases across all 38 files). All 828 retrievals and answers
+are still executed and saved; unreviewed cases receive no correctness grade.
+Use `--all-cases` for exhaustive model-assisted grading.
+The runner first batches and caches query embeddings from the configured model;
+the cache is isolated by model, provider settings, endpoint and vector dimension.
+To prepare vectors independently, use the `prepare` stage. A concurrent runner
+can consume that cache with `run --skip-prepare`; missing vectors are embedded
+on demand. This cache does not write to the corpus index.
+The runner also memoizes read-only catalog snapshots while active generations and
+catalog settings remain fixed. It preserves record order and category-specific
+coverage, and fails explicitly if the index changes during a run.
+`publish` reads compatible saved results, updates notebook outputs and the review,
+and makes no model calls. Individual results and raw responses are saved atomically
+under `db/object_rag_tests/results/`; re-running the same configuration resumes
+completed stages and retries errors. Source references and expected facts are
+never appended to production answer prompts. The existing index is opened for
+retrieval, without rebuilding corpus summaries or checkpoints.
+
+The committed notebook banks are sufficient to run the evaluation. To regenerate
+them locally from the CSV and deterministic sampling rules, use `author-offline`
+and then `build`; this recreates the appended sections, so publish recorded results
+again afterward. The short load-analysis manual uses explicitly curated distinct
+tasks, recorded in its sampling manifest. `OBJECT_RAG_INDEX` and the existing
+Ollama environment settings control the index and services.
