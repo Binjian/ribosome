@@ -20,7 +20,7 @@ NOTEBOOK = Path('nbs/05.application.rag.object.ipynb')
 
 def coverage_namespace():
     notebook = nbformat.read(NOTEBOOK, as_version=4)
-    evaluation = nbformat.read('nbs/06.test.rag.object.ipynb', as_version=4)
+    evaluation = nbformat.read('nbs/06.test.rag.object.question_with_location.ipynb', as_version=4)
     nbformat.validate(evaluation)
     # Exercise legacy helpers against the moved banks without opening services.
     notebook.cells = notebook.cells[:-2] + [c for c in evaluation.cells if c.id.startswith(

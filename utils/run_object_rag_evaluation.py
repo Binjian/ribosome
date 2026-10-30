@@ -21,7 +21,7 @@ from object_rag_evaluation import (
     plain, read_json, sample_units, source_key, compatible_review, cache_readonly_snapshots,
 )
 
-NOTEBOOK = ROOT/'nbs/06.test.rag.object.ipynb'
+NOTEBOOK = ROOT/'nbs/06.test.rag.object.question_with_location.ipynb'
 AUTHOR_DIR = ROOT/'db/object_rag_tests/authored'
 
 # This very short manual has only sixteen text units. These twenty different

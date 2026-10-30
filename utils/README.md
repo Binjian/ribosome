@@ -48,7 +48,7 @@ Offline validation:
 ```
 
 Object RAG evaluation lives in
-[06.test.rag.object.ipynb](../nbs/06.test.rag.object.ipynb). The application
+[06.test.rag.object.question_with_location.ipynb](../nbs/06.test.rag.object.question_with_location.ipynb). The application
 notebook retains the category demonstration; the evaluation notebook contains
 the two relocated manual suites and 20 additional questions per CSV source.
 Run from the repository root:

@@ -1,4 +1,4 @@
-"""Source sampling and resumable experiments for 06.test.rag.object.ipynb.
+"""Source sampling and resumable experiments for 06.test.rag.object.question_with_location.ipynb.
 
 This is evaluation tooling, not part of the production retriever. References are
 only used by question authors/reviewers; EvidenceReplay receives retrieved data.

@@ -310,14 +310,14 @@ def test_sampling_is_reproducible_and_excludes_frontmatter():
 def test_new_notebook_compiles_and_relocation_is_complete():
     import ast
     application = nbformat.read('nbs/05.application.rag.object.ipynb', as_version=4)
-    notebook = nbformat.read('nbs/06.test.rag.object.ipynb', as_version=4)
+    notebook = nbformat.read('nbs/06.test.rag.object.question_with_location.ipynb', as_version=4)
     nbformat.validate(application)
     nbformat.validate(notebook)
     assert not any(c.id in ['general-operation-tests', 'arc-welding-tests'] for c in application.cells)
-    assert any('06.test.rag.object.ipynb' in c.source for c in application.cells)
+    assert any('06.test.rag.object.question_with_location.ipynb' in c.source for c in application.cells)
     for cell in notebook.cells:
         if cell.cell_type == 'code':
-            compile(cell.source, '06.test.rag.object.ipynb', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+            compile(cell.source, '06.test.rag.object.question_with_location.ipynb', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
 
 
 def test_all_760_cases_have_exact_source_references_and_distinct_questions():
