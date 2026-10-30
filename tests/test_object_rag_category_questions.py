@@ -146,3 +146,24 @@ def test_converted_markdown_links_back_to_original_document(tmp_path):
     state = dict(retrieval=dict(hits=[dict(record=dict(id='r', source_file=str(source),
         attributes={}, content='', section_headings=['3.2 Configuration']), manual={})], context=''))
     assert 'original document [Manual.docx](<assets/code-docs.5.0/manuals/Manual.docx>)' in evidence_locations(state, tmp_path)
+
+
+def test_jupyter_links_resolve_from_notebook_directory(tmp_path):
+    from urllib.parse import unquote
+    from object_rag_category_questions import evidence_locations
+    notebook_directory = tmp_path / 'nbs'
+    notebook_directory.mkdir()
+    source = tmp_path / 'assets/manuals/Manual (A-1).md'
+    source.parent.mkdir(parents=True)
+    source.write_text('# 1 Setup\n')
+    image = source.parent / 'img/图 (1).png'
+    image.parent.mkdir()
+    image.write_bytes(b'image')
+    hit = dict(record=dict(id='r', source_file=str(source), section_headings=['1 Setup'],
+        attributes={}, content='<img src="img/图 (1).png"/>'), manual={})
+    text = evidence_locations(dict(retrieval=dict(hits=[hit], context='')), tmp_path,
+                              display_directory=notebook_directory)
+    assert '](<../assets/' in text
+    targets = re.findall(r'\]\(<([^>]+)>\)', text)
+    assert len(targets) == 2
+    assert {(notebook_directory / unquote(t)).resolve() for t in targets} == {source, image}

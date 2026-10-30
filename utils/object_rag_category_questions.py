@@ -59,6 +59,7 @@ class CategoryPromptGenerator:
 from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
+import os
 from urllib.parse import quote, unquote, urlsplit
 
 from object_rag_evaluation import EvaluationRun, answer_blocks, compatible_review
@@ -126,16 +127,21 @@ def _section_images(source, line_start):
     return '\n'.join(lines[start:end])
 
 
-def evidence_locations(state, project_root):
+def evidence_locations(state, project_root, *, display_directory=None):
     """Exact locations of all returned embeddings, separate from generated claims."""
     root = Path(project_root).resolve()
+    display_directory = root if display_directory is None else Path(display_directory).resolve()
+
+    def link_target(path):
+        return quote(Path(os.path.relpath(path, display_directory)).as_posix(), safe="/-._~")
+
     result = state.get('answer') or state.get('partial_answer') or {}
     retrieval = state.get('retrieval') or result
     hits, context = retrieval.get('hits', []), retrieval.get('context', '')
     if not hits:
         return '#### Retrieved embedding locations\n\nNo retrieved source locations are available.'
     blocks = ['#### Retrieved embedding locations',
-              'Locations below come from retrieved records. Image links are relative to the project root.']
+              'Locations below come from retrieved records. Links are relative to the notebook directory.']
     seen_images = set()
     for number, hit in enumerate(hits, 1):
         record, manual = hit['record'], hit.get('manual', {})
@@ -151,7 +157,7 @@ def evidence_locations(state, project_root):
         start, end = attributes.get('line_start'), attributes.get('line_end')
         if source.is_relative_to(root):
             relative = source.relative_to(root).as_posix()
-            target = quote(relative, safe='/-._~')
+            target = link_target(source)
             if start is not None:
                 target += f'#L{start}' + (f'-L{end}' if end is not None else '')
             location = f'[{source.name}](<{target}>)'
@@ -161,7 +167,7 @@ def evidence_locations(state, project_root):
                 index = parts.index('.md')
                 original = root.joinpath(*parts[:index], *parts[index + 1:-2], source.stem + '.docx')
                 if original.is_file():
-                    original_target = quote(original.relative_to(root).as_posix(), safe='/-._~')
+                    original_target = link_target(original)
                     location += f'; original document [{original.name}](<{original_target}>)'
         else:
             location = 'Source is outside the project; no project-relative link is available'
@@ -191,15 +197,15 @@ def evidence_locations(state, project_root):
             seen_images.add(relative)
             if path.is_file():
                 alt = re.sub(r'[\[\]\n]', ' ', alt)
-                blocks.append(f'![{alt}](<{quote(relative, safe="/-._~")}>)')
+                blocks.append(f'![{alt}](<{link_target(path)}>)')
             else:
                 blocks.append(f'Image file unavailable: `{relative}`.')
     return '\n\n'.join(blocks)
 
 
-def located_answer_blocks(case, state, project_root):
+def located_answer_blocks(case, state, project_root, *, display_directory=None):
     blocks = answer_blocks(case, state)
-    blocks[2] += '\n\n' + evidence_locations(state, project_root)
+    blocks[2] += '\n\n' + evidence_locations(state, project_root, display_directory=display_directory)
     return blocks
 
 
@@ -218,14 +224,16 @@ class CategoryEvaluationRun(EvaluationRun):
         for case in cases:
             state = self.load(case)
             if state:
-                for block in located_answer_blocks(case, state, self.project_root):
+                for block in located_answer_blocks(case, state, self.project_root,
+                                                   display_directory=self.project_root / "nbs"):
                     display(Markdown(block))
 
     def inspect(self, case_id):
         from IPython.display import Markdown, display
         case = next(c for c in self.cases if c['id'] == case_id)
         state = self.load(case)
-        for block in located_answer_blocks(case, state, self.project_root):
+        for block in located_answer_blocks(case, state, self.project_root,
+                                                   display_directory=self.project_root / "nbs"):
             display(Markdown(block))
         print(state.get('retrieval', {}).get('context', 'Retrieval not completed'))
         # Original references stay reviewer-only, as in the base inspection helper.
