@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.embedding_ollama_pool import HEALTH_CHECK_TEXT, OllamaEmbeddingPool
 
-HOSTS = ['http://localhost:11434', 'http://172.27.74.16:11434']
+HOSTS = ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
 MODEL = 'qwen3-embedding:8b'
 
 

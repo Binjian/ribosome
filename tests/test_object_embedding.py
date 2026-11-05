@@ -410,7 +410,7 @@ def test_parallel_preparation_uses_both_servers_and_preserves_reuse_counts(tmp_p
             await asyncio.wait_for(both.wait(), 1)
             return {'embeddings': [[1.0, 2.0, 3.0]], 'model': model}
         monkeypatch.setattr(AsyncClient, 'embed', embed)
-        hosts = ['http://localhost:11434', 'http://172.27.74.16:11434']
+        hosts = ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
         pool = OllamaEmbeddingPool(hosts=hosts)
         client = chromadb.EphemeralClient()
         collection = client.create_collection('parallel-objects', metadata={'hnsw:space': 'cosine'}, embedding_function=None)

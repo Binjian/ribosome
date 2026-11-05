@@ -14,7 +14,7 @@ from utils.summary_asyncio import _document_id
 from utils.summary_ollama_pool import OllamaSummaryPool
 
 
-HOSTS = ['http://127.0.0.1:11434', 'http://172.27.74.16:11434']
+HOSTS = ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
 
 
 def host(client):

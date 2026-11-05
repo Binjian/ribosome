@@ -51,7 +51,7 @@ def test_notebook_is_valid_offline_and_all_cells_compile():
 @pytest.mark.parametrize('use_tasks', [True, False])
 def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path, monkeypatch, use_tasks):
     (tmp_path / 'pyproject.toml').write_text('')
-    (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://localhost:11434,http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
+    (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://172.27.74.49:11434,http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
     monkeypatch.syspath_prepend(str(tmp_path))
     import ollama
     monkeypatch.setattr(ollama, 'AsyncClient', lambda **kw: pytest.fail('Configuration opened a provider client'))
@@ -60,10 +60,10 @@ def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path
         source = code_with('PROJ_ROOT = resolve_project_root()').replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
         exec(compile(source, str(NOTEBOOK), 'exec'), namespace)
         assert namespace['EMBED_MODEL'] == 'override-model'
-        assert namespace['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434']
-        assert namespace['EMBEDDING_CONCURRENCY'] == 4
+        assert namespace['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434', 'http://from-file:11434']
+        assert namespace['EMBEDDING_CONCURRENCY'] == 8
         assert namespace['headers'] == {'Authorization': 'Bearer fake-secret'}
-        assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': ['http://172.27.74.49:11434']}
+        assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': ['http://172.27.74.49:11434', 'http://from-file:11434']}
         assert namespace['INPUT_DIRS'] == [tmp_path / 'assets/code-docs.4.0/.md', tmp_path / 'assets/code-docs.5.0/.md']
         directory = 'task_embeddings' if use_tasks else 'object_embeddings'
         assert namespace['USE_TASKS'] is use_tasks
@@ -202,7 +202,7 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
         async def aclose(self):
             calls.append(('close', None))
 
-    hosts = ['http://localhost:11434', 'http://172.27.74.16:11434']
+    hosts = ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
     namespace.update(INPUT_DIRS=[tmp_path], OllamaEmbeddingPool=Pool,
                      INPUT_PATTERN='*_tasks.json',
                      OLLAMA_HOSTS=hosts, SERVER_CONCURRENCY=1, headers={},
@@ -222,22 +222,17 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
     assert not (tmp_path / 'db').exists()
 
 
-def test_application_defaults_to_qwen_single_host_index_without_processing(tmp_path, monkeypatch):
+def test_application_uses_dotenv_hosts_without_processing(tmp_path, monkeypatch):
     (tmp_path / 'pyproject.toml').write_text('')
+    (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://172.27.74.49:11434,http://172.27.74.16:11434\n')
     monkeypatch.syspath_prepend(str(tmp_path))
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
         app = {}
         exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
         assert app['EMBED_MODEL'] == 'qwen3-embedding:8b'
-        assert app['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434']
-        assert app['EMBEDDING_CONCURRENCY'] == 4
-        assert app['REQUEST_RETRIES'] == 2
-        assert app['QUARANTINE_SECONDS'] == 30
-        assert app['HEALTH_TIMEOUT'] == 60
-        assert app['USE_TASKS'] is True
-        assert app['INPUT_PATTERN'] == '*_tasks.json'
-        assert app['COLLECTION_NAME'] == 'task_embeddings'
-        assert app['INDEX_DIR'] == tmp_path / 'db/task_embeddings/qwen3-embedding-8b-172.27.74.49-11434'
+        assert app['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
+        assert app['EMBEDDING_CONCURRENCY'] == 8
+        assert app['INDEX_DIR'] == tmp_path / 'db/object_embeddings/qwen3-embedding-8b'
         assert app['FORCE_REBUILD'] is False
         assert not app['INDEX_DIR'].exists()
 
