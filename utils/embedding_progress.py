@@ -11,14 +11,21 @@ def render_embedding_status(snapshot, *, current_file, elapsed, file_elapsed,
         colour = ('#2563eb', '#ea580c', '#16a34a', '#9333ea')[index % 4]
         active, capacity = server['active'], server['capacity']
         width = min(100, 100 * active / max(1, capacity))
+        health = escape(server.get('health', 'healthy'))
+        cooldown = server.get('cooldown_seconds', 0)
+        if cooldown:
+            health += f' ({cooldown:.1f}s)'
         rows.append(
             f'<tr><td style="padding:5px;color:{colour}"><strong>S{index + 1}</strong> '
             f'{escape(server["host"])}</td>'
+            f'<td style="padding:5px" title="{escape(server.get("last_error", ""), quote=True)}">{health}</td>'
             f'<td style="padding:5px">{active}/{capacity}'
             '<div style="width:120px;height:7px;background:#ddd;border-radius:4px">'
             f'<div style="width:{width:.1f}%;height:7px;background:{colour};border-radius:4px"></div></div></td>'
             f'<td style="padding:5px">{server["completed"]}</td>'
             f'<td style="padding:5px">{server["failed"]}</td>'
+            f'<td style="padding:5px">{server.get("retries", 0)}</td>'
+            f'<td style="padding:5px">{server.get("health_checks", 0)} / {server.get("health_failures", 0)}</td>'
             f'<td style="padding:5px">{server["cancelled"]}</td>'
             f'<td style="padding:5px">{server["oldest_seconds"]:.1f}s</td></tr>')
     files = '\n'.join(completed_files) or 'No completed files yet.'
@@ -30,13 +37,14 @@ def render_embedding_status(snapshot, *, current_file, elapsed, file_elapsed,
         f'· Document failures {document_counts["failed"]}<br>'
         f'<strong>Requests running {snapshot["running"]}/{snapshot["capacity"]}</strong> '
         f'· Queued {snapshot["queued"]} · Completed {snapshot["completed"]} '
-        f'· Failed {snapshot["failed"]} · Cancelled {snapshot["cancelled"]} '
+        f'· Failed attempts {snapshot["failed"]} · Retries {snapshot.get("retries", 0)} '
+        f'· Cancelled {snapshot["cancelled"]} '
         f'· Oldest {snapshot["oldest_seconds"]:.1f}s<br>'
         f'<div style="overflow-wrap:anywhere"><strong>Current file ({file_elapsed:.1f}s):</strong> '
         f'{escape(current_file or "Waiting for first file")}</div>'
         '<table style="text-align:left;margin-top:6px"><thead><tr>'
-        '<th>Ollama server</th><th>Running / limit</th><th>Completed</th>'
-        '<th>Failed</th><th>Cancelled</th><th>Oldest running</th>'
+        '<th>Ollama server</th><th>Health</th><th>Running / limit</th><th>Completed</th>'
+        '<th>Failed attempts</th><th>Retries</th><th>Probes / failed</th><th>Cancelled</th><th>Oldest running</th>'
         '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
         f'<details><summary>Completed files this run ({len(completed_files)})</summary>'
         f'<pre style="white-space:pre-wrap">{escape(files)}</pre></details></div>')

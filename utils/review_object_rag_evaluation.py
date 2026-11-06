@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ollama import AsyncClient
 from run_object_rag_evaluation import ROOT, namespace
+from ribosome.ollama_config import OLLAMA_RAG_HOST
 from object_rag_evaluation import atomic_json, digest, read_json, review_input
 
 PROMPT = '''Review this robot-manual RAG answer against the question, exact source
@@ -199,7 +200,8 @@ async def review_all(host, concurrency, watch, *, context=32768, timeout=120, al
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--host', default='http://localhost:11434')
+    parser.add_argument('--host', default=OLLAMA_RAG_HOST, choices=[OLLAMA_RAG_HOST],
+                        help='RAG/judge server from ribosome.ollama_config')
     parser.add_argument('--concurrency', type=int, default=2)
     parser.add_argument('--watch', action='store_true', help='Review new results until every case has been attempted')
     parser.add_argument('--context', type=int, default=32768)

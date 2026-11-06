@@ -73,6 +73,7 @@ class DOMBehaviorTests(unittest.TestCase):
     def make_dom(self) -> DOM:
         dom = DOM(self.md_file, db_client=chromadb.EphemeralClient())
         object.__setattr__(dom, "ollama_client", FakeOllamaClient())
+        object.__setattr__(dom, "embedding_client", dom.ollama_client)
         original_min_len = type(dom).leaf_min_len
         original_doc_min_len = type(dom).min_len
         self.addCleanup(setattr, type(dom), "leaf_min_len", original_min_len)

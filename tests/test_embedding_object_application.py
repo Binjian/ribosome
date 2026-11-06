@@ -60,16 +60,16 @@ def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path
         source = code_with('PROJ_ROOT = resolve_project_root()').replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
         exec(compile(source, str(NOTEBOOK), 'exec'), namespace)
         assert namespace['EMBED_MODEL'] == 'override-model'
-        assert namespace['OLLAMA_HOSTS'] == ['http://localhost:11434', 'http://from-file:11434']
-        assert namespace['EMBEDDING_CONCURRENCY'] == 8
+        assert namespace['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434']
+        assert namespace['EMBEDDING_CONCURRENCY'] == 4
         assert namespace['headers'] == {'Authorization': 'Bearer fake-secret'}
-        assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': ['http://from-file:11434', 'http://localhost:11434']}
+        assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': ['http://172.27.74.49:11434']}
         assert namespace['INPUT_DIRS'] == [tmp_path / 'assets/code-docs.4.0/.md', tmp_path / 'assets/code-docs.5.0/.md']
         directory = 'task_embeddings' if use_tasks else 'object_embeddings'
         assert namespace['USE_TASKS'] is use_tasks
         assert namespace['INPUT_PATTERN'] == ('*_tasks.json' if use_tasks else '*_semantics.json')
         assert namespace['COLLECTION_NAME'] == ('task_embeddings' if use_tasks else 'object_summaries')
-        assert namespace['CATALOG_PATH'] == tmp_path / f'db/{directory}/override-model/catalog.sqlite3'
+        assert namespace['CATALOG_PATH'] == tmp_path / f'db/{directory}/override-model-172.27.74.49-11434/catalog.sqlite3'
         assert not namespace['INDEX_DIR'].exists()
 
 
@@ -206,7 +206,8 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
     namespace.update(INPUT_DIRS=[tmp_path], OllamaEmbeddingPool=Pool,
                      INPUT_PATTERN='*_tasks.json',
                      OLLAMA_HOSTS=hosts, SERVER_CONCURRENCY=1, headers={},
-                     REQUEST_TIMEOUT=300, EMBED_MODEL='qwen3-embedding:8b')
+                     REQUEST_TIMEOUT=300, REQUEST_RETRIES=2, QUARANTINE_SECONDS=30,
+                     HEALTH_TIMEOUT=60, EMBED_MODEL='qwen3-embedding:8b')
     code = compile(code_with('await ollama_client.check_models'), str(NOTEBOOK), 'exec',
                    flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
     if failure:
@@ -216,23 +217,27 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
     else:
         asyncio.run(eval(code, namespace))
         assert calls[-1] == ('check_models', 'qwen3-embedding:8b')
-    assert calls[0] == ('setup', {'hosts': hosts, 'concurrency_per_server': 1, 'headers': {}, 'request_timeout': 300})
+    assert calls[0] == ('setup', {'hosts': hosts, 'concurrency_per_server': 1, 'headers': {}, 'request_timeout': 300,
+                                'request_retries': 2, 'quarantine_seconds': 30, 'health_timeout': 60})
     assert not (tmp_path / 'db').exists()
 
 
-def test_application_defaults_to_qwen_dual_host_index_without_processing(tmp_path, monkeypatch):
+def test_application_defaults_to_qwen_single_host_index_without_processing(tmp_path, monkeypatch):
     (tmp_path / 'pyproject.toml').write_text('')
     monkeypatch.syspath_prepend(str(tmp_path))
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
         app = {}
         exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
         assert app['EMBED_MODEL'] == 'qwen3-embedding:8b'
-        assert app['OLLAMA_HOSTS'] == ['http://localhost:11434', 'http://172.27.74.16:11434']
-        assert app['EMBEDDING_CONCURRENCY'] == 8
+        assert app['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434']
+        assert app['EMBEDDING_CONCURRENCY'] == 4
+        assert app['REQUEST_RETRIES'] == 2
+        assert app['QUARANTINE_SECONDS'] == 30
+        assert app['HEALTH_TIMEOUT'] == 60
         assert app['USE_TASKS'] is True
         assert app['INPUT_PATTERN'] == '*_tasks.json'
         assert app['COLLECTION_NAME'] == 'task_embeddings'
-        assert app['INDEX_DIR'] == tmp_path / 'db/task_embeddings/qwen3-embedding-8b'
+        assert app['INDEX_DIR'] == tmp_path / 'db/task_embeddings/qwen3-embedding-8b-172.27.74.49-11434'
         assert app['FORCE_REBUILD'] is False
         assert not app['INDEX_DIR'].exists()
 
@@ -301,14 +306,36 @@ def test_force_rebuild_uses_a_fresh_directory_only_for_selected_mode(tmp_path, u
     source = source.replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
     source = source.replace('FORCE_REBUILD = False', 'FORCE_REBUILD = True')
     directory = 'task_embeddings' if use_tasks else 'object_embeddings'
-    old = tmp_path / f'db/{directory}/qwen3-embedding-8b/catalog.sqlite3'
+    old = tmp_path / f'db/{directory}/qwen3-embedding-8b-172.27.74.49-11434/catalog.sqlite3'
     old.parent.mkdir(parents=True)
     old.write_bytes(b'previous index')
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
         app = {}
         exec(compile(source, str(NOTEBOOK), 'exec'), app)
     assert app['INDEX_DIR'].parent == old.parent.parent
-    assert app['INDEX_DIR'].name.startswith('qwen3-embedding-8b-')
+    assert app['INDEX_DIR'].name.startswith('qwen3-embedding-8b-172.27.74.49-11434-')
     assert app['CATALOG_PATH'] == app['INDEX_DIR'] / 'catalog.sqlite3'
     assert not app['INDEX_DIR'].exists()
     assert old.read_bytes() == b'previous index'
+
+
+def test_host_environment_overrides_cannot_change_embedding_or_comparison_server(tmp_path):
+    (tmp_path / 'pyproject.toml').write_text('')
+    env = dict(PROJ_ROOT=str(tmp_path), OLLAMA_EMBED_HOSTS='http://old:11434',
+               OLLAMA_HOST='http://old:11434', OLLAMA_RAG_HOST='http://other:11434')
+    with patch.dict(os.environ, env, clear=True):
+        app = {}
+        exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
+        exec(compile(code_with('RAG_HOST ='), str(NOTEBOOK), 'exec'), app)
+    assert app['OLLAMA_HOSTS'] == app['HOSTS'] == ['http://172.27.74.49:11434']
+    assert app['RAG_HOST'] == 'http://172.27.74.16:11434'
+
+
+@pytest.mark.parametrize('option,value', [('RIBOSOME_EMBED_REQUEST_RETRIES', '-1'),
+    ('RIBOSOME_EMBED_QUARANTINE_SECONDS', 'nan'), ('RIBOSOME_EMBED_HEALTH_TIMEOUT', '0')])
+def test_invalid_retry_settings_do_not_create_an_index(tmp_path, option, value):
+    (tmp_path / 'pyproject.toml').write_text('')
+    with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path), option: value}, clear=True):
+        with pytest.raises(ValueError):
+            exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), {})
+    assert not (tmp_path / 'db').exists()

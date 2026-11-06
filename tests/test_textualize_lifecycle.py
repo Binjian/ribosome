@@ -88,7 +88,7 @@ def test_textualize_then_embed_doc_uses_new_semantics(dom, tmp_path):
     collection = chromadb.EphemeralClient().get_or_create_collection('phase-four')
     client = AsyncMock()
     client.embed.return_value = SimpleNamespace(embeddings=[[0.5, 1.0]], model='offline-model')
-    object.__setattr__(dom, 'ollama_client', client)
+    object.__setattr__(dom, 'embedding_client', client)
     database = chromadb.EphemeralClient()
     with patch('ribosome.core.dom.summary.natural_text.get_summary_response_async',
                side_effect=deterministic_summary):

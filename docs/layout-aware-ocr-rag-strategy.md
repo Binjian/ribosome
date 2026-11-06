@@ -579,7 +579,9 @@ dense = ChromaDenseIndex(
     chromadb.PersistentClient(path="chroma/layout-rag"),
     embedding_model="bge-m3",
 )
-embedder = OllamaEmbeddingProvider(AsyncClient(), model="bge-m3")
+from ribosome.ollama_config import OLLAMA_EMBED_HOST
+
+embedder = OllamaEmbeddingProvider(AsyncClient(host=OLLAMA_EMBED_HOST), model="bge-m3")
 dense_app = LayoutRAGApplication(
     store,
     dense_index=dense,

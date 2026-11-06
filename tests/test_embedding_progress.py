@@ -86,6 +86,22 @@ def test_display_updates_one_panel_escapes_sources_and_distinguishes_document_er
     assert 'Requests running 0/8' in updates[-1]
 
 
+def test_display_shows_quarantine_retries_and_health_probes():
+    snapshot = dict(running=0, queued=2, capacity=4, oldest_seconds=3.0,
+        completed=1, failed=2, retries=2, cancelled=0, servers=[dict(
+            host=HOSTS[0], active=0, capacity=4, completed=1, failed=2, retries=2,
+            cancelled=0, oldest_seconds=0, health='quarantined', cooldown_seconds=12,
+            health_checks=3, health_failures=1, last_error='Timeout <server>')])
+    panels = []
+    monitor = EmbeddingProgressDisplay(SimpleNamespace(status_snapshot=lambda: snapshot), total=1,
+        display_fn=lambda content, **kwargs: panels.append(content.data))
+    monitor.update()
+    html = panels[0]
+    assert 'quarantined (12.0s)' in html and 'Retries 2' in html
+    assert 'Probes / failed' in html and '>3 / 1<' in html
+    assert 'Timeout &lt;server&gt;' in html
+
+
 @pytest.mark.parametrize('cancel', [False, True])
 def test_application_refreshes_during_requests_and_flushes_after_cleanup(tmp_path, monkeypatch, cancel):
     notebook = read('nbs/05.application.embedding.object.ipynb', as_version=4)

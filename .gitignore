@@ -180,6 +180,7 @@ cython_debug/
 /db/
 /ribosome/*
 !/ribosome/__init__.py
+!/ribosome/ollama_config.py
 !/ribosome/_modidx.py
 !/ribosome/preprocessing/
 /ribosome/preprocessing/*

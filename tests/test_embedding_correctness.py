@@ -237,7 +237,7 @@ def test_dom_failure_does_not_publish_artifact_and_retry_converges(tmp_path,stag
         collection.delete(ids=previous)
     dom = DOMClass(source,db_client=client)
     dom.semantics_json = json.dumps(fixture_tree())
-    object.__setattr__(dom,'ollama_client',Provider(fail_at=2 if stage=='provider' else None))
+    object.__setattr__(dom,'embedding_client',Provider(fail_at=2 if stage=='provider' else None))
     artifact = tmp_path/'doc_embed.json'
     if existing_artifact:
         artifact.write_bytes(b'previous successful artifact')
@@ -258,7 +258,7 @@ def test_dom_failure_does_not_publish_artifact_and_retry_converges(tmp_path,stag
         assert not artifact.exists()
     class SuccessDb:
         def get_or_create_collection(self,name):return collection
-    object.__setattr__(dom,'ollama_client',Provider())
+    object.__setattr__(dom,'embedding_client',Provider())
     # Change the tree so the retry also has to clear any successful partial root.
     changed = fixture_tree();changed['summary']='retry';changed['blocks'].pop()
     dom.semantics_json=json.dumps(changed)
