@@ -1,6 +1,7 @@
 """Offline checks for the operational object-embedding notebook."""
 import ast
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,9 +29,9 @@ def helpers():
     return namespace
 
 
-def semantics(folder, name, summary='Document'):
+def semantics(folder, name, summary='Document', *, suffix='_semantics.json'):
     folder.mkdir(parents=True, exist_ok=True)
-    file = folder / f'{name}_semantics.json'
+    file = folder / f'{name}{suffix}'
     file.write_text(json.dumps({'summary': summary, 'objects': [record(1, 'figure', 'Object')]}))
     return file
 
@@ -47,7 +48,8 @@ def test_notebook_is_valid_offline_and_all_cells_compile():
             assert '# | notest' in cell.source
 
 
-def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path, monkeypatch):
+@pytest.mark.parametrize('use_tasks', [True, False])
+def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path, monkeypatch, use_tasks):
     (tmp_path / 'pyproject.toml').write_text('')
     (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://localhost:11434,http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -55,14 +57,19 @@ def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path
     monkeypatch.setattr(ollama, 'AsyncClient', lambda **kw: pytest.fail('Configuration opened a provider client'))
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path), 'OLLAMA_EMBED_MODEL': 'override-model'}, clear=True):
         namespace = {}
-        exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), namespace)
+        source = code_with('PROJ_ROOT = resolve_project_root()').replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
+        exec(compile(source, str(NOTEBOOK), 'exec'), namespace)
         assert namespace['EMBED_MODEL'] == 'override-model'
         assert namespace['OLLAMA_HOSTS'] == ['http://localhost:11434', 'http://from-file:11434']
         assert namespace['EMBEDDING_CONCURRENCY'] == 8
         assert namespace['headers'] == {'Authorization': 'Bearer fake-secret'}
         assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': ['http://from-file:11434', 'http://localhost:11434']}
         assert namespace['INPUT_DIRS'] == [tmp_path / 'assets/code-docs.4.0/.md', tmp_path / 'assets/code-docs.5.0/.md']
-        assert namespace['CATALOG_PATH'] == tmp_path / 'db/object_embeddings/override-model/catalog.sqlite3'
+        directory = 'task_embeddings' if use_tasks else 'object_embeddings'
+        assert namespace['USE_TASKS'] is use_tasks
+        assert namespace['INPUT_PATTERN'] == ('*_tasks.json' if use_tasks else '*_semantics.json')
+        assert namespace['COLLECTION_NAME'] == ('task_embeddings' if use_tasks else 'object_summaries')
+        assert namespace['CATALOG_PATH'] == tmp_path / f'db/{directory}/override-model/catalog.sqlite3'
         assert not namespace['INDEX_DIR'].exists()
 
 
@@ -76,6 +83,23 @@ def test_discovery_includes_nested_files_in_root_order_and_deduplicates(tmp_path
     (first / 'ignored_summary-progress.json').write_text('{}')
     corpora = discover([second, first, first / 'nested', second])
     assert corpora == [(second, [c]), (first, [a, b]), (first / 'nested', []), (second, [])]
+
+
+def test_task_discovery_selects_only_task_outputs_and_deduplicates(tmp_path):
+    discover = helpers()['discover_semantics']
+    first = semantics(tmp_path, 'a', suffix='_tasks.json')
+    second = semantics(tmp_path / 'nested', 'b', suffix='_tasks.json')
+    semantics(tmp_path, 'a')
+    (tmp_path / 'ignored_summary-progress.json').write_text('{}')
+    assert discover([tmp_path, tmp_path / 'nested'], pattern='*_tasks.json') == [
+        (tmp_path, [first, second]), (tmp_path / 'nested', []),
+    ]
+
+
+def test_task_discovery_does_not_fall_back_to_semantics(tmp_path):
+    semantics(tmp_path, 'a')
+    with pytest.raises(ValueError, match=r'No \*_tasks\.json'):
+        helpers()['discover_semantics'](tmp_path, pattern='*_tasks.json')
 
 
 @pytest.mark.parametrize('mode', ['missing', 'empty', 'no-folders'])
@@ -162,7 +186,7 @@ def test_cancellation_awaits_active_file_and_retains_completed_reports(tmp_path)
 @pytest.mark.parametrize('failure', [False, True])
 def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
     namespace = helpers()
-    semantics(tmp_path, 'a')
+    semantics(tmp_path, 'a', suffix='_tasks.json')
     calls = []
 
     class Pool:
@@ -180,6 +204,7 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
 
     hosts = ['http://localhost:11434', 'http://172.27.74.16:11434']
     namespace.update(INPUT_DIRS=[tmp_path], OllamaEmbeddingPool=Pool,
+                     INPUT_PATTERN='*_tasks.json',
                      OLLAMA_HOSTS=hosts, SERVER_CONCURRENCY=1, headers={},
                      REQUEST_TIMEOUT=300, EMBED_MODEL='qwen3-embedding:8b')
     code = compile(code_with('await ollama_client.check_models'), str(NOTEBOOK), 'exec',
@@ -204,6 +229,86 @@ def test_application_defaults_to_qwen_dual_host_index_without_processing(tmp_pat
         assert app['EMBED_MODEL'] == 'qwen3-embedding:8b'
         assert app['OLLAMA_HOSTS'] == ['http://localhost:11434', 'http://172.27.74.16:11434']
         assert app['EMBEDDING_CONCURRENCY'] == 8
-        assert app['INDEX_DIR'] == tmp_path / 'db/object_embeddings/qwen3-embedding-8b'
+        assert app['USE_TASKS'] is True
+        assert app['INPUT_PATTERN'] == '*_tasks.json'
+        assert app['COLLECTION_NAME'] == 'task_embeddings'
+        assert app['INDEX_DIR'] == tmp_path / 'db/task_embeddings/qwen3-embedding-8b'
         assert app['FORCE_REBUILD'] is False
         assert not app['INDEX_DIR'].exists()
+
+
+def test_modes_create_separate_collections_and_catalogs_and_resume(tmp_path):
+    (tmp_path / 'pyproject.toml').write_text('')
+    folder = tmp_path / 'corpus'
+    folder.mkdir()
+    files = []
+    for suffix, kind in [('_semantics.json', 'table'), ('_tasks.json', 'task')]:
+        file = folder / f'manual{suffix}'
+        file.write_text(json.dumps({'summary': 'Document', 'objects': [
+            record(1, kind, 'Program'), record(2, 'figure', 'Figure'),
+        ]}))
+        files.append(file)
+    original_sources = {file: file.read_bytes() for file in files}
+    setup = code_with('object_index = ObjectEmbeddingIndex(').split('\nresults = []', 1)[0]
+    snapshots = []
+    with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
+        for use_tasks, kind, name in [(False, 'table', 'object_summaries'), (True, 'task', 'task_embeddings')]:
+            app = {}
+            config = code_with('PROJ_ROOT = resolve_project_root()').replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
+            exec(compile(config, str(NOTEBOOK), 'exec'), app)
+            exec(compile(code_with('def discover_semantics'), str(NOTEBOOK), 'exec'), app)
+            provider = Provider()
+            app['ollama_client'] = provider
+            corpora = app['discover_semantics']([folder], pattern=app['INPUT_PATTERN'])
+            assert len(corpora[0][1]) == 1
+            assert corpora[0][1][0].name.endswith('_tasks.json' if use_tasks else '_semantics.json')
+            exec(compile(setup, str(NOTEBOOK), 'exec'), app)
+            index = app['object_index']
+            try:
+                assert index.collection.name == name
+                assert index.catalog_path == app['CATALOG_PATH']
+                assert not provider.calls
+                rows = []
+                asyncio.run(app['embed_corpora'](corpora, index, rows, progress=False))
+                assert rows[0]['status'] == 'indexed'
+                document = index.get_object(rows[0]['document_id'])
+                assert [index.get_object(identifier).type for identifier in document.children_ids] == [kind, 'figure']
+                assert index.collection.count() == 3
+                calls = len(provider.calls)
+                index.close()
+                exec(compile(setup, str(NOTEBOOK), 'exec'), app)
+                index = app['object_index']
+                repeated = []
+                asyncio.run(app['embed_corpora'](corpora, index, repeated, progress=False))
+                assert repeated[0]['status'] == 'unchanged'
+                assert len(provider.calls) == calls
+            finally:
+                index.close()
+            # Creating the second mode must not write the first mode's catalog.
+            for catalog, digest, collection in snapshots:
+                assert hashlib.sha256(catalog.read_bytes()).hexdigest() == digest
+                assert collection.count() == 3
+            snapshots.append((index.catalog_path, hashlib.sha256(index.catalog_path.read_bytes()).hexdigest(), index.collection))
+    assert snapshots[0][0] != snapshots[1][0]
+    assert snapshots[0][2].id != snapshots[1][2].id
+    assert {file: file.read_bytes() for file in original_sources} == original_sources
+
+
+@pytest.mark.parametrize('use_tasks', [True, False])
+def test_force_rebuild_uses_a_fresh_directory_only_for_selected_mode(tmp_path, use_tasks):
+    (tmp_path / 'pyproject.toml').write_text('')
+    source = code_with('PROJ_ROOT = resolve_project_root()')
+    source = source.replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
+    source = source.replace('FORCE_REBUILD = False', 'FORCE_REBUILD = True')
+    directory = 'task_embeddings' if use_tasks else 'object_embeddings'
+    old = tmp_path / f'db/{directory}/qwen3-embedding-8b/catalog.sqlite3'
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b'previous index')
+    with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
+        app = {}
+        exec(compile(source, str(NOTEBOOK), 'exec'), app)
+    assert app['INDEX_DIR'].parent == old.parent.parent
+    assert app['INDEX_DIR'].name.startswith('qwen3-embedding-8b-')
+    assert app['CATALOG_PATH'] == app['INDEX_DIR'] / 'catalog.sqlite3'
+    assert not app['INDEX_DIR'].exists()
+    assert old.read_bytes() == b'previous index'
