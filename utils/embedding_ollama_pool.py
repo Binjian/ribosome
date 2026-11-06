@@ -56,6 +56,7 @@ class OllamaEmbeddingPool:
                 index = await self._slots.get()
                 self._requests[token] = (index, perf_counter())
                 self.metrics[index]['active'] += 1
+                kwargs.setdefault('truncate', False)
                 response = await self.servers[index].embed(model=model, input=input, **kwargs)
                 self.metrics[index]['completed'] += 1
                 self._outcomes['completed'] += 1
@@ -80,7 +81,7 @@ class OllamaEmbeddingPool:
                 self._slots.put_nowait(index)
             self._inflight -= 1
 
-    async def check_models(self, model):
+    async def check_models(self, model, *, expected_digest=None, require_digest=False):
         if self._closed:
             raise RuntimeError('Ollama embedding pool is closed; rerun preflight')
 
@@ -90,11 +91,30 @@ class OllamaEmbeddingPool:
                 capabilities = response.get('capabilities') if isinstance(response, dict) else getattr(response, 'capabilities', None)
                 if capabilities is not None and 'embedding' not in capabilities:
                     raise ValueError(f'Model {model!r} does not report embedding support: {capabilities}')
+                digest = response.get('digest') if isinstance(response, dict) else getattr(response, 'digest', None)
+                if digest is None and (require_digest or expected_digest):
+                    listing = await server.list()
+                    models = listing.get('models', []) if isinstance(listing, dict) else getattr(listing, 'models', [])
+                    for item in models:
+                        name = item.get('model', item.get('name')) if isinstance(item, dict) else (getattr(item, 'model', None) or getattr(item, 'name', None))
+                        if name in {model, model + ':latest'}:
+                            digest = item.get('digest') if isinstance(item, dict) else getattr(item, 'digest', None)
+                            break
+                if (require_digest or expected_digest) and not digest:
+                    raise ValueError('Resolved model digest unavailable')
+                if expected_digest and digest != expected_digest:
+                    raise ValueError('Resolved model digest does not match EncoderSpec')
+                return digest
 
         results = await asyncio.gather(*(check(server) for server in self.servers), return_exceptions=True)
         errors = [f'{host}: {result}' for host, result in zip(self.hosts, results) if isinstance(result, BaseException)]
         if errors:
             raise RuntimeError('Ollama embedding preflight failed: ' + '; '.join(errors))
+        known = {value for value in results if value}
+        if len(known) > 1 or (known and any(value is None for value in results)):
+            raise RuntimeError('Ollama embedding preflight failed: pooled model digests disagree or are unverified')
+        self.model_identity = dict(model=model, digest=next(iter(known)) if known else None,
+                                   verified=bool(known), hosts=list(self.hosts))
         return model
 
     def server_snapshots(self):

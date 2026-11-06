@@ -86,3 +86,5 @@ and then `build`; this recreates the appended sections, so publish recorded resu
 again afterward. The short load-analysis manual uses explicitly curated distinct
 tasks, recorded in its sampling manifest. `OBJECT_RAG_INDEX` and the existing
 Ollama environment settings control the index and services.
+
+Architecture migration, recovery, safe cleanup, explicit retrieval views, and the offline activation gate are documented in [notebook-architecture-operations.md](../docs/notebook-architecture-operations.md). Use `python -m utils.architecture_maintenance --help` and `python -m utils.architecture_evaluation --help` from the repository root. Neither tool invokes model services or automatically activates a vector index.

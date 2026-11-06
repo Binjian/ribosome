@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 
 import nbformat
+from evidence_factory import registered_result
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'utils'))
@@ -32,6 +33,7 @@ def experiment(tmp_path):
     evidence = dict(question=case['question'], category='test', hits=[hit],
                     context='[E1] manual | '+hit['record']['source_file']+' | lines 1-2 | row\nTOOL documented evidence',
                     coverage=dict(indexed=[hit['manual']], missing=[]), omissions=[])
+    evidence = registered_result(evidence)
     connection = sqlite3.connect(':memory:')
     connection.executescript('CREATE TABLE active_documents (document_id TEXT, generation_id TEXT);'
                              'CREATE TABLE settings (key TEXT, value TEXT);')

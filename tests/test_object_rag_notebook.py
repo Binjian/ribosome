@@ -3,6 +3,7 @@ import json
 import ast
 from pathlib import Path
 import nbformat
+from evidence_factory import registered_result
 
 NOTEBOOK = Path('nbs/05.application.rag.object.ipynb')
 
@@ -82,7 +83,7 @@ def test_content_summary_accompanies_supported_and_unsupported_answers(supported
                source_file='manual.md', attributes=dict(line_start=10, line_end=12)),
                manual=dict(profile='5.0', revision='C-1'))
     async def retrieve(*args, **kwargs):
-        app.last_result = dict(hits=[hit], context='[E1] Exact evidence')
+        app.last_result = registered_result(dict(hits=[hit]), text='Exact evidence')
         return app.last_result
     requests = []
     payload = example_payload(supported=supported)
@@ -110,7 +111,7 @@ def test_content_summary_accompanies_supported_and_unsupported_answers(supported
     system, user = request['messages']
     assert 'Selected category: general_operation' in user['content']
     assert 'Question: question' in user['content']
-    assert '[E1] Exact evidence' in user['content']
+    assert 'Exact evidence' in user['content']
     assert 'actual code statement' in system['content']
     assert 'follow-up' in system['content']
     assert request['format']['properties']['supported'] == {'type': 'boolean'}
@@ -141,7 +142,7 @@ def example_payload(supported=True):
         expected_result='result holds the copied value.',
         code='SET source, 5\nSET target, source\nSET result, target' if supported else '',
         instruction_statement='SET target, source' if supported else '',
-        language='text', manual='Synthetic C-1, corpus 5.0', citations=['E1'],
+        language='text', manual='manual, corpus 5.0, revision C-1', citations=['E1'],
     )
 
 
@@ -161,7 +162,7 @@ def test_contextual_example_validation_retries_and_rejects_incomplete_examples(i
     else:
         bad['citations'] = ['E999']
     async def retrieve(*args, **kwargs):
-        app.last_result = dict(hits=[], context='[E1] Synthetic manual evidence')
+        app.last_result = registered_result(dict(hits=[]), text='Synthetic manual evidence')
         return app.last_result
     class Generator:
         async def chat(self, **kwargs):

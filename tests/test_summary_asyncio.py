@@ -286,9 +286,10 @@ def test_batch_replaces_semantics_and_preserves_cached_ast(tmp_path, monkeypatch
     files = [tmp_path / 'one.md', tmp_path / 'two.md']
     original = json.dumps({'blocks': [{'t': 'Str', 'c': 'fresh'}, {'t': 'Space'}]}).encode()
     for file in files:
-        file.write_text('cached document', encoding='utf-8')
-        file.with_name(f'{file.stem}_ast.json').write_bytes(original)
-        file.with_name(f'{file.stem}_semantics.json').write_text('{"summary":"stale"}', encoding='utf-8')
+        file.write_text('fresh', encoding='utf-8')
+        cached = dom_model.DOMClass(file, db_client=chromadb.EphemeralClient(), ollama_model='offline')
+        cached._publish_artifact('ast', original.decode())
+        cached._publish_artifact('semantics', '{"summary":"stale"}')
     async def run():
         client = app.SummaryAsyncClient()
         try:

@@ -340,7 +340,7 @@ def test_originating_error_path_type_and_cause(monkeypatch, positional, exceptio
     async def boom(*args, **kwargs):
         raise exception('backend failure')
     monkeypatch.setattr(sut, 'get_summary_response_async', boom)
-    payload = {'t': 'Section', 'odd.key': {'t': 'Str', 'c': 'bad'}}
+    payload = {'t': 'Section', 'subnodes': {'t': 'Str', 'c': 'bad'}}
     async def scenario():
         if positional:
             return await sut.summarize_node_async(payload, Path('.'), object(), 'm', Path('doc.md'),
@@ -349,7 +349,7 @@ def test_originating_error_path_type_and_cause(monkeypatch, positional, exceptio
     with pytest.raises(ValueError) as caught:
         asyncio.run(scenario())
     assert 'Node type: Str' in str(caught.value)
-    assert 'At path: $.blocks[0]["odd.key"]' in str(caught.value)
+    assert 'At path: $.blocks[0].subnodes' in str(caught.value)
     assert isinstance(caught.value.__cause__, exception)
 
 
@@ -385,12 +385,14 @@ def test_callback_scope_replacements_and_boundaries(monkeypatch):
         return value
     result = asyncio.run(walk(node, action=action))
     assert result['subnodes']['c'] == 'changed'
-    assert visited.count('dict') == 4
-    assert visited.count('list') == 3
+    assert visited.count('dict') == 2
+    assert visited.count('list') == 2
     assert visited.count('bool') == 1
     assert visited.count('NoneType') == 1
-    assert visited.count('int') == 1
+    assert visited.count('int') == 0
     assert visited.count('str') == 1  # neither t nor generated s nor Cite content
+    assert result['scalar'] == 1 and result['image']['c'][2][0] == 'offline.png'
+    assert 's' not in result['image']  # metadata is outside semantic ownership
     with pytest.raises(ValueError, match='preserve node container category'):
         asyncio.run(walk([], action=lambda value: {}))
 
@@ -428,7 +430,7 @@ def test_mock_request_count_and_elapsed_time_are_separate_metrics(monkeypatch):
     start = perf_counter()
     result = asyncio.run(walk({'t': 'Section', 'c': [{'t': 'Str', 'c': 'text'}]}, leaf_min_len=1, min_len=1))
     elapsed = perf_counter() - start
-    # Baseline: Str scalar, Str synthesis, list synthesis, Section synthesis.
-    assert len(calls) == 4
+    # Shared semantic visitor requests only leaf and parent reductions.
+    assert len(calls) == 2
     assert result['s'] == 'summary'
-    assert elapsed >= 0  # no speedup claim; redundant-call changes are §7.4
+    assert elapsed >= 0  # Request reduction does not imply a latency benchmark.

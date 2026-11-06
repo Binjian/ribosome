@@ -85,7 +85,8 @@ def test_textualize_empty_blocks_writes_empty_summary_without_request(dom):
 
 
 def test_textualize_then_embed_doc_uses_new_semantics(dom, tmp_path):
-    collection = chromadb.EphemeralClient().get_or_create_collection('phase-four')
+    collection = chromadb.EphemeralClient().get_or_create_collection(
+        'phase-four', metadata={'hnsw:space': 'cosine'}, embedding_function=None)
     client = AsyncMock()
     client.embed.return_value = SimpleNamespace(embeddings=[[0.5, 1.0]], model='offline-model')
     object.__setattr__(dom, 'ollama_client', client)

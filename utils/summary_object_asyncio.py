@@ -7,17 +7,19 @@ import asyncio
 from contextlib import ExitStack, asynccontextmanager
 from contextvars import ContextVar
 import json
+import hashlib
+from copy import deepcopy
+from collections import defaultdict, deque
 import math
 import os
 import tempfile
 from pathlib import Path
 from queue import SimpleQueue, Empty
 from time import perf_counter
-from unittest.mock import patch
 
 from tqdm.auto import tqdm
 
-from utils.summary_asyncio import SummaryAsyncClient, SummaryCheckpoint, _document_id
+from utils.summary_asyncio import SummaryAsyncClient, SummaryCheckpoint, _document_id, _claim_summary_resources
 
 
 _batch_active = False
@@ -118,10 +120,51 @@ def _prepare_incremental_tree(file, tree, dom_summary, *, progress=None):
 
     if progress:
         progress('resume: parsing source objects', 0, 0, 'objects')
-    expected = {key(record): record for record in dom_summary.extract_markdown_objects(file)}
     roots = list(dom_summary._object_nodes(tree))
+    extracted = dom_summary.extract_markdown_objects(file)
+    def source_key(record):
+        return record['type'], record.get('line_start'), record.get('line_end'), record['content']
+    previous_by_source = {source_key(root['object']): root['object'] for root in roots}
+    for record in extracted:
+        previous = previous_by_source.get(source_key(record))
+        if previous is None:
+            continue
+        identities = defaultdict(deque)
+        def remember(value):
+            identities[source_key(value)].append(value['id'])
+            for child in value.get('children', []):
+                remember(child)
+        remember(previous)
+        aliases = {}
+        extracted_root_id = record['id']
+        def align(value):
+            old_id = value['id']
+            if identities.get(source_key(value)):
+                value['id'] = identities[source_key(value)].popleft()
+            elif str(old_id).startswith(str(extracted_root_id) + '.'):
+                value['id'] = str(previous['id']) + str(old_id)[len(str(extracted_root_id)):]
+            aliases[str(old_id)] = value['id']
+            for child in value.get('children', []):
+                align(child)
+        align(record)
+        def links(value):
+            if isinstance(value, dict):
+                for field in ('parent_id', 'list_id', 'table_id'):
+                    if str(value.get(field)) in aliases:
+                        value[field] = aliases[str(value[field])]
+                for child in value.values():
+                    links(child)
+            elif isinstance(value, list):
+                for child in value:
+                    links(child)
+        links(record)
+    expected = {key(record): record for record in extracted}
     if len(roots) != len(expected) or {key(node["object"]) for node in roots} != set(expected):
-        raise ValueError(f"Saved object locations do not match current Markdown: {file}")
+        _reconcile_discovery(file, tree, dom_summary)
+        work = [node for node in dom_summary._object_nodes(tree)
+                if not _complete_object(node['object'], dom_summary)]
+        audit = dom_summary.audit_completeness(tree, {'objects'})
+        return work, len(audit['missing']), True
     work, missing, changed = [], 0, False
     if progress:
         progress('resume: checking saved objects', 0, len(roots), 'objects')
@@ -159,6 +202,11 @@ def _prepare_incremental_tree(file, tree, dom_summary, *, progress=None):
             merged = {**record, **records.get(identity, {})}
             if "children" in record:
                 merged["children"] = [merge(child) for child in record["children"]]
+                previous = records.get(identity)
+                if (previous and has_summary(previous) and any(key(child) not in records for child in record['children']) and
+                        [child['id'] for child in previous.get('children', [])] !=
+                        [child['id'] for child in merged['children']]):
+                    merged['summary_coverage'] = 'historical'
             if not has_summary(merged):
                 root_missing += 1
             return merged
@@ -186,6 +234,118 @@ def _prepare_incremental_tree(file, tree, dom_summary, *, progress=None):
         if progress:
             progress('resume: checking saved objects', position, len(roots), 'objects')
     return work, missing, changed
+
+
+def _reconcile_discovery(file, tree, dom_summary):
+    """Adopt newly recognized source objects without ordinal summary reassignment.
+
+    This is restricted to a signature-compatible source. Source-shaped semantic
+    nodes are matched in occurrence order; every existing nonempty summary must
+    have a destination. Ambiguous/conflicting records fail before publication.
+    """
+    fresh = dom_summary.extract_markdown_object_tree(file)
+    summary_fields = ('s', 'summary_skipped', 'summary_ignored', 'summary_provenance')
+
+    def shape(value):
+        if isinstance(value, list):
+            result = []
+            for child in value:
+                if isinstance(child, dict) and 'object' in child:
+                    result.extend(shape(child.get('c', [None, []])[1]))
+                else:
+                    result.append(shape(child))
+            return result
+        if isinstance(value, dict):
+            return {key: shape(value[key]) for key in ('t', 'c', 'subnodes') if key in value
+                    and not (key == 'subnodes' and 'object' in value)}
+        return value
+
+    def fingerprint(node):
+        return json.dumps(shape(node), sort_keys=True, ensure_ascii=False)
+
+    def semantic_nodes(value, *, source=False):
+        if isinstance(value, list):
+            for child in value:
+                yield from semantic_nodes(child, source=source)
+        elif isinstance(value, dict):
+            if 'object' in value:
+                if source:
+                    yield from semantic_nodes(value.get('c', [None, []])[1], source=source)
+                return
+            if 't' in value:
+                yield value
+            for field in ('blocks', 'c', 'subnodes'):
+                yield from semantic_nodes(value.get(field, []), source=source)
+
+    saved_nodes = defaultdict(deque)
+    for node in semantic_nodes(tree):
+        if dom_summary._has_node_summary(node):
+            saved_nodes[fingerprint(node)].append(node)
+    for node in semantic_nodes(fresh, source=True):
+        matches = saved_nodes.get(fingerprint(node))
+        if matches:
+            previous = matches.popleft()
+            for field in summary_fields:
+                if field in previous:
+                    node[field] = deepcopy(previous[field])
+    unmatched = [node for nodes in saved_nodes.values() for node in nodes
+                 if isinstance(node.get('s'), str) and node['s'].strip()]
+    if unmatched:
+        raise ValueError(f'Cannot unambiguously preserve {len(unmatched)} saved semantic summaries for {file}')
+
+    def records(record):
+        yield record
+        for child in record.get('children', []):
+            yield from records(child)
+
+    def locator(record):
+        return (record['type'], record.get('line_start'), record.get('line_end'), record['content'])
+
+    saved = defaultdict(deque)
+    for wrapper in dom_summary._object_nodes(tree):
+        for record in records(wrapper['object']):
+            saved[locator(record)].append(record)
+    aliases = {}
+    for root_position, wrapper in enumerate(dom_summary._object_nodes(fresh)):
+        def merge(record, occurrence):
+            children = [merge(child, (*occurrence, position))
+                        for position, child in enumerate(record.get('children', []))]
+            matches = saved.get(locator(record))
+            old_id = record['id']
+            if matches:
+                previous = matches.popleft()
+                merged = {**record, **deepcopy(previous)}
+                aliases[str(old_id)] = previous['id']
+            else:
+                identity = hashlib.sha256(repr((locator(record), occurrence)).encode()).hexdigest()[:16]
+                merged = dict(record, id=f'source.{record["type"]}.{identity}')
+                aliases[str(old_id)] = merged['id']
+            if 'children' in record:
+                merged['children'] = children
+            return merged
+        wrapper['object'] = merge(wrapper['object'], (root_position,))
+        record = wrapper['object']
+        original = wrapper.get('c', [None, []])[1]
+        if (not dom_summary.object_utils._has_object_summary(record) and len(original) == 1
+                and isinstance(original[0], dict) and dom_summary._has_node_summary(original[0])):
+            record['summary'] = original[0]['s']
+            for field in ('summary_skipped', 'summary_ignored'):
+                if field in original[0]:
+                    record[field] = original[0][field]
+            record['coverage'] = 'coverage_unknown'
+        wrapper['s'] = record.get('summary', '')
+        wrapper['subnodes'] = dom_summary._row_summary_nodes(record)
+    if any(dom_summary.object_utils._has_object_summary(record)
+           for values in saved.values() for record in values):
+        raise ValueError(f'Cannot unambiguously preserve saved object occurrences for {file}')
+    for wrapper in dom_summary._object_nodes(fresh):
+        for record in records(wrapper['object']):
+            for field in ('parent_id', 'table_id', 'list_id'):
+                if str(record.get(field)) in aliases:
+                    record[field] = aliases[str(record[field])]
+    # Title, document summary and unknown annotations remain owned by the saved
+    # document. Only the reconciled semantic structure is adopted.
+    tree['blocks'] = fresh['blocks']
 
 
 def _sync_object_summaries(node):
@@ -259,7 +419,7 @@ def _load_partial(file, checkpoint, *, progress=None):
     def compatible(config):
         config = dict(config)
         config.pop('host', None)
-        config['settings'] = {k: v for k, v in config.get('settings', {}).items()
+        config['settings'] = {k: v for k, v in {'input_token_budget': 8192, **config.get('settings', {})}.items()
                               if k != 'object_schema_version'}
         return config
     if (compatible(saved['config']) == compatible(checkpoint.config)
@@ -272,6 +432,7 @@ async def summarize_object_documents(
     files, client, model, *, corpus="", concurrency=4, progress_interval=0.25,
     checkpoint_path=None, resume=True, checkpoint_host=None, lang="zh",
     leaf_min_len=100, min_len=None, progress_factory=tqdm, completed_callback=None,
+    input_token_budget=8192, partial_snapshot_interval=1.0, artifact_repository=None,
 ):
     """Summarize Markdown directly into atomic, recursively structured outputs.
 
@@ -294,29 +455,34 @@ async def summarize_object_documents(
     if isinstance(progress_interval, bool) or not isinstance(progress_interval, (int, float)) \
             or not math.isfinite(progress_interval) or progress_interval <= 0:
         raise ValueError("progress_interval must be finite and positive")
-    global _batch_active
-    if _batch_active:
-        raise RuntimeError("An object summarization batch is already running; await it before starting another")
+    dom_summary._positive_setting(input_token_budget, 'input_token_budget')
+    if not isinstance(partial_snapshot_interval, (int, float)) or partial_snapshot_interval < 0:
+        raise ValueError('partial_snapshot_interval must be nonnegative')
     files = [Path(file).resolve() for file in files]
     if not files:
         return []
+    if checkpoint_path is None and artifact_repository is not None:
+        checkpoint_path = Path(artifact_repository.root) / 'summary-checkpoints.json'
     document_progress = ContextVar("object_document_progress", default=None)
     extract_tree = dom_summary.extract_markdown_object_tree
-    summarize_object = dom_summary._summarize_markdown_object_async
-    get_semaphore = dom_summary._get_summary_semaphore
-    record_progress = dom_summary._record_summary_progress
+    get_semaphore = dom_summary._default_summary_semaphore
+    record_progress = dom_summary._default_record_summary_progress
     active = {}
     checkpoint = None
     image_token = None
-    _batch_active = True
+    runtime_token = None
+    resources = _claim_summary_resources(files, checkpoint_path)
+    resources.__enter__()
     try:
         snapshot = await dom_summary._prepare_ignored_images()
         image_token = dom_summary._ignored_images.set(snapshot)
         checkpoint = (SummaryCheckpoint(
             checkpoint_path, model, checkpoint_host, resume, ignore_host=True,
             ignore_settings=("object_schema_version",),
+            settings_defaults={'input_token_budget': 8192}, artifact_repository=artifact_repository,
             settings={"summarizer": "object", "object_schema_version": 5, "lang": lang,
                       "leaf_min_len": leaf_min_len, "min_len": min_len,
+                      "input_token_budget": input_token_budget,
                       "ignored_images_signature": snapshot.signature,
                       "generation": ({"think": client.think, "max_tokens": client.max_tokens}
                                      if isinstance(client, SummaryAsyncClient) else None)},
@@ -454,12 +620,16 @@ async def summarize_object_documents(
                 else:
                     record_progress(node_type, path, file_path, table_count, section_count)
 
-            async def summarize_with_progress(*args, **kwargs):
+            async def summarize_with_progress(implementation, *args, **kwargs):
                 state = document_progress.get()
                 reused = False
                 if state is not None:
                     obj = args[0] if args else kwargs['obj']
                     identity = str(obj['id'])
+                    if (state.get('incremental') and identity not in state['known_ids']
+                            and _complete_object(obj, dom_summary)):
+                        await asyncio.sleep(0)
+                        return obj
                     # Nested cell/list/image calls are discovered during traversal.
                     # Reserve their work before awaiting, so n never exceeds total.
                     if identity not in state['known_ids']:
@@ -476,14 +646,18 @@ async def summarize_object_documents(
                     state['reused_checked'] = state.get('reused_checked', 0) + 1
                     state['phase'] = f"reusing saved objects: {state['reused_checked']} checked"
                 else:
-                    result = await summarize_object(*args, **kwargs)
+                    result = await implementation(*args, **kwargs)
                 if state is not None:
                     if identity not in state['done_ids']:
                         state['done_ids'].add(identity)
                         state["done"] += 1
                         totals["done_objects"] += 1
                     if not reused and checkpoint is not None and state.get('tree') is not None:
-                        _save_partial(Path(state['name']), checkpoint, state['tree'])
+                        if perf_counter() - state.get('last_snapshot', 0) >= partial_snapshot_interval:
+                            snapshot_start = perf_counter()
+                            _save_partial(Path(state['name']), checkpoint, state['tree'])
+                            state['last_snapshot'] = perf_counter()
+                            state['snapshot_seconds'] = state.get('snapshot_seconds', 0) + perf_counter() - snapshot_start
                     if not reused and state["done"] == state["total"]:
                         state["phase"] = "objects done; prose/parents pending"
                     # Reused summaries may complete without any provider awaits.
@@ -512,6 +686,9 @@ async def summarize_object_documents(
                     render()
 
                 try:
+                    input_signature = SummaryCheckpoint.signature(file)
+                    input_assets = SummaryCheckpoint.asset_fingerprints(file)
+                    historical_assets = False
                     if (checkpoint is not None and resume and saved_rows[index] is None
                             and _partial_path(file).is_file()):
                         resume_progress('resume: locating partial progress', 0, 0, 'objects')
@@ -527,9 +704,16 @@ async def summarize_object_documents(
                     if saved_rows[index] is not None:
                         state["phase"] = "checking saved summaries"
                         tree = json.loads(output.read_text(encoding="utf-8"))
+                        historical_assets = (tree.get('_source_provenance', {}).get('asset_provenance') == 'historical_unknown'
+                            or '_source_provenance' not in tree
+                            or checkpoint.entries.get(str(file.resolve()), {}).get('asset_provenance') == 'historical_unknown')
                         work, missing, changed = _prepare_incremental_tree(file, tree, dom_summary)
-                        state['sections_total'] = state['sections_done'] = _section_count(tree)
-                        if not work and not changed:
+                        changed = changed or '_source_provenance' not in tree
+                        audit = dom_summary.audit_completeness(tree)
+                        missing = len(audit['missing'])
+                        state['sections_total'] = _section_count(tree)
+                        if not work and not changed and audit['complete']:
+                            state['sections_done'] = state['sections_total']
                             results[index] = dict(saved_rows[index], corpus=str(corpus),
                                                   incremental=False, filled_summaries=0)
                             resumed_count += 1
@@ -537,18 +721,20 @@ async def summarize_object_documents(
                             totals["status"] = "resumed"
                             return
                         row["incremental"] = True
+                        state['incremental'] = True
                         state['known_ids'] = {str(node['object']['id']) for node in work}
                         state["total"] = len(state['known_ids'])
                         totals["objects"] += state["total"]
                         state["phase"] = "filling missing summaries"
 
-                        async def fill_object(position, node):
-                            await summarize_with_progress(
-                                node["object"], client, model, lang,
-                                require_summary=True, reuse_existing=True)
-                            _sync_object_summaries(node)
-
-                        await dom_summary._ordered_summary_map(fill_object, work)
+                        # The saved tree is the authority: traversing it with reuse
+                        # enabled repairs prose/section/document gaps as well as
+                        # object descendants without requesting saved summaries.
+                        state['tree'] = tree
+                        tree = await dom_summary.summarize_markdown_object_tree_async(
+                            file, client, model, lang=lang, show_progress=False,
+                            leaf_min_len=leaf_min_len, min_len=min_len,
+                            reuse_existing=True, saved_tree=tree)
                         state["phase"] = "missing summaries filled; publishing"
                     else:
                         tree = await dom_summary.summarize_markdown_object_tree_async(
@@ -560,14 +746,39 @@ async def summarize_object_documents(
                     summary = tree.get("summary")
                     if not (isinstance(summary, str) and (summary.strip() or (tree.get("summary_skipped") is True and summary == ""))):
                         raise ValueError("Summarization returned no document summary")
-                    dom_summary._write_semantics_tree(output, tree)
+                    final_audit = dom_summary.audit_completeness(tree)
+                    if not final_audit['complete']:
+                        raise ValueError(f"Incomplete summary publication: {len(final_audit['missing'])} missing summaries")
+                    if (SummaryCheckpoint.signature(file) != input_signature
+                            or SummaryCheckpoint.asset_fingerprints(file) != input_assets):
+                        raise ValueError('Source or artifacts changed during summarization; retry against a stable input revision')
+                    tree['_source_provenance'] = dict(
+                        source_sha256=input_signature[str(file.resolve())], source_uri=str(file.resolve()),
+                        assets=input_assets, asset_provenance='historical_unknown' if historical_assets else 'observed')
+                    if artifact_repository is not None:
+                        from ribosome.core.document import source_revision, adapt_semantics
+                        document = artifact_repository.adopt_document(str(file))
+                        revision = source_revision(document.id, str(file), file.read_bytes(),
+                                                   assets=SummaryCheckpoint.asset_fingerprints(file))
+                        graph = adapt_semantics(tree, document, revision)
+                        publication = artifact_repository.prepare(graph, completeness=final_audit)
+                        row['canonical_generation'] = publication.generation
+                        row['canonical_repository'] = str(Path(artifact_repository.root).resolve())
                     row["status"] = "completed"
                     if row["incremental"]:
                         row["filled_summaries"] = missing
+                    row.update(elapsed_seconds=round(perf_counter() - started, 3),
+                               object_count=state['total'], completed_objects=state['done'],
+                               section_count=state['sections_total'], completed_sections=state['sections_done'])
+                    if checkpoint is not None:
+                        checkpoint.publish(file, tree, row, dom_summary._write_semantics_tree)
+                    else:
+                        dom_summary._write_semantics_tree(output, tree)
                 except asyncio.CancelledError:
                     progress_factory.write(f"Cancelled while processing: {file}")
                     raise
                 except Exception as exc:
+                    row['status'] = 'failed'
                     row["error"] = f"{type(exc).__name__}: {exc}"
                     progress_factory.write(f"FAILED {file}: {row['error']}")
                 finally:
@@ -583,13 +794,14 @@ async def summarize_object_documents(
                     totals["done_objects"] -= state["done"]
                 row.update(elapsed_seconds=round(perf_counter() - started, 3),
                            object_count=state["total"], completed_objects=state["done"],
-                           section_count=state["sections_total"], completed_sections=state["sections_done"])
+                           section_count=state["sections_total"], completed_sections=state["sections_done"],
+                           snapshot_seconds=state.get('snapshot_seconds', 0))
                 durations.append(row["elapsed_seconds"])
                 if isinstance(client, SummaryAsyncClient):
                     row.update(client.metrics.snapshot(document=str(file)))
                 # A failed upgrade must retain the reusable completed entry;
                 # otherwise its next rerun would regenerate the whole document.
-                if checkpoint and (saved_rows[index] is None or row["status"] == "completed"):
+                if checkpoint and 'publication_generation' not in row and (saved_rows[index] is None or row["status"] == "completed"):
                     checkpoint.record(file, row)
                 if checkpoint is not None and row['status'] == 'completed':
                     _partial_path(file).unlink(missing_ok=True)
@@ -603,12 +815,13 @@ async def summarize_object_documents(
                 for index, file in pending:
                     await process_document(index, file, slot)
 
-            # Scope the instrumentation to this batch, just as the natural-text
-            # runner does. Context variables keep concurrent documents separate.
-            with patch.object(dom_summary, "extract_markdown_object_tree", extract_with_progress), \
-                 patch.object(dom_summary, "_summarize_markdown_object_async", summarize_with_progress), \
-                 patch.object(dom_summary, "_get_summary_semaphore", semaphore_with_progress), \
-                 patch.object(dom_summary, "_record_summary_progress", record_with_progress):
+            # Explicit context-local services allow independent batches to run
+            # concurrently without patching functions or global batch guards.
+            runtime_token = dom_summary._summary_runtime.set(dom_summary.SummaryRuntime(
+                tree_factory=extract_with_progress, object_wrapper=summarize_with_progress,
+                semaphore_factory=semaphore_with_progress, progress_callback=record_with_progress,
+                input_token_budget=input_token_budget))
+            if runtime_token is not None:
                 tasks = []
                 display_task = asyncio.create_task(renderer())
                 try:
@@ -626,7 +839,17 @@ async def summarize_object_documents(
     finally:
         if image_token is not None:
             dom_summary._ignored_images.reset(image_token)
-        _batch_active = False
-        if checkpoint:
-            checkpoint.save()
+        if runtime_token is not None:
+            dom_summary._summary_runtime.reset(runtime_token)
+        try:
+            if checkpoint:
+                try:
+                    checkpoint.save()
+                except OSError as exc:
+                    if any(row and row.get('publication_pending') for row in results):
+                        progress_factory.write(f'Committed summaries need checkpoint projection retry: {exc}')
+                    else:
+                        raise
+        finally:
+            resources.__exit__(None, None, None)
     return results
