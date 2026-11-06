@@ -108,6 +108,7 @@ def test_batch_preserves_originals_and_checkpoints_and_skips_equal_outputs(tmp_p
     assert [row['status'] for row in rows] == ['written', 'written']
     assert [row['converted_tables'] for row in rows] == [1, 0]
     assert [row['task_count'] for row in rows] == [1, 0]
+    assert [row['task_identification_reasons'] for row in rows] == ['section_title', '']
     assert all(row['elapsed_seconds'] >= 0 for row in rows)
     outputs = [Path(row['output']) for row in rows]
     assert outputs == [tmp_path / 'a_tasks.json', tmp_path / 'nested/b_tasks.json']
@@ -118,6 +119,7 @@ def test_batch_preserves_originals_and_checkpoints_and_skips_equal_outputs(tmp_p
     prior_outputs = {file: (file.read_bytes(), file.stat().st_mtime_ns) for file in outputs}
     repeated = namespace['classify_task_files'](corpora, progress=False)
     assert [row['status'] for row in repeated] == ['unchanged', 'unchanged']
+    assert [row['task_identification_reasons'] for row in repeated] == ['section_title', '']
     assert {file: (file.read_bytes(), file.stat().st_mtime_ns) for file in outputs} == prior_outputs
     assert {file: file.read_bytes() for file in original} == original
     # Changed source summaries and classifications must replace the derived output.
@@ -207,10 +209,28 @@ def test_interrupted_batch_retains_completed_reports(tmp_path, monkeypatch):
 
 def test_preview_runs_against_only_temporary_outputs(tmp_path):
     namespace = helpers()
-    semantics(tmp_path, 'a', document(section('模板作业', [wrapper(table())])))
+    semantics(tmp_path, 'a', document(
+        section('模板作业', [wrapper(table(1))]),
+        wrapper(table(2, content='| 作业 | 说明 |\n| --- | --- |\n| NOP | 开始 |\n')),
+        wrapper(table(3, caption='子作业参数表')),
+    ))
+    semantics(tmp_path, 'b')
     namespace['results'] = namespace['classify_task_files'](
         namespace['discover_semantics'](tmp_path), progress=False)
+    # Existing saved reports predate the reasons column. Enrich them from the
+    # saved task files, including tasks beyond the bounded per-task preview.
+    for row in namespace['results']:
+        del row['task_identification_reasons']
+    before = {file: file.read_bytes() for file in tmp_path.rglob('*.json')}
     namespace.update(PREVIEW_OUTPUTS=1, PREVIEW_TASKS=1)
     exec(compile(code_with('results_df ='), str(APPLICATION_NOTEBOOK), 'exec'), namespace)
+    frame = namespace['results_df']
+    assert list(frame.columns[-2:]) == ['task_count', 'task_identification_reasons']
+    assert frame['task_count'].tolist() == [3, 0]
+    assert frame['task_identification_reasons'].tolist() == [
+        'section_title, header_row, preceding_title', '',
+    ]
+    assert all('task_identification_reasons' not in row for row in namespace['results'])
+    assert {file: file.read_bytes() for file in before} == before
     assert len(namespace['preview']) == 1
     assert namespace['preview'].iloc[0]['reasons'] == 'section_title'
