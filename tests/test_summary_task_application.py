@@ -131,6 +131,22 @@ def test_batch_preserves_originals_and_checkpoints_and_skips_equal_outputs(tmp_p
     assert json.loads(outputs[0].read_text())['summary'] == 'Updated document'
 
 
+def test_rerun_replaces_previous_substring_matches_from_original_semantics(tmp_path):
+    namespace = helpers()
+    tree = document(wrapper(table(content='| 作业内容 | 说明 |\n| --- | --- |\n| NOP | 开始 |\n')))
+    source = semantics(tmp_path, 'manual', tree)
+    previous = json.loads(json.dumps(tree))
+    previous['blocks'][0]['object']['type'] = 'task'
+    output = tmp_path / 'manual_tasks.json'
+    output.write_text(json.dumps(previous), encoding='utf-8')
+    original = source.read_bytes()
+    row, = namespace['classify_task_files']([(tmp_path, [source])], progress=False)
+    assert row['status'] == 'written'
+    assert row['task_count'] == 0 and row['task_identification_reasons'] == ''
+    assert json.loads(output.read_text()) == tree
+    assert source.read_bytes() == original
+
+
 @pytest.mark.parametrize('invalid', ['{bad json', '[]', '{}', '{"blocks": null}'])
 def test_malformed_input_preserves_previous_task_output_and_other_files_continue(tmp_path, invalid):
     namespace = helpers()

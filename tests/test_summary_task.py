@@ -76,8 +76,9 @@ def test_section_terms_include_nested_subsections_without_leaking_to_siblings(te
 
 @pytest.mark.parametrize('source', [
     '<table><tr><td>作业</td><td>说明</td></tr><tr><td>NOP</td><td>开始</td></tr></table>',
-    '<table><thead><tr><th>说明</th><th><strong>机器人作&#19994;名</strong></th></tr></thead></table>',
-    '| 说明 | **机器人作业名** |\n| --- | --- |\n| 开始 | NOP |\n',
+    '<table><thead><tr><th>说明</th><th><strong>作&#19994;</strong></th></tr></thead></table>',
+    '| 说明 | **作业** |\n| --- | --- |\n| 开始 | NOP |\n',
+    '<table><tr><td> \t<strong>作业</strong>\t </td><td>说明</td></tr></table>',
     '<table><tr><td rowspan="2">作业</td><td>说明</td></tr><tr><td>开始</td></tr></table>',
 ])
 @pytest.mark.parametrize('metadata', [False, True])
@@ -91,11 +92,46 @@ def test_first_row_header_with_and_without_saved_rows(source, metadata):
     assert ('children' in actual['blocks'][0]['object']) == metadata
 
 
+@pytest.mark.parametrize('cell_text,matches', [
+    ('作业', True),
+    (' \t作业\t ', True),
+    ('作业名', False),
+    ('作业内容', False),
+    ('机器人作业名', False),
+    ('要在安全区域内进行作业', False),
+    ('作业：', False),
+    ('作 业', False),
+    ('作\t业', False),
+    ('作业\n说明', False),
+])
+def test_header_matches_whole_cell_after_trimming_spaces_and_tabs(cell_text, matches):
+    obj = table(content=f'<table><tr><td>{cell_text}</td><td>说明</td></tr></table>')
+    # Preserve the saved visible text verbatim so normalization by the HTML row
+    # parser cannot mask missing whitespace handling in the classification rule.
+    obj['children'][0]['cells'][0]['text'] = cell_text
+    assert task_match_reasons(obj) == (('header_row',) if matches else ())
+    if not matches:
+        assert task_match_reasons(obj, section_titles=('作业示例',)) == ('section_title',)
+        assert task_match_reasons(obj, preceding_title='子作业参数表') == ('preceding_title',)
+
+
+@pytest.mark.parametrize('metadata', [False, True])
+@pytest.mark.parametrize('source', [
+    '<table><tr><td>作业内容</td><td>说明</td></tr></table>',
+    '| 说明 | **机器人作业名** |\n| --- | --- |\n| 开始 | NOP |\n',
+    '<table><tr><td rowspan="2">作业名</td><td>说明</td></tr><tr><td>开始</td></tr></table>',
+])
+def test_longer_header_labels_do_not_create_tasks(source, metadata):
+    tree = document(wrapper(table(content=source, metadata=metadata)))
+    assert task_object_records(tree) == []
+    assert classify_task_objects(tree) == tree
+
+
 @pytest.mark.parametrize('source', [
     '<table><thead><tr><th>编号</th><th>说明</th></tr>'
-    '<tr><th>1</th><th>作业错误</th></tr></thead></table>',
-    '<table><tr><td rowspan="2">编号</td><td>说明</td></tr><tr><td>作业错误</td></tr></table>',
-    '| 编号 | 说明 |\n| --- | --- |\n| 1 | 作业错误 |\n',
+    '<tr><th>1</th><th>作业</th></tr></thead></table>',
+    '<table><tr><td rowspan="2">编号</td><td>说明</td></tr><tr><td>作业</td></tr></table>',
+    '| 编号 | 说明 |\n| --- | --- |\n| 1 | 作业 |\n',
 ])
 def test_body_occurrences_are_not_headers(source):
     obj = table(content=source)
@@ -106,7 +142,7 @@ def test_body_occurrences_are_not_headers(source):
 
 @pytest.mark.parametrize('first,second,expected', [
     ('作业', 'NOP', ('header_row',)),
-    ('编号', '作业错误', ()),
+    ('编号', '作业', ()),
 ])
 def test_incomplete_saved_rows_fall_back_to_original_first_row(first, second, expected):
     obj = table(content=f'<table><tr><td>{first}</td></tr><tr><td>{second}</td></tr></table>')
