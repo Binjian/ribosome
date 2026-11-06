@@ -6,6 +6,7 @@ import re
 import sys
 
 import nbformat
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'utils'))
 from object_rag_category_questions import (
@@ -16,15 +17,30 @@ from object_rag_category_questions import (
 def banks(notebook):
     ns = {}
     for cell in notebook.cells:
-        if (cell.id.endswith('prompt-bank') or cell.id == 'sampled-banks-start'
-                or cell.id.startswith('sampled-') and cell.id.endswith('-bank')):
+        # Notebook cleanup can renumber cell IDs. Execute only bank definitions,
+        # never the service setup or evaluation cells that make model requests.
+        if cell.cell_type == 'code' and re.search(
+                r'^(?:GENERAL_OPERATION_CASES|ARC_WELDING_CASES|SAMPLED_CASES|[A-Z_]+_SAMPLE_CASES)\s*=',
+                cell.source, flags=re.MULTILINE):
             exec(cell.source, ns)
     return ns['GENERAL_OPERATION_CASES'] + ns['ARC_WELDING_CASES'] + ns['SAMPLED_CASES']
 
 
-def test_all_questions_are_rewritten_and_references_preserved():
+def code_with(notebook, marker):
+    sources = [cell.source for cell in notebook.cells
+               if cell.cell_type == 'code' and marker in cell.source]
+    assert len(sources) == 1, f'Expected one code cell containing {marker!r}'
+    return sources[0]
+
+
+@pytest.mark.parametrize('renumber_ids', [False, True])
+def test_all_questions_are_rewritten_and_references_preserved(renumber_ids):
     baseline = nbformat.read('nbs/06.test.rag.object.question_with_location.ipynb', 4)
     variant = nbformat.read('nbs/06.test.rag.object.question_with_category.ipynb', 4)
+    if renumber_ids:
+        for notebook in (baseline, variant):
+            for index, cell in enumerate(notebook.cells):
+                cell.id = str(index)
     nbformat.validate(variant)
     originals, cases = banks(baseline), banks(variant)
     assert len(cases) == len({c['id'] for c in cases}) == 828
@@ -39,9 +55,9 @@ def test_all_questions_are_rewritten_and_references_preserved():
             compile(cell.source, str(Path('category_questions.ipynb')), 'exec',
                     flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
     assert 'object_rag_evaluation' not in variant.metadata
-    services = next(c.source for c in variant.cells if c.id == 'evaluation-services')
+    services = code_with(variant, 'evaluation = EvaluationRun(')
     assert 'CategoryPromptGenerator(generation_client)' in services
-    imports = next(c.source for c in variant.cells if c.id == 'evaluation-imports')
+    imports = code_with(variant, 'def select_cases(')
     assert 'CategoryEvaluationRun as EvaluationRun' in imports
     assert 'db/object_rag_tests/question_with_category/results' in services
     assert 'category_system_prompt=CATEGORY_SYSTEM_PROMPT' in services

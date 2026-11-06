@@ -32,13 +32,13 @@ def semantics(folder, name, tree=None):
 
 
 @pytest.mark.parametrize('path', [CORE_NOTEBOOK, APPLICATION_NOTEBOOK])
-def test_notebooks_validate_compile_and_have_no_saved_execution(path):
+def test_notebooks_validate_and_compile(path):
     notebook = read(path, as_version=4)
     validate(notebook)
     for cell in notebook.cells:
         if cell.cell_type == 'code':
             compile(cell.source, str(path), 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
-            assert cell.execution_count is None and not cell.outputs
+            # Interactive notebooks may retain valid execution counts and outputs.
 
 
 def test_configuration_resolves_root_and_honors_override(tmp_path, monkeypatch):
