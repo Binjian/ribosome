@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ollama import AsyncClient
 from run_object_rag_evaluation import ROOT, namespace
-from ribosome.ollama_config import OLLAMA_RAG_HOST
+from ribosome.ollama_config import OLLAMA_RAG_HOST, OLLAMA_TRUST_ENV
 from object_rag_evaluation import atomic_json, digest, read_json, review_input
 
 PROMPT = '''Review this robot-manual RAG answer against the question, exact source
@@ -108,7 +108,7 @@ async def review_all(host, concurrency, watch, *, context=32768, timeout=120, al
     review_dir = directory/'reviews'/review_id[:16]
     atomic_json(directory/'review-latest.json', dict(review_id=review_id, directory=str(review_dir), settings=settings))
     headers = {'Authorization': 'Bearer '+os.environ['OLLAMA_API_KEY']} if os.getenv('OLLAMA_API_KEY') else {}
-    client = AsyncClient(host=host, headers=headers, timeout=timeout)
+    client = AsyncClient(host=host, headers=headers, timeout=timeout, trust_env=OLLAMA_TRUST_ENV)
     semaphore = asyncio.Semaphore(concurrency)
     done = {}
 

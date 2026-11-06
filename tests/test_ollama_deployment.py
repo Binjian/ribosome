@@ -82,6 +82,7 @@ def test_rag_service_constructs_clients_on_the_selected_servers(tmp_path, monkey
     ns['ObjectRAG'] = app
     exec(nb.cells[4].source, ns)
     assert [c.host for c in clients] == [OLLAMA_EMBED_HOST, OLLAMA_RAG_HOST]
+    assert all(c.trust_env is False for c in clients)
     args, kwargs = setups[0]
     assert args == (directory, collection, *clients)
     assert kwargs['embedding_config'] == dict(provider='ollama-pool', hosts=[OLLAMA_EMBED_HOST])
@@ -101,7 +102,7 @@ def test_default_object_embedding_provider_uses_embedding_host(tmp_path, monkeyp
         'deployment-default', metadata={'hnsw:space': 'cosine'}, embedding_function=None)
     try:
         with ObjectEmbeddingIndex(tmp_path / 'catalog.sqlite3', collection=collection) as index:
-            assert clients == [dict(host=OLLAMA_EMBED_HOST)]
+            assert clients == [dict(host=OLLAMA_EMBED_HOST, trust_env=False)]
             assert index.embedding_config == dict(provider='ollama-pool', hosts=[OLLAMA_EMBED_HOST])
     finally:
         chroma.delete_collection(collection.name)
@@ -115,5 +116,6 @@ def test_legacy_dom_has_dedicated_embedding_client_and_retains_summary_client(tm
     try:
         assert dom.ollama_client is summary
         assert str(dom.embedding_client._client.base_url).rstrip('/') == OLLAMA_EMBED_HOST
+        assert dom.embedding_client._client.trust_env is False
     finally:
         asyncio.run(dom.embedding_client.close())

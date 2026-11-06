@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from ollama import AsyncClient
+from ribosome.ollama_config import OLLAMA_TRUST_ENV
 
 HEALTH_CHECK_TEXT = 'Ribosome embedding health check.'
 logger = logging.getLogger(__name__)
@@ -55,7 +56,8 @@ class OllamaEmbeddingPool:
         self.quarantine_seconds = quarantine_seconds
         self.health_timeout = health_timeout
         self.retry_backoff = retry_backoff
-        self.servers = [AsyncClient(host=host, headers=headers, timeout=request_timeout) for host in hosts]
+        self.servers = [AsyncClient(host=host, headers=headers, timeout=request_timeout,
+                                    trust_env=OLLAMA_TRUST_ENV) for host in hosts]
         self._available = [concurrency_per_server] * len(hosts)
         self._healthy = [True] * len(hosts)
         self._quarantined_until = [0.0] * len(hosts)
@@ -122,12 +124,14 @@ class OllamaEmbeddingPool:
     async def _probe_server(self, index, model):
         self._health_inflight += 1
         self.metrics[index]['health_checks'] += 1
+        phase = 'model metadata'
         try:
             async with asyncio.timeout(self.health_timeout):
                 response = await self.servers[index].show(model)
                 capabilities = response.get('capabilities') if isinstance(response, dict) else getattr(response, 'capabilities', None)
                 if capabilities is not None and 'embedding' not in capabilities:
                     raise ValueError(f'Model {model!r} does not report embedding support: {capabilities}')
+                phase = 'synthetic embedding'
                 response = await self.servers[index].embed(model=model, input=HEALTH_CHECK_TEXT)
                 vectors = response.get('embeddings', response.get('embedding')) if isinstance(response, dict) else getattr(response, 'embeddings', None)
                 if vectors is None:
@@ -135,9 +139,10 @@ class OllamaEmbeddingPool:
                 vector = vectors[0] if vectors and isinstance(vectors[0], (list, tuple)) else vectors
                 if not vector or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vector) or not any(vector):
                     raise ValueError('Health check returned no usable embedding vector')
-        except TimeoutError as exc:
+        except (TimeoutError, httpx.TimeoutException) as exc:
             self.metrics[index]['health_failures'] += 1
-            raise TimeoutError(f'Ollama embedding health check timeout at {self.hosts[index]} after {self.health_timeout:g}s') from exc
+            raise TimeoutError(f'Ollama embedding health check timeout at {self.hosts[index]} during {phase} '
+                               f'(health deadline {self.health_timeout:g}s; request timeout {self.request_timeout:g}s)') from exc
         except Exception:
             self.metrics[index]['health_failures'] += 1
             raise

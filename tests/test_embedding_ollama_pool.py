@@ -21,6 +21,60 @@ def host(client):
     return str(client._client.base_url).rstrip('/')
 
 
+def test_preflight_and_document_requests_bypass_environment_proxies(monkeypatch):
+    requests = []
+    for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']:
+        monkeypatch.setenv(key, 'http://proxy.invalid:8080')
+    for key in ['NO_PROXY', 'no_proxy']:
+        monkeypatch.setenv(key, '')
+    def transport(*, proxy=None, **kwargs):
+        async def handle(request):
+            if proxy is not None:
+                raise httpx.ConnectError('Environment proxy must not receive private-server requests')
+            assert request.headers['authorization'] == 'Bearer offline-secret'
+            requests.append(request)
+            if request.url.path == '/api/show':
+                return httpx.Response(200, json={'capabilities': ['embedding'], 'model_info': {}})
+            assert request.url.path == '/api/embed'
+            return httpx.Response(200, json={'embeddings': [[1.0, 2.0]], 'model': MODEL})
+        return httpx.MockTransport(handle)
+    monkeypatch.setattr('httpx._client.AsyncHTTPTransport', transport)
+    async def scenario():
+        server = 'http://172.27.74.49:11434'
+        pool = OllamaEmbeddingPool(hosts=[server], headers={'Authorization': 'Bearer offline-secret'})
+        try:
+            assert await pool.check_models(MODEL) == MODEL
+            assert (await pool.embed(model=MODEL, input='document'))['embeddings'] == [[1.0, 2.0]]
+            assert [request.url.path for request in requests] == ['/api/show', '/api/embed', '/api/embed']
+            assert all(str(request.url).startswith(server + '/') for request in requests)
+            assert pool.hosts == [server]
+            assert pool.status_snapshot()['retries'] == 0
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('stalled_phase', ['model metadata', 'synthetic embedding'])
+def test_health_timeout_identifies_the_stalled_phase(monkeypatch, stalled_phase):
+    async def show(self, model):
+        if stalled_phase == 'model metadata':
+            await asyncio.Future()
+        return {'capabilities': ['embedding']}
+    async def embed(self, **kwargs):
+        await asyncio.Future()
+    monkeypatch.setattr(AsyncClient, 'show', show)
+    monkeypatch.setattr(AsyncClient, 'embed', embed)
+    async def scenario():
+        pool = OllamaEmbeddingPool(hosts=[HOSTS[0]], health_timeout=0.01)
+        try:
+            with pytest.raises(RuntimeError, match=f'during {stalled_phase}'):
+                await pool.check_models(MODEL)
+            assert pool.server_snapshots()[0]['health_failures'] == 1
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
 def test_two_hosts_are_used_concurrently_with_capacity_limits(monkeypatch):
     async def scenario():
         release, full = asyncio.Event(), asyncio.Event()

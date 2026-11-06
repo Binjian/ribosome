@@ -32,10 +32,14 @@ collection, and `qwen3-embedding:8b`. Repository deployment endpoints are shared
 in `ribosome/ollama_config.py`: embeddings use only `http://172.27.74.49:11434`;
 RAG answers and evaluation judging use only `http://172.27.74.16:11434`.
 Legacy host environment variables cannot override the applications' split.
+Embedding, generation and judge clients connect directly with `trust_env=False`,
+bypassing environment HTTP proxies for these private servers. Other tools
+retain their existing proxy environment.
 Summary routing and checkpoint compatibility remain configured separately.
 
 The async `OllamaEmbeddingPool` checks model metadata and a synthetic embedding
-before indexing. Transient failures get two retries with exponential backoff;
+before indexing. Health timeout errors identify the stalled metadata or
+synthetic-embedding phase. Transient failures get two retries with exponential backoff;
 a failed host is quarantined for 30 seconds and must pass a single recovery probe
 before its capacity reopens. The 300-second inference deadline starts after a local
 slot is available. The panel shows health, retries, probes, queued work, request
