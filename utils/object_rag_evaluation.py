@@ -406,6 +406,14 @@ def case_metrics(case, state, available_keys):
 
 
 class EvaluationRun:
+    replay_type = EvidenceReplay
+
+    def implementation_identity(self):
+        return {}
+
+    def case_metrics(self, case, state):
+        return case_metrics(case, state, self.available_keys)
+
     def __init__(self, app, cases, directory, *, top_k=8, settings=None):
         self.app, self.cases, self.top_k = app, cases, top_k
         self.root_directory, self.settings = Path(directory), settings
@@ -421,6 +429,7 @@ class EvaluationRun:
                         context_limit=app.max_context_chars, output_limit=app.max_output_tokens,
                         answer_implementation=inspect.getsource(ObjectRAG),
                         replay_implementation=inspect.getsource(EvidenceReplay), settings=settings or {})
+        identity.update(self.implementation_identity())
         base_id = digest(identity)
         base_manifest = read_json(Path(directory)/base_id[:16]/'run.json')
         # Keep compatible legacy runs; a changed mapping gets its own namespace.
@@ -458,7 +467,7 @@ class EvaluationRun:
     def for_top_k(self, top_k):
         if top_k == self.top_k:
             return self
-        return EvaluationRun(self.app, self.cases, self.root_directory,
+        return type(self)(self.app, self.cases, self.root_directory,
                              top_k=top_k, settings=self.settings)
 
     async def retrieve_case(self, case):
@@ -494,7 +503,7 @@ class EvaluationRun:
     async def run_case(self, case):
         state = await self.retrieve_case(case)
         if state.get('retrieval_status') == 'complete' and state.get('answer_status') != 'complete':
-            replay = EvidenceReplay(self.app, state['retrieval'], self.top_k)
+            replay = self.replay_type(self.app, state['retrieval'], self.top_k)
             try:
                 answer = await replay.answer(case['question'], case['category'], top_k=self.top_k)
                 invalid = answer.get('example_status') == 'unavailable'
@@ -530,7 +539,7 @@ class EvaluationRun:
         return self.metrics(cases)
 
     def metrics(self, cases=None):
-        return pd.DataFrame([case_metrics(case, self.load(case), self.available_keys)
+        return pd.DataFrame([self.case_metrics(case, self.load(case))
                              for case in (self.cases if cases is None else cases)])
 
     def inspect(self, case_id):

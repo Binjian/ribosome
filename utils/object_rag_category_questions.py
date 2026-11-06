@@ -62,7 +62,10 @@ from pathlib import Path
 import os
 from urllib.parse import quote, unquote, urlsplit
 
-from object_rag_evaluation import EvaluationRun, answer_blocks, compatible_review
+if __package__:
+    from .object_rag_evaluation import EvaluationRun, answer_blocks, compatible_review
+else:
+    from object_rag_evaluation import EvaluationRun, answer_blocks, compatible_review
 
 
 class _Images(HTMLParser):
