@@ -138,12 +138,12 @@ def example_payload(supported=True):
     return dict(
         supported=supported,
         explanation='Assign the prepared value.' if supported else 'Missing documented assignment syntax.',
-        scenario='Copy an input into the working variable.',
-        environment='Synthetic manual: source and result are integer variables.',
-        expected_result='result holds the copied value.',
+        scenario='Copy an input into the working variable.' if supported else '',
+        environment='Synthetic manual: source and result are integer variables.' if supported else '',
+        expected_result='result holds the copied value.' if supported else '',
         code='SET source, 5\nSET target, source\nSET result, target' if supported else '',
         instruction_statement='SET target, source' if supported else '',
-        language='text', manual='Synthetic C-1, corpus 5.0', citations=['E1'],
+        language='text' if supported else '', manual='Synthetic C-1, corpus 5.0' if supported else '', citations=['E1'] if supported else [],
     )
 
 
@@ -207,3 +207,21 @@ def test_row_evidence_includes_surrounding_table_syntax():
     result = asyncio.run(app.retrieve('assignment', 'general_operation'))
     assert 'Syntax: SET target, source' in result['context']
     assert 'Parent table context, source lines 1-20' in result['context']
+
+
+def test_omitted_example_cannot_hide_requested_details_in_unrendered_fields():
+    import asyncio
+    from ribosome.rag.object import ObjectRAG
+    app = object.__new__(ObjectRAG)
+    app.rag_model, app.max_output_tokens = 'fake', 2048
+    payload = example_payload(supported=False)
+    payload['environment'] = 'Required prerequisites hidden outside the main answer.'
+    async def retrieve(*args, **kwargs):
+        return dict(hits=[], context='[E1] Command prerequisites and sequence.')
+    class Generator:
+        async def chat(self, **kwargs):
+            return {'message': {'content': json.dumps(payload)}}
+    app.retrieve, app.generator = retrieve, Generator()
+    result = asyncio.run(app.answer('Explain prerequisites.', 'general_operation'))
+    assert result['example_status'] == 'unavailable'
+    assert 'Omitted examples require empty fields: environment' in result['example_error']

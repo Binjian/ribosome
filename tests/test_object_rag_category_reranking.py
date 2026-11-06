@@ -19,7 +19,7 @@ def application_config(monkeypatch):
     monkeypatch.setenv('OLLAMA_EMBED_HOSTS', 'http://192.0.2.10:11434')
     notebook = nbformat.read('nbs/05.application.rag.object.ipynb', as_version=4)
     namespace = {}
-    exec(next(c.source for c in notebook.cells if 'HOSTS = sorted' in c.source), namespace)
+    exec(next(c.source for c in notebook.cells if c.cell_type == 'code' and 'def rerank_by_category(' in c.source), namespace)
     return namespace
 
 
@@ -103,7 +103,7 @@ def rag(tmp_path, monkeypatch, application_config):
                     embed_model='fake', embedding_config=embedding_config, rag_model='fake',
                     rerank=application_config['rerank_by_category'])
     yield SimpleNamespace(app=app, collection=collection, embedder=embedder, generator=generator,
-                          index_dir=tmp_path)
+                          index_dir=tmp_path, distances=distances)
     app.close()
 
 
@@ -182,7 +182,7 @@ def test_application_service_cell_and_wrappers_enable_category_reranking(rag, ap
     (rag.index_dir / 'chroma').mkdir()
     application_config.update(INDEX_DIR=rag.index_dir, EMBED_MODEL='fake', RAG_MODEL='fake')
     notebook = nbformat.read('nbs/05.application.rag.object.ipynb', as_version=4)
-    exec(next(c.source for c in notebook.cells if 'app = ObjectRAG(' in c.source), application_config)
+    exec(next(c.source for c in notebook.cells if c.cell_type == 'code' and 'app = ObjectRAG(' in c.source), application_config)
     try:
         result = asyncio.run(application_config['retrieve']('question', 'arc_welding', top_k=1))
         assert result['hits'][0]['record']['id'] == 'matching'
@@ -199,3 +199,34 @@ def test_reranking_keeps_source_hits_unchanged_and_breaks_ties_deterministically
     ranked = application_config['rerank_by_category'](hits, 'arc_welding')
     assert [h['record']['id'] for h in ranked] == ['a', 'b']
     assert hits == before
+
+
+def test_exact_definition_survives_examples_and_excludes_other_command_profile_and_inactive(rag):
+    def add(generation, command, profile, active=True):
+        path = f'assets/code-docs.{profile}/.md/{generation}_semantics.json'
+        rag.app.mapping.append(dict(key=generation, profile=profile, category='general_operation', revision='test'))
+        doc = dict(id='doc', document_id='doc', type='document', semantics_file=path)
+        table = dict(id=generation, document_id='doc', type='table', parent_id=None, children_ids=[],
+                     content=f'<table><tr><td rowspan="3"><p>{command}</p></td><td>功能</td><td>运动</td></tr>'
+                             '<tr><td>格式</td><td>MOVL P[1] V=20 ACC=100 CNT=100</td></tr>'
+                             '<tr><td>参数</td><td>速度单位 mm/s</td></tr></table>',
+                     source_file=generation+'.md', summary='Instruction parameter definition.',
+                     attributes=dict(line_start=10, line_end=20))
+        with sqlite3.connect(rag.index_dir/'catalog.sqlite3') as connection:
+            if active:
+                connection.execute('INSERT INTO active_documents VALUES (?)', (generation,))
+            connection.executemany('INSERT INTO objects VALUES (?,?,?)', [
+                (generation, json.dumps(doc), None), (generation, json.dumps(table), generation)])
+        rag.distances[generation] = .95 if command == 'MOVL' else .01
+    add('definition5', 'MOVL', '5.0')
+    add('other-command5', 'MOVC', '5.0')
+    add('definition4', 'MOVL', '4.0')
+    add('inactive-definition5', 'MOVL', '5.0', active=False)
+    result = asyncio.run(rag.app.retrieve('Explain MOVL P9 VL=20 ACC=100 CNT=100', 'arc_welding', top_k=2, profile='5.0'))
+    assert [h['record']['id'] for h in result['hits']] == ['definition5', 'other-command5']
+    assert result['hits'][0]['instruction_definition'] is True
+    assert '速度单位 mm/s' in result['context']
+    assert len(rag.embedder.calls) == 1
+    assert rag.collection.calls[-1]['ids'] == ['definition5']
+    assert all('definition4' not in call['ids'] and 'inactive-definition5' not in call['ids'] for call in rag.collection.calls)
+    assert rag.app.connection.total_changes == 0
