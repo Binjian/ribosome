@@ -36,7 +36,7 @@ def coverage_namespace():
 def test_every_category_and_both_manual_subsection_layouts_are_covered():
     _, ns = coverage_namespace()
     from ribosome.rag.object import load_mapping
-    categories, _ = load_mapping(ns['PROJ_ROOT']/'assets/coding_categories')
+    categories, _ = load_mapping(ns['PROJ_ROOT']/'proj_config/coding_categories')
     cases = ns['COVERAGE_CASES'] + ns['GENERAL_OPERATION_CASES']
     assert len(ns['COVERAGE_CASES']) == 17
     assert all(case['category'] != 'general_operation' for case in ns['COVERAGE_CASES'])

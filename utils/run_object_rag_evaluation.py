@@ -367,7 +367,7 @@ def publish():
     cases = ns['GENERAL_OPERATION_CASES']+ns['ARC_WELDING_CASES']+ns['SAMPLED_CASES']
     # Read-only coverage preflight uses the same mapping/snapshot code as production.
     app = object.__new__(ObjectRAG)
-    app.categories, app.mapping = load_mapping(ns['PROJ_ROOT']/'assets/coding_categories')
+    app.categories, app.mapping = load_mapping(ns['PROJ_ROOT']/'proj_config/coding_categories')
     app.connection = sqlite3.connect((ns['INDEX_DIR']/'catalog.sqlite3').resolve().as_uri()+'?mode=ro', uri=True)
     try:
         docs = app.snapshot(next(iter(app.categories)), all_categories=True)[1]

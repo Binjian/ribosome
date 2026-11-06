@@ -11,7 +11,7 @@ def namespace():
     ns = {}
     exec(nb.cells[2].source, ns)
     from ribosome.rag.object import canonical, load_mapping
-    ns.update(canonical=canonical, load_mapping=lambda: load_mapping(ns['PROJ_ROOT'] / 'assets/coding_categories'))
+    ns.update(canonical=canonical, load_mapping=lambda: load_mapping(ns['PROJ_ROOT'] / 'proj_config/coding_categories'))
     return ns
 
 def test_notebook_valid_and_compiles():
