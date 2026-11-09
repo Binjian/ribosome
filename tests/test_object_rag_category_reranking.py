@@ -16,9 +16,10 @@ from ribosome.rag.object import ObjectRAG
 @pytest.fixture
 def application_config(monkeypatch):
     monkeypatch.setenv('OBJECT_RAG_CATEGORY_BOOST', '0.15')
+    monkeypatch.setenv('OLLAMA_EMBED_HOSTS', 'http://192.0.2.10:11434')
     notebook = nbformat.read('nbs/05.application.rag.object.ipynb', as_version=4)
     namespace = {}
-    exec(next(c.source for c in notebook.cells if c.id == 'b4efd573'), namespace)
+    exec(next(c.source for c in notebook.cells if 'HOSTS = sorted' in c.source), namespace)
     return namespace
 
 
@@ -181,7 +182,7 @@ def test_application_service_cell_and_wrappers_enable_category_reranking(rag, ap
     (rag.index_dir / 'chroma').mkdir()
     application_config.update(INDEX_DIR=rag.index_dir, EMBED_MODEL='fake', RAG_MODEL='fake')
     notebook = nbformat.read('nbs/05.application.rag.object.ipynb', as_version=4)
-    exec(next(c.source for c in notebook.cells if c.id == '9c6c540c'), application_config)
+    exec(next(c.source for c in notebook.cells if 'app = ObjectRAG(' in c.source), application_config)
     try:
         result = asyncio.run(application_config['retrieve']('question', 'arc_welding', top_k=1))
         assert result['hits'][0]['record']['id'] == 'matching'
