@@ -34,16 +34,21 @@ For folder-based batch processing with preflight, progress, failure reports, and
 catalog inspection, run [05.application.embedding.object.ipynb](../nbs/05.application.embedding.object.ipynb).
 
 The application notebook defaults to `qwen3-embedding:8b` with the async
-`OllamaEmbeddingPool` in `embedding_ollama_pool.py`. Requests use the service URLs in `.env`
-`OLLAMA_EMBED_HOSTS` concurrently, with four
-requests per server (eight total). Preflight requires the model on every configured host.
-Set `OLLAMA_EMBED_HOSTS` (comma-separated), `OLLAMA_EMBED_MODEL`,
+`OllamaEmbeddingPool` in `embedding_ollama_pool.py`. Embedding requests use
+`http://172.27.74.49:11434` from `ribosome.ollama_config`, with four concurrent
+requests by default. Optional RAG generation uses `http://172.27.74.16:11434`.
+Host environment settings do not override these notebook endpoints. Preflight
+requires the embedding model on the configured server. Set `OLLAMA_EMBED_MODEL`,
 `RIBOSOME_EMBED_SERVER_CONCURRENCY`, and `RIBOSOME_EMBED_REQUEST_TIMEOUT` in the
-project `.env` to configure these settings. The embedding host list is required. Corpus indexing, the
+project `.env` to configure these settings; existing environment values take
+precedence. Corpus indexing, the
 live concurrency display, optional fresh-index rebuilds, catalog inspection, and
 evidence retrieval are all in the application notebook. The core notebook contains
 the reusable API and an offline functional test. The workflow uses
-`db/object_embeddings/qwen3-embedding-8b/` by default, preserving earlier indexes.
+`USE_TASKS=True` by default, selecting `*_tasks.json` and
+`db/task_embeddings/qwen3-embedding-8b-172.27.74.49-11434/`. Set `USE_TASKS=False`
+for `*_semantics.json` and the corresponding directory under `db/object_embeddings`.
+These host-specific directories preserve earlier indexes.
 The provider host set and model identify the vector space; worker limits do not.
 
 ###
