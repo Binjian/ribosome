@@ -26,7 +26,7 @@ def test_notebook_valid_and_compiles():
 def test_aliases_and_mapping(tmp_path):
     # Category loading is a unit test, not a dependency on a private corpus.
     import pandas as pd
-    mapping = tmp_path / 'assets/coding_categories'
+    mapping = tmp_path / 'proj_config/coding_categories'
     mapping.mkdir(parents=True)
     (mapping / 'category_names.csv').write_text(
         'category,chinese_name\nvision,视觉\ngeneral_operation,通用操作\n', encoding='utf-8')

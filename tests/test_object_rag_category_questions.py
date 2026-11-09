@@ -16,18 +16,7 @@ from notebook_cells import find_cell, load_question_banks
 
 
 def banks(notebook):
-<<<<<<< HEAD
-    ns = {}
-    for cell in notebook.cells:
-        # Notebook cleanup can renumber cell IDs. Execute only bank definitions,
-        # never the service setup or evaluation cells that make model requests.
-        if cell.cell_type == 'code' and re.search(
-                r'^(?:GENERAL_OPERATION_CASES|ARC_WELDING_CASES|SAMPLED_CASES|[A-Z_]+_SAMPLE_CASES)\s*=',
-                cell.source, flags=re.MULTILINE):
-            exec(cell.source, ns)
-=======
     ns = load_question_banks(notebook)
->>>>>>> f4ae737 (Find evaluation notebook cells by contents instead of cleaned IDs)
     return ns['GENERAL_OPERATION_CASES'] + ns['ARC_WELDING_CASES'] + ns['SAMPLED_CASES']
 
 
@@ -60,15 +49,9 @@ def test_all_questions_are_rewritten_and_references_preserved(renumber_ids):
             compile(cell.source, str(Path('category_questions.ipynb')), 'exec',
                     flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
     assert 'object_rag_evaluation' not in variant.metadata
-<<<<<<< HEAD
-    services = code_with(variant, 'evaluation = EvaluationRun(')
-    assert 'CategoryPromptGenerator(generation_client)' in services
-    imports = code_with(variant, 'def select_cases(')
-=======
     services = find_cell(variant, defines=('app', 'collection', 'generation_client')).source
     assert 'CategoryPromptGenerator(generation_client)' in services
     imports = find_cell(variant, defines='select_cases').source
->>>>>>> f4ae737 (Find evaluation notebook cells by contents instead of cleaned IDs)
     assert 'CategoryEvaluationRun as EvaluationRun' in imports
     assert 'db/object_rag_tests/question_with_category/results' in services
     assert 'category_system_prompt=CATEGORY_SYSTEM_PROMPT' in services

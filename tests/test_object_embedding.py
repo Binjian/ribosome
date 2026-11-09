@@ -204,6 +204,33 @@ def test_index_search_catalog_and_unchanged_reopen(index, tmp_path):
         reopened.close()
 
 
+@pytest.mark.parametrize("concurrency", [1, 2])
+def test_selected_embedding_types_preserve_catalog_and_invalidate_publication(index, tmp_path, concurrency):
+    instance, provider, collection = index
+    instance.embedding_concurrency = concurrency
+    source = write(tmp_path)
+    original = source.read_bytes()
+    selected = run(instance.index_file(source, embedding_types={"list_item"}))
+    assert selected.embedded == collection.count() == 1
+    assert len(provider.calls) == 1
+    records = instance.connection.execute(
+        "SELECT record,vector_id FROM objects WHERE generation_id=?", (selected.generation_id,)
+    ).fetchall()
+    assert len(records) == 9  # Unembedded parent/child relationships are retained.
+    assert all(json.loads(row["record"])["type"] == "list_item"
+               for row in records if row["vector_id"] is not None)
+    unchanged = run(instance.index_file(source, embedding_types={"list_item"}))
+    assert unchanged.status == "unchanged" and unchanged.embedded == 0
+    full = run(instance.index_file(source))
+    assert full.status == "indexed" and full.generation_id != selected.generation_id
+    assert full.reused == 1 and full.embedded == 7
+    assert instance.connection.execute(
+        "SELECT COUNT(*) FROM objects WHERE generation_id=? AND vector_id IS NOT NULL",
+        (full.generation_id,),
+    ).fetchone()[0] == 8
+    assert source.read_bytes() == original
+
+
 def test_metadata_edits_reuse_vectors_and_removed_objects_disappear(index, tmp_path):
     store, provider, collection = index
     tree = {'summary': 'Doc', 'objects': [record(1, 'figure', 'same'), record(2, 'figure', 'same')]}
