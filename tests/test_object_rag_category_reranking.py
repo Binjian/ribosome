@@ -230,3 +230,29 @@ def test_exact_definition_survives_examples_and_excludes_other_command_profile_a
     assert rag.collection.calls[-1]['ids'] == ['definition5']
     assert all('definition4' not in call['ids'] and 'inactive-definition5' not in call['ids'] for call in rag.collection.calls)
     assert rag.app.connection.total_changes == 0
+
+
+def test_retrieval_preserves_exact_indexed_section_heading_terminology(rag):
+    with sqlite3.connect(rag.index_dir/'catalog.sqlite3') as connection:
+        raw, = connection.execute("SELECT record FROM objects WHERE generation_id='matching' AND vector_id='matching'").fetchone()
+        record=json.loads(raw);record['section_headings']=['3 模板作业','3.2 防漏铆的基本作业流程']
+        connection.execute("UPDATE objects SET record=? WHERE generation_id='matching' AND vector_id='matching'",(json.dumps(record),))
+    result=asyncio.run(rag.app.retrieve('Explain the documented operation.', 'arc_welding', top_k=1))
+    assert 'Source section headings: 3 模板作业 > 3.2 防漏铆的基本作业流程' in result['context']
+    assert 'Evidence for matching' in result['context']
+    assert rag.app.connection.total_changes==0
+
+
+def test_definition_retrieval_keeps_same_manual_instruction_constraints(rag):
+    with sqlite3.connect(rag.index_dir/'catalog.sqlite3') as connection:
+        raw,=connection.execute("SELECT record FROM objects WHERE generation_id='matching' AND vector_id='matching'").fetchone()
+        record=json.loads(raw);record['content']='<table><tr><td>MOVL</td><td>功能</td><td>直线运动</td></tr><tr><td>格式</td><td>MOVL P[1] V=20 ACC=100 CNT=100</td></tr></table>'
+        connection.execute("UPDATE objects SET record=? WHERE generation_id='matching' AND vector_id='matching'",(json.dumps(record),))
+        note={**record,'id':'constraint-note','content':'<table><tr><td>注释：MOVL 与应用运动指令之间不能连续。</td></tr></table>'}
+        connection.execute('INSERT INTO objects VALUES (?,?,?)',('matching',json.dumps(note),'constraint-note'))
+    rag.distances['constraint-note']=.99
+    result=asyncio.run(rag.app.retrieve('Explain MOVL CNT=100', 'arc_welding', top_k=3, profile='4.0'))
+    assert [h['record']['id'] for h in result['hits']][:2]==['matching','constraint-note']
+    assert '与应用运动指令之间不能连续' in result['context']
+    assert result['hits'][1]['instruction_note'] is True
+    assert len(rag.embedder.calls)==1 and rag.app.connection.total_changes==0
