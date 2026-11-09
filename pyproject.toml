@@ -77,6 +77,11 @@ clean_ids = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["vendor"]
+filterwarnings = [
+    # ChromaDB 1.5.9 still uses this deprecated predicate on Python 3.14.
+    # Remove when upstream switches to inspect.iscoroutinefunction.
+    "ignore:^'asyncio[.]iscoroutinefunction' is deprecated and slated for removal in Python 3[.]16:DeprecationWarning:^chromadb[.]telemetry[.]opentelemetry$",
+]
 
 [tool.ruff]
 src = ["src"]  # Helpful for recognizing first-party imports.
