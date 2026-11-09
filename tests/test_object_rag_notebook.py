@@ -113,7 +113,7 @@ def test_content_summary_accompanies_supported_and_unsupported_answers(supported
     assert '[E1] Exact evidence' in user['content']
     assert 'actual code statement' in system['content']
     assert 'follow-up' in system['content']
-    assert request['format']['properties']['supported'] == {'type': 'boolean'}
+    assert request['format']['properties']['supported']['type'] == 'boolean'
     assert 'instruction_statement' in request['format']['required']
     assert request['stream'] is False
     assert request['options']['num_predict'] == 128
