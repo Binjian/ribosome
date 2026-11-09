@@ -246,3 +246,34 @@ def test_zero_and_positive_duplicate_profile_rows_conflict(corpus):
     document('4.0')
     path = workbook({'first': [row('4.0', count=0)], 'second': [row('4.0')]})
     with pytest.raises(ValueError, match='Conflicting'): questions.select_task_sources(root, path)
+
+
+@pytest.mark.parametrize('marker', ['n.a.', ' N.A. ', 'n/a', None, ''])
+def test_unavailable_aggregate_counts_allow_profile_selection(corpus, marker):
+    root, document, workbook = corpus
+    document('4.0'); document('5.0')
+    path = workbook({'all': [row(count=marker), row(name='unavailable', count=marker)],
+                     'V4': [row('4.0')], 'V5': [row('5.0')]})
+    before = path.read_bytes()
+    selections = questions.select_task_sources(root, path)
+    cases, docs = questions.enumerate_task_cases(root, selections)
+    assert [(s['key'], s['profile']) for s in selections] == [('manual', '4.0'), ('manual', '5.0')]
+    assert len(cases) == 4 and all(doc['count_matches'] for doc in docs)
+    assert path.read_bytes() == before
+
+
+def test_unknown_profile_count_still_takes_precedence_over_aggregate(corpus):
+    root, document, workbook = corpus
+    document('4.0'); document('5.0')
+    path = workbook({'all': [row()], 'V4': [row('4.0', count='n.a.')], 'V5': [row('5.0')]})
+    selections = questions.select_task_sources(root, path)
+    assert [(s['key'], s['profile']) for s in selections] == [('manual', '5.0')]
+
+
+@pytest.mark.parametrize('count', ['two', -1, 1.5, True, float('inf')])
+def test_invalid_counts_still_report_the_sheet_row_and_value(corpus, count):
+    root, document, workbook = corpus
+    document('4.0')
+    path = workbook({'V4': [row('4.0', count=count)]})
+    with pytest.raises(ValueError, match='V4:2: invalid task_count'):
+        questions.select_task_sources(root, path)

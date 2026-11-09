@@ -36,6 +36,22 @@ def relative_path(path, root):
     return Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
 
 
+def _task_count(value, location):
+    """Unknown workbook counts are ineligible, rather than numeric zero."""
+    if pd.isna(value) or (isinstance(value, str) and value.strip().casefold() in
+                         {'', 'n.a.', 'n.a', 'n/a', 'na'}):
+        return None
+    if not isinstance(value, bool):
+        try:
+            numeric = float(value)
+            if numeric.is_integer() and numeric >= 0:
+                return int(numeric)
+        except (ValueError, TypeError):
+            pass
+    raise ValueError(f'{location}: invalid task_count {value!r}; '
+                     'expected a nonnegative integer or an unavailable marker')
+
+
 def select_task_sources(root, workbook, corpus_dirs=None):
     """Resolve profile rows first; aggregate aliases never override those rows."""
     root = Path(root).resolve()
@@ -60,21 +76,13 @@ def select_task_sources(root, workbook, corpus_dirs=None):
         for position, row in enumerate(frame.to_dict('records'), 2):
             if pd.isna(row['path']):
                 continue
-            count = row['task_count']
-            if pd.isna(count) or isinstance(count, bool):
-                raise ValueError(f'{sheet}:{position}: invalid task_count')
-            try:
-                numeric = float(count)
-            except (ValueError, TypeError):
-                raise ValueError(f'{sheet}:{position}: invalid task_count') from None
-            if not numeric.is_integer() or numeric < 0:
-                raise ValueError(f'{sheet}:{position}: invalid task_count')
+            count = _task_count(row['task_count'], f'{sheet}:{position}')
             if pd.isna(row['category']) or not str(row['category']).strip():
                 raise ValueError(f'{sheet}:{position}: missing category')
             key, profile = canonical(row['path'])
             rows.append(dict(key=key, profile=profile, category=str(row['category']),
                              revision=str(row.get('revision', row.get('version', ''))),
-                             expected_count=int(numeric), sheet=sheet, row=position))
+                             expected_count=count, sheet=sheet, row=position))
     profiled_keys = {row['key'] for row in rows if row['profile']}
     unique_rows = {}
     for row in rows:
@@ -90,7 +98,7 @@ def select_task_sources(root, workbook, corpus_dirs=None):
         profiles = [row['profile']] if row['profile'] else sorted(corpus_dirs)
         for profile in profiles:
             identity = row['key'], profile
-            if row['expected_count'] <= 0:
+            if row['expected_count'] is None or row['expected_count'] <= 0:
                 continue
             if identity not in physical:
                 raise ValueError(f"Missing task JSON for {row['sheet']}:{row['row']}: {identity}")
