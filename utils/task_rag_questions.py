@@ -26,6 +26,14 @@ QUESTION_SCHEMA = dict(type='object', properties={
     'question': dict(type='string'),
     'evidence_quotes': dict(type='array', items=dict(type='string'), minItems=1),
 }, required=['question', 'evidence_quotes'], additionalProperties=False)
+QUESTION_RETRY_INSTRUCTIONS = (
+    '请修正刚才的JSON。question必须是一个完整的中文疑问句，保持单行、最多1000字，'
+    '只能在句末保留一个问号“？”，不得列出多个问题或连续使用“？……？”。'
+    '如果涉及多个步骤，请围绕整项作业的一个目的或流程关系合并提问，'
+    '不要逐个步骤分别提问，也不要给出答案。'
+    'evidence_quotes仍须直接摘自table_text，保留必要技术名称，删除来源地址。'
+    '只返回question和evidence_quotes两个字段。验证失败原因：'
+)
 
 
 def file_sha256(path):
@@ -167,7 +175,11 @@ def validate_question(payload, authoring_input):
     question, quotes = payload['question'], payload['evidence_quotes']
     if not isinstance(question, str) or not question.strip() or not re.search(r'[\u4e00-\u9fff]', question):
         raise ValueError('Provide one nonempty Chinese question')
-    if len(question) > 1000 or '\n' in question.strip() or len(re.findall(r'[?？]', question)) > 1:
+    if len(question) > 1000:
+        raise ValueError('Question exceeds 1000 characters')
+    if '\n' in question.strip() or '\r' in question.strip():
+        raise ValueError('Question must be a single line')
+    if len(re.findall(r'[?？]', question)) > 1:
         raise ValueError('Provide one question rather than a question list')
     if re.search(r'根据手册|根据《|请依据|《[^》]*手册[^》]*》|SX\d{5,}|'
                  r'第[\d.一二三四五六七八九十]+[章节]|\d+(?:\.\d+)+\s*[章节]|\bV\d+\.\d+|'
@@ -211,22 +223,28 @@ class TaskQuestionAuthor:
         if len(raw_input) > self.max_input_chars:
             raise ValueError(f"Task authoring input exceeds {self.max_input_chars} characters: {case['id']}")
         messages = [dict(role='system', content=QUESTION_PROMPT), dict(role='user', content=raw_input)]
+        attempts = []
         try:
             for attempt in range(2):
                 response = await self.client.chat(model=self.model, messages=messages, format=QUESTION_SCHEMA,
                                                   stream=False, options=self.options)
                 raw = response['message']['content']
+                diagnostic = dict(attempt=attempt+1, raw_response=raw)
+                attempts.append(diagnostic)
                 try:
                     payload = validate_question(json.loads(raw), case['authoring_input'])
-                    atomic_json(path, dict(status='complete', identity=self.identity, payload=payload))
+                    atomic_json(path, dict(status='complete', identity=self.identity, payload=payload,
+                                          case_id=case['id'], attempts=attempts))
                     return payload
                 except (ValueError, TypeError, KeyError) as error:
+                    diagnostic['validation_error'] = f'{type(error).__name__}: {error}'
                     if attempt:
                         raise
                     messages = messages + [dict(role='assistant', content=raw),
-                        dict(role='user', content=f'修正JSON：{error}。仅依据原始资料编写一个问题。')]
+                        dict(role='user', content=QUESTION_RETRY_INSTRUCTIONS+str(error))]
         except BaseException as error:
             atomic_json(path, dict(status='error', identity=self.identity,
+                                   case_id=case['id'], attempts=attempts,
                                    error=f'{type(error).__name__}: {error}'))
             raise
 
@@ -248,6 +266,7 @@ class TaskQuestionAuthor:
                     authored[case['id']] = saved
                 except Exception as error:
                     failures.append(dict(case_id=case['id'], source=case['tasks_json'],
+                                         checkpoint=str(self.checkpoint(case)),
                                          error=f'{type(error).__name__}: {error}'))
                 print(f'[{len(authored)+len(failures)}/{len(cases)}] {case["id"]}: '
                       f'{"complete" if case["id"] in authored else "FAILED"}', flush=True)

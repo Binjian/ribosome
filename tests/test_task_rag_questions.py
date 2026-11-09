@@ -277,3 +277,52 @@ def test_invalid_counts_still_report_the_sheet_row_and_value(corpus, count):
     path = workbook({'V4': [row('4.0', count=count)]})
     with pytest.raises(ValueError, match='V4:2: invalid task_count'):
         questions.select_task_sources(root, path)
+
+
+@pytest.mark.parametrize('case_index,compound', [
+    (0, '主作业为何通过CALL调用子作业？子作业如何通过计数器循环完成断续焊？'),
+    (0, '等距点焊如何控制焊接时长？计数器如何决定循环次数？'),
+    (0, '连续点焊如何启动？如何完成圆弧运动并熄弧？'),
+    (1, '一维传感如何初始化？圆弧传感如何衔接后续焊接？'),
+    (1, '组合传感如何确定起始点？多道焊模板如何组织循环区间？'),
+    (1, '激光跟踪如何开启？焊接结束后应如何关闭跟踪和激光？'),
+])
+def test_compound_task_questions_receive_specific_corrective_retry(corpus, case_index, compound):
+    root, _, cases, _ = selected(corpus)
+    client = AuthorClient()
+    requests = []
+    async def chat(**kwargs):
+        requests.append(deepcopy(kwargs))
+        question = compound if len(requests) == 1 else '启动并停止整项作业的执行流程是什么？'
+        return dict(message=dict(content=json.dumps(dict(question=question, evidence_quotes=['作业']))))
+    client.chat = chat
+    author = questions.TaskQuestionAuthor(client, 'fake', 'fixture', root/'authored')
+    result = asyncio.run(author.author(cases[case_index]))
+    assert result['question'].count('？') == 1 and len(requests) == 2
+    correction = requests[1]['messages'][-1]['content']
+    assert '只能在句末保留一个问号' in correction and '不要逐个步骤分别提问' in correction
+    checkpoint = read_json(author.checkpoint(cases[case_index]))
+    assert checkpoint['case_id'] == cases[case_index]['id']
+    assert json.loads(checkpoint['attempts'][0]['raw_response'])['question'] == compound
+    assert checkpoint['attempts'][0]['validation_error'].endswith('Provide one question rather than a question list')
+    assert 'validation_error' not in checkpoint['attempts'][1]
+
+
+def test_persistent_authoring_failure_retains_raw_responses(corpus):
+    root, _, cases, _ = selected(corpus)
+    client = AuthorClient(); client.mode = 'bad'
+    author = questions.TaskQuestionAuthor(client, 'fake', 'fixture', root/'authored')
+    with pytest.raises(ValueError): asyncio.run(author.author(cases[0]))
+    saved = read_json(author.checkpoint(cases[0]))
+    assert saved['status'] == 'error' and len(saved['attempts']) == 2
+    assert all('raw_response' in attempt and 'validation_error' in attempt for attempt in saved['attempts'])
+
+
+@pytest.mark.parametrize('question,error', [
+    ('如何启动？\n请说明流程', 'single line'),
+    ('如何启动？\r请说明流程', 'single line'),
+    ('如何启动'+'作业'*501+'？', '1000 characters'),
+])
+def test_question_format_failures_have_specific_diagnostics(question, error):
+    with pytest.raises(ValueError, match=error):
+        questions.validate_question(dict(question=question, evidence_quotes=['作业']), {'table_text': '作业'})
