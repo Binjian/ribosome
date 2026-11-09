@@ -1,3 +1,8 @@
+For standalone or llm-backend package exports, use `uv run ribosome-prepare
+--profile standalone` or `--profile llm-backend`. See
+[preparation profiles](../docs/preparation-profiles.md) for defaults, environment
+configuration and packaging.
+
 These Python scripts preserve the notebook cell IDs and metadata while applying
 this embedding correctness change. They resolve the project root from their own
 location and can run from any working directory:

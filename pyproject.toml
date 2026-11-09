@@ -61,6 +61,9 @@ Documentation = "https://binjian.github.io/ribosome"
 [project.entry-points.nbdev]
 ribosome = "ribosome._modidx:d"
 
+[project.scripts]
+ribosome-prepare = "ribosome.prepare:main"
+
 [tool.setuptools.dynamic]
 version = { attr = "ribosome.__version__" }
 
