@@ -1,0 +1,9 @@
+{
+  "GitDiff": {
+    "Ignore": {
+      "/metadata": true,
+      "/cells/*/metadata": true,
+      "/cells/*": ["id"]
+    }
+  }
+}
