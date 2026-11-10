@@ -13,14 +13,16 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 import nbformat
+from evidence_factory import registered_result
+from utils.notebook_cells import label_cells
 import pytest
 
 NOTEBOOK = Path('nbs/05.application.rag.object.ipynb')
 
 
 def coverage_namespace():
-    notebook = nbformat.read(NOTEBOOK, as_version=4)
-    evaluation = nbformat.read('nbs/06.test.rag.object.question_with_location.ipynb', as_version=4)
+    notebook = label_cells(nbformat.read(NOTEBOOK, as_version=4), application=True)
+    evaluation = label_cells(nbformat.read('nbs/06.test.rag.object.question_with_location.ipynb', as_version=4))
     nbformat.validate(evaluation)
     # Exercise legacy helpers against the moved banks without opening services.
     notebook.cells = notebook.cells[:-2] + [c for c in evaluation.cells if c.id.startswith(
@@ -104,9 +106,9 @@ def synthetic_evidence(case, *, content=None, profile=None):
                            if case.get('heading_path') else
                            ([case['section']+' Test section'] if case['section'] else [])),
                manual=dict(profile=profile or case['profile'] or '4.0', revision=case['revision'] or 'B-5'))
-    return dict(question=case['question'], category=case['category'], hits=[hit],
-                context='[E1] Only retrieved evidence belongs in the answer prompt.',
-                coverage=dict(indexed=[hit['manual']], missing=[]), omissions=[])
+    return registered_result(dict(question=case['question'], category=case['category'], hits=[hit],
+                coverage=dict(indexed=[hit['manual']], missing=[]), omissions=[]),
+                text='Only retrieved evidence belongs in the answer prompt.')
 
 
 def test_coverage_metrics_require_matching_revision_section_and_complete_alarm_code():
@@ -146,7 +148,7 @@ def test_batch_continues_after_failures_replays_evidence_and_does_not_leak_refer
         async def chat(self, **kwargs):
             prompt = kwargs['messages'][-1]['content']
             assert 'PRIVATE_REFERENCE_CANARY' not in prompt
-            assert '[E1] Only retrieved evidence' in prompt
+            assert 'Only retrieved evidence' in prompt
             generated.append(prompt)
             if cases[2]['question'] in prompt:
                 raise RuntimeError('Synthetic generation failure')
@@ -255,7 +257,7 @@ def test_category_and_manual_sections_keep_separate_selections_top_k_and_results
     arc_index = next(i for i, c in enumerate(notebook.cells) if c.id == 'arc-welding-tests')
     cleanup_index = next(i for i, c in enumerate(notebook.cells) if c.id == 'e7686d54')
     assert manual_index < arc_index < cleanup_index
-    assert not any(c.cell_type == 'markdown' and c.source.startswith('## ')
+    assert not any(c.cell_type == 'markdown' and c.source.startswith('## ') and not c.source.startswith('## Cleanup')
                    for c in notebook.cells[arc_index+1:cleanup_index])
 
 

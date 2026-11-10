@@ -75,10 +75,13 @@ def test_multiple_nested_lists_and_code_blocks_do_not_duplicate_items(tmp_path):
                     '- Sibling\n')
     record, = sut.extract_markdown_objects(file)
     first, second = record['children']
-    assert len(list(descendants(record))) == 4
-    assert [c['id'] for c in first['children']] == ['1.item.1.item.1', '1.item.1.item.2']
-    assert [c['item_index'] for c in first['children']] == [1, 1]
-    assert [c['list_type'] for c in first['children']] == ['bullet', 'ordered']
+    assert len([child for child in descendants(record) if child['type'] == 'list_item']) == 4
+    code, = [child for child in descendants(record) if child['type'] == 'code']
+    assert '- fake child' in code['content'] and not code['children']
+    nested_items = [c for c in first['children'] if c['type'] == 'list_item']
+    assert [c['id'] for c in nested_items] == ['1.item.1.item.1', '1.item.1.item.2']
+    assert [c['item_index'] for c in nested_items] == [1, 1]
+    assert [c['list_type'] for c in nested_items] == ['bullet', 'ordered']
     assert second['children'] == [] and 'fake child' in first['content']
 
 
@@ -112,7 +115,8 @@ def test_item_summaries_flow_bottom_up_and_mirror_recursive_json(tmp_path, monke
         assert payload['caption'] == 'Steps:'
         if 'item_index' in payload:
             record = next(item for item in descendants(original_wrapper['object']) if item['id'] == payload['id'])
-            assert payload['content'] == record['content']
+            expected_content = sut.object_utils._own_content(record) if record['children'] else record['content']
+            assert payload['content'] == expected_content
             assert payload['child_summaries'] == [completed[c['id']] for c in record['children']]
             assert 'list item' in instruction
             summary = payload['id'] + '(' + '|'.join(payload['child_summaries']) + ')'

@@ -46,16 +46,17 @@ def test_caption_does_not_cross_content(tmp_path, separator):
                     '表 1 no\n\n' + separator + '<table><tr><td>x</td></tr></table>\n\n'
                     'Steps:\n\n' + separator + '- item\n')
     objects = sut.extract_markdown_objects(file)
-    assert [o['caption'] for o in objects] == ['', '', '']
+    assert [o['caption'] for o in objects if o['type'] != 'code'] == ['', '', '']
 
 
 def test_code_fences_and_captionless_objects(tmp_path):
     file = document(tmp_path, '```md\n![fake](fake.png)\n<table></table>\n- fake\n```\n\n'
                     '![real](real.png)\n\nProse\n\n<table>\n<tr><td>x</td></tr>\n</table>\n\n- real\n')
     objects = sut.extract_markdown_objects(file)
-    assert [o['type'] for o in objects] == ['figure', 'table', 'list']
+    assert [o['type'] for o in objects] == ['code', 'figure', 'table', 'list']
+    assert '![fake](fake.png)' in objects[0]['content'] and not objects[0]['images']
     assert all(o['caption'] == '' for o in objects)
-    assert objects[1]['content'] == '<table>\n<tr><td>x</td></tr>\n</table>'
+    assert objects[2]['content'] == '<table>\n<tr><td>x</td></tr>\n</table>'
 
 
 def test_summaries_are_captioned_and_ordered_with_table_rows(tmp_path, monkeypatch):
@@ -86,8 +87,10 @@ def test_summaries_are_captioned_and_ordered_with_table_rows(tmp_path, monkeypat
     assert 'visual:inner.png' in sut.object_utils._first_summary(row)
     assert all(Path(p).parent == tmp_path for p in visuals)
     assert all(x in results[0]['summary'] for x in ['图 1 pair', 'visual:a.png', 'visual:b.png'])
-    assert '<table>' in results[1]['summary'] and '表 1 data' in results[1]['summary']
-    assert '- one\\n- two' in results[2]['summary'] and 'Steps:' in results[2]['summary']
+    assert '<table>' in results[1]['content'] and '表 1 data' in results[1]['summary']
+    # Parent reductions use child descriptions; exact table markup remains source.
+    assert '<table>' not in json.loads(results[1]['summary'].split('\n', 1)[1])['content']
+    assert '- one\n- two' in results[2]['content'] and 'Steps:' in results[2]['summary']
 
 
 def test_failure_cleans_up_siblings_and_locates_object(tmp_path, monkeypatch):

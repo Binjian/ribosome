@@ -227,7 +227,7 @@ def test_pipe_tables_preserve_captions_spans_and_original_subtrees(tmp_path, mon
     assert summarized['c'] == wrapper['c']
     assert len(prompts) == 4 and 'complete Markdown pipe table' in prompts[-1]
     assert json.loads(prompts[-1].split('\n', 1)[1]) == {
-        'caption': '表 1 数据', 'content': table,
+        'caption': '表 1 数据', 'content': '表 1 数据',
         'child_summaries': ['PIPE-TABLE-SUMMARY'] * 3}
     assert len(summarized['subnodes']) == 3
     assert all(row['s'] == row['object']['summary'] == 'PIPE-TABLE-SUMMARY'
@@ -242,10 +242,12 @@ def test_pipe_tables_ignore_code_and_stay_inside_enclosing_lists(tmp_path):
                  '- item\n\n  | nested |\n  | --- |\n  | x |\n\n'
                  '| real |\n| --- |\n| y |\n\n<table><tr><td>html</td></tr></table>\n')
     objects = sut.extract_markdown_objects(file)
-    assert [o['type'] for o in objects] == ['list', 'table', 'table']
-    assert '| nested |' in objects[0]['content']
-    assert objects[1]['content'] == '| real |\n| --- |\n| y |\n'
-    assert objects[2]['content'].startswith('<table>')
+    assert [o['type'] for o in objects] == ['code', 'list', 'table', 'table']
+    assert '| fake |' in objects[0]['content'] and not objects[0].get('children')
+    assert '| nested |' in objects[1]['content']
+    assert objects[1]['children'][0]['children'][0]['type'] == 'table'
+    assert objects[2]['content'] == '| real |\n| --- |\n| y |\n'
+    assert objects[3]['content'].startswith('<table>')
 
 
 def test_html_table_wrapper_retry_preserves_source_and_caption(tmp_path, monkeypatch):

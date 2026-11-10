@@ -224,6 +224,7 @@ def test_transient_failure_fails_over_without_changing_configured_hosts(monkeypa
     async def scenario():
         calls = []
         async def embed(self, **kwargs):
+            assert kwargs['truncate'] is False
             calls.append(host(self))
             if host(self) == HOSTS[0]:
                 raise error
@@ -489,3 +490,111 @@ def test_late_success_does_not_reopen_a_host_after_another_request_fails(monkeyp
 def test_invalid_resilience_settings(options):
     with pytest.raises(ValueError):
         OllamaEmbeddingPool(hosts=HOSTS, **options)
+
+
+@pytest.mark.parametrize('from_listing', [False, True])
+@pytest.mark.parametrize('as_object', [False, True])
+def test_digest_preflight_preserves_inference_health_checks(monkeypatch, from_listing, as_object):
+    probes, listings = [], []
+    def response(**values):
+        return SimpleNamespace(**values) if as_object else values
+    async def show(self, model):
+        return response(capabilities=['embedding'], **({} if from_listing else {'digest': 'pinned'}))
+    async def list_models(self):
+        listings.append(host(self))
+        return response(models=[response(model=MODEL, digest='pinned')])
+    async def embed(self, **kwargs):
+        assert kwargs['input'] == HEALTH_CHECK_TEXT
+        probes.append(host(self))
+        return response(embeddings=[[1.0, 2.0]])
+    monkeypatch.setattr(AsyncClient, 'show', show)
+    monkeypatch.setattr(AsyncClient, 'list', list_models)
+    monkeypatch.setattr(AsyncClient, 'embed', embed)
+    async def scenario():
+        pool = OllamaEmbeddingPool(hosts=HOSTS)
+        try:
+            assert await pool.check_models(MODEL, expected_digest='pinned', require_digest=True) == MODEL
+            assert pool.model_identity == dict(model=MODEL, digest='pinned', verified=True, hosts=HOSTS)
+            assert set(probes) == set(HOSTS)
+            assert set(listings) == (set(HOSTS) if from_listing else set())
+            assert pool._health_inflight == 0 and not pool._checking
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('failure,options,message', [
+    ('missing', {'require_digest': True}, 'digest unavailable'),
+    ('different', {'expected_digest': 'pinned'}, 'does not match EncoderSpec'),
+    ('different', {}, 'digests disagree'),
+    ('missing', {}, 'digests disagree or are unverified'),
+    ('offline', {'require_digest': True}, 'unreachable'),
+])
+def test_digest_preflight_rejects_incompatible_or_unverified_hosts(monkeypatch, failure, options, message):
+    async def show(self, model):
+        if host(self) == HOSTS[0]:
+            return {'capabilities': ['embedding'], 'digest': 'pinned'}
+        if failure == 'offline':
+            raise ConnectionError('unreachable')
+        return {'capabilities': ['embedding'], 'digest': None if failure == 'missing' else 'different'}
+    async def list_models(self):
+        return {'models': []}
+    async def embed(self, **kwargs):
+        return {'embeddings': [[1.0, 2.0]]}
+    monkeypatch.setattr(AsyncClient, 'show', show)
+    monkeypatch.setattr(AsyncClient, 'list', list_models)
+    monkeypatch.setattr(AsyncClient, 'embed', embed)
+    async def scenario():
+        pool = OllamaEmbeddingPool(hosts=HOSTS)
+        try:
+            with pytest.raises(RuntimeError, match=message):
+                await pool.check_models(MODEL, **options)
+            assert not getattr(pool, 'model_identity', None)
+            assert pool._health_inflight == 0 and not pool._checking
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+def test_recovery_rechecks_pinned_digest_before_sending_document(monkeypatch):
+    digest, calls = ['pinned'], []
+    async def show(self, model):
+        return {'capabilities': ['embedding'], 'digest': digest[0]}
+    async def embed(self, **kwargs):
+        calls.append(kwargs['input'])
+        return {'embeddings': [[1.0, 2.0]]}
+    monkeypatch.setattr(AsyncClient, 'show', show)
+    monkeypatch.setattr(AsyncClient, 'embed', embed)
+    async def scenario():
+        pool = OllamaEmbeddingPool(hosts=[HOSTS[0]], request_retries=0, quarantine_seconds=0)
+        try:
+            await pool.check_models(MODEL, expected_digest='pinned', require_digest=True)
+            digest[0] = 'changed'
+            pool._quarantine(0, ConnectionError('temporary outage'))
+            with pytest.raises(RuntimeError, match='does not match EncoderSpec'):
+                await pool.embed(model=MODEL, input='document')
+            assert calls == [HEALTH_CHECK_TEXT]
+            assert pool.server_snapshots()[0]['health'] == 'quarantined'
+            assert pool._available == [1] and pool._health_inflight == 0
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+def test_explicit_truncation_setting_is_preserved_across_failover(monkeypatch):
+    calls = []
+    async def embed(self, **kwargs):
+        calls.append(kwargs)
+        if host(self) == HOSTS[0]:
+            raise httpx.ConnectError('temporary outage')
+        return {'embeddings': [[1.0, 2.0]]}
+    monkeypatch.setattr(AsyncClient, 'embed', embed)
+    async def scenario():
+        pool = OllamaEmbeddingPool(hosts=HOSTS, retry_backoff=0)
+        try:
+            await pool.embed(model=MODEL, input='document', truncate=True)
+            assert len(calls) == 2 and all(call['truncate'] is True for call in calls)
+            assert pool._available == [1, 1]
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())

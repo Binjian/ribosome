@@ -24,9 +24,10 @@ import time
 from bs4 import BeautifulSoup
 import pandas as pd
 from ribosome.rag.object import ObjectRAG, canonical
+from ribosome.retrieval.contracts import EvidenceRegistry, EncoderSpec, verify_encoder
 
 SEED = 20261029
-EVALUATION_VERSION = 1
+EVALUATION_VERSION = 2
 
 
 def digest(value):
@@ -212,6 +213,7 @@ class QueryEmbeddingCache:
     """
     def __init__(self, client, model, config, dimension, directory):
         self.client, self.model, self.dimension = client, model, dimension
+        self.encoder_spec = EncoderSpec(**config['encoder_spec']) if config.get('encoder_spec') else None
         self.identity = digest(dict(model=model, config=config, dimension=dimension,
                                     endpoint=str(getattr(getattr(client, '_client', None), 'base_url', ''))))
         self.directory = Path(directory)/self.identity[:16]
@@ -237,11 +239,27 @@ class QueryEmbeddingCache:
         self.validate(vector)
         atomic_json(self.path(question), dict(identity=self.identity, question=question, embedding=vector))
 
+    async def _verify_encoder(self):
+        if self.encoder_spec and not hasattr(self, '_encoder_metadata_verified'):
+            self._encoder_metadata_verified = await verify_encoder(self.client, self.encoder_spec)
+
+    def _validate_provider_identity(self, response):
+        if self.encoder_spec:
+            digest = response.get('model_digest') or response.get('digest')
+            if not digest and not getattr(self, '_encoder_metadata_verified', False):
+                raise ValueError('Custom query providers must report a resolved model digest')
+            if digest is not None and digest != self.encoder_spec.model_digest:
+                raise ValueError('Query provider digest does not match encoder identity')
+
     async def prepare(self, questions, *, batch_size=16):
+        await self._verify_encoder()
+        questions = [self.encoder_spec.render(q, query=True) for q in questions] if self.encoder_spec else list(questions)
         pending = [q for q in dict.fromkeys(questions) if self.load(q) is None]
         for start in range(0, len(pending), batch_size):
             batch = pending[start:start+batch_size]
-            response = await self.client.embed(model=self.model, input=batch)
+            options = dict(truncate=False, options=dict(self.encoder_spec.provider_options)) if self.encoder_spec else {}
+            response = await self.client.embed(model=self.model, input=batch, **options)
+            self._validate_provider_identity(response)
             vectors = response['embeddings']
             if len(vectors) != len(batch):
                 raise ValueError('Embedding response count mismatch')
@@ -251,15 +269,17 @@ class QueryEmbeddingCache:
                 self.save(question, vector)
             print(f'Query vectors [{min(start+len(batch),len(pending))}/{len(pending)}]', flush=True)
 
-    async def embed(self, *, model, input):
+    async def embed(self, *, model, input, **kwargs):
         if model != self.model or not isinstance(input, str):
             raise ValueError('Cached embedder requires the configured model and one query string')
         vector = self.load(input)
         if vector is None:
-            response = await self.client.embed(model=model, input=input)
+            await self._verify_encoder()
+            response = await self.client.embed(model=model, input=input, **kwargs)
+            self._validate_provider_identity(response)
             vector = response['embeddings'][0]
             self.save(input, vector)
-        return dict(embeddings=[vector])
+        return dict(embeddings=[vector], **({'model_digest': self.encoder_spec.model_digest} if self.encoder_spec else {}))
 
 
 class EvidenceReplay(ObjectRAG):
@@ -267,6 +287,7 @@ class EvidenceReplay(ObjectRAG):
     def __init__(self, app, evidence, top_k):
         self.rag_model, self.max_output_tokens = app.rag_model, app.max_output_tokens
         self.evidence, self.top_k, self.last_result = evidence, top_k, None
+        self.max_context_tokens = getattr(app, 'max_context_tokens', 32768)
         self.responses = []
         owner = self
 
@@ -319,6 +340,11 @@ def anchors_match(anchors, text):
 
 
 def context_blocks(result):
+    if result.get('evidence_schema') == EvidenceRegistry.version:
+        registry = EvidenceRegistry.from_result(result)
+        if result.get('context', '') != registry.render(): return []
+        return [(item.id, registry.render_item(item).split('] ', 1)[1]) for item in registry.items]
+    # Historical inspection only; answer generation never trusts this fallback.
     return re.findall(r'(?ms)^\[(E\d+)\] (.*?)(?=^\[E\d+\] |\Z)', result.get('context', ''))
 
 
@@ -422,11 +448,16 @@ class EvaluationRun:
         self.available_keys = {d['key'] for d in docs.values()}
         mapping = mapping_snapshot(app, docs)
         mapping_digest = digest(mapping)
-        identity = dict(version=EVALUATION_VERSION, active=active,
+        identity = dict(version=EVALUATION_VERSION, active=active, evidence_schema=EvidenceRegistry.version,
+                        retrieval_mode=getattr(app, 'retrieval_mode', 'summary'),
+                        channel_candidates=getattr(app, 'channel_candidates', 32),
+                        encoder_identity=getattr(getattr(app, 'encoder_spec', None), 'identity', 'legacy-unverified'),
                         catalog=list(app.connection.execute('SELECT key,value FROM settings ORDER BY key')),
                         model=app.rag_model, embed_model=app.embed_model,
                         embedding_config=app.embedding_config, top_k=top_k,
                         context_limit=app.max_context_chars, output_limit=app.max_output_tokens,
+                        context_tokens=getattr(app, 'max_context_tokens', 32768),
+                        prompt_overhead_tokens=getattr(app, 'prompt_overhead_tokens', 2048),
                         answer_implementation=inspect.getsource(ObjectRAG),
                         replay_implementation=inspect.getsource(EvidenceReplay), settings=settings or {})
         identity.update(self.implementation_identity())

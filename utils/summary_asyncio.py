@@ -4,6 +4,8 @@ Importing this module does not import DOM modules or start model requests.
 """
 
 import asyncio
+from copy import deepcopy
+from contextlib import contextmanager
 from contextvars import ContextVar
 import math
 import hashlib
@@ -14,7 +16,7 @@ import os
 from statistics import mean
 import sys
 from time import perf_counter
-from unittest.mock import patch
+from threading import Lock
 
 from httpx import TimeoutException as HTTPTimeoutError
 from ollama import AsyncClient
@@ -23,6 +25,28 @@ from tqdm.auto import tqdm
 
 _document_id = ContextVar("summary_document_id", default=None)
 _batch_active = False
+_summary_resource_claims = set()
+_summary_resource_lock = Lock()
+
+
+@contextmanager
+def _claim_summary_resources(files, checkpoint_path=None):
+    """Permit independent batches, rejecting overlapping output/checkpoint writers."""
+    resources = {str(Path(file).resolve()) for file in files}
+    if len(resources) != len(files):
+        raise ValueError('A summary batch cannot contain the same source twice')
+    if checkpoint_path is not None:
+        resources.add(str(Path(checkpoint_path).resolve()))
+    with _summary_resource_lock:
+        overlap = resources & _summary_resource_claims
+        if overlap:
+            raise RuntimeError(f'Summary source/checkpoint already has an active writer: {sorted(overlap)}')
+        _summary_resource_claims.update(resources)
+    try:
+        yield
+    finally:
+        with _summary_resource_lock:
+            _summary_resource_claims.difference_update(resources)
 
 
 def configure_summary_limits(summary_module="natural_text"):
@@ -190,7 +214,7 @@ def count_summary_nodes(value):
     if value.get("t") in {"Image", "Cite", "AlignDefault", "ColWidth"}:
         return 1
     return int("t" in value) + sum(
-        count_summary_nodes(child) for key, child in value.items() if key not in {"t", "s"})
+        count_summary_nodes(value.get(key, [])) for key in ('blocks', 'c', 'subnodes'))
 
 
 async def _setup_document(dom):
@@ -215,12 +239,16 @@ class SummaryCheckpoint:
     """Atomic document-level progress; only unchanged successes are reusable."""
 
     def __init__(self, path, model, host, resume, *, settings=None, ignore_host=False,
-                 ignore_settings=()):
+                 ignore_settings=(), settings_defaults=None, artifact_repository=None):
         self.path = Path(path)
         self.config = {"model": model, "host": host}
         if settings is not None:
             self.config["settings"] = settings
         self.entries = {}
+        self.artifact_repository = artifact_repository
+        self.ignore_host = ignore_host
+        self.ignore_settings = ignore_settings
+        self.settings_defaults = settings_defaults or {}
         if resume and self.path.exists():
             saved = json.loads(self.path.read_text(encoding="utf-8"))
             if saved.get("version") != 1:
@@ -232,6 +260,8 @@ class SummaryCheckpoint:
                 # current metadata written when migrating a checkpoint.
                 saved_config, current_config = dict(saved_config), dict(current_config)
                 for config in (saved_config, current_config):
+                    if self.settings_defaults:
+                        config['settings'] = {**self.settings_defaults, **config.get('settings', {})}
                     if ignore_host:
                         config.pop("host", None)
                     if ignore_settings and isinstance(config.get("settings"), dict):
@@ -248,16 +278,149 @@ class SummaryCheckpoint:
                 if path.is_file() else None for path in paths}
 
     def completed(self, file):
+        self.recover_publication(file)
         entry = self.entries.get(str(file.resolve()))
         if entry and entry["row"]["status"] == "completed" \
                 and entry["signature"] == self.signature(file) \
                 and file.with_name(f"{file.stem}_semantics.json").is_file():
+            assets = self.asset_fingerprints(file)
+            if 'assets' in entry and entry['assets'] != assets:
+                return None
+            if 'assets' not in entry:
+                # Adoption observes today's bytes, not the unknown historical
+                # bytes used by a legacy visual summary. It never rebuilds it.
+                entry.update(assets=assets, asset_provenance='historical_unknown')
             return dict(entry["row"], file=str(file), resumed=True)
 
     def record(self, file, row):
         self.entries[str(file.resolve())] = {
-            "row": row, "signature": self.signature(file)}
+            "row": row, "signature": self.signature(file),
+            "assets": self.asset_fingerprints(file), "asset_provenance": "observed"}
         self.save()
+
+    @staticmethod
+    def asset_fingerprints(file):
+        """Use the canonical source manifest without changing legacy signatures."""
+        from ribosome.core.document import referenced_asset_fingerprints
+        return referenced_asset_fingerprints(file)
+
+    @staticmethod
+    def _atomic_json(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent,
+                                             delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(value, stream, ensure_ascii=False, allow_nan=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    def _publication_journal(self, file):
+        identity = hashlib.sha256(str(file.resolve()).encode()).hexdigest()
+        return self.path.parent / (self.path.name + '.publications') / (identity + '.json')
+
+    def publish(self, file, tree, row, writer):
+        """Commit a complete immutable semantic generation before its projections.
+
+        The journal is the commit authority until output/checkpoint projections
+        both succeed. Preparation failures leave the previous files untouched;
+        interrupted committed publications reconcile before compatibility checks.
+        """
+        journal = self._publication_journal(file)
+        generation = hashlib.sha256(json.dumps(tree, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        artifact = journal.parent / journal.stem / (generation + '.json')
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        if artifact.exists():
+            if json.loads(artifact.read_text(encoding='utf-8')) != tree:
+                raise ValueError(f'Immutable summary artifact is corrupt: {artifact}')
+        else:
+            writer(artifact, tree)
+        with artifact.open('rb') as stream:
+            os.fsync(stream.fileno())
+        output = file.with_name(f'{file.stem}_semantics.json')
+        expected = self.signature(file)
+        signature = dict(expected)
+        signature[str(output.resolve())] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        row.update(publication_generation=generation, artifact_path=str(artifact))
+        entry = dict(row=dict(row), signature=signature, assets=self.asset_fingerprints(file),
+                     asset_provenance='observed')
+        record = dict(state='prepared', file=str(file.resolve()), artifact=str(artifact),
+                      output=str(output), config=self.config, previous_signature=expected, entry=entry)
+        self._atomic_json(journal, record)
+        record['state'] = 'committed'
+        self._atomic_json(journal, record)
+        try:
+            self.recover_publication(file)
+        except Exception as exc:
+            # A committed artifact is complete even if a compatibility projection
+            # needs retry. Preserve the journal rather than requesting it again.
+            row.update(publication_pending=True, publication_error=str(exc))
+
+    def recover_publication(self, file):
+        journal = self._publication_journal(file)
+        if not journal.exists():
+            return False
+        record = json.loads(journal.read_text(encoding='utf-8'))
+        if record['state'] not in {'prepared', 'committed'}:
+            return False
+        def compatible(config):
+            config = deepcopy(config)
+            if self.ignore_host:
+                config.pop('host', None)
+            if self.settings_defaults:
+                config['settings'] = {**self.settings_defaults, **config.get('settings', {})}
+            if 'settings' in config:
+                config['settings'] = {key: value for key, value in config['settings'].items()
+                                      if key not in self.ignore_settings}
+            return config
+        if compatible(record['config']) != compatible(self.config):
+            return False
+        output = Path(record['output'])
+        current = self.signature(file)
+        # A real source/AST change must never be overwritten by stale recovery.
+        if any(current.get(path) != value for path, value in record['previous_signature'].items()
+               if path != str(output.resolve())):
+            return False
+        if record['entry'].get('assets') != self.asset_fingerprints(file):
+            return False
+        data = Path(record['artifact']).read_bytes()
+        output_hash = hashlib.sha256(data).hexdigest()
+        if output_hash != record['entry']['signature'][str(output.resolve())]:
+            raise ValueError(f'Corrupt prepared summary artifact: {record["artifact"]}')
+        if record['state'] == 'prepared':
+            if current.get(str(output.resolve())) not in {
+                    record['previous_signature'].get(str(output.resolve())), output_hash}:
+                return False
+            # A retry may finish an intact, fully prepared upgrade without
+            # rerunning providers. Its old publication stayed active until now.
+            record['state'] = 'committed'
+            self._atomic_json(journal, record)
+        if current.get(str(output.resolve())) != output_hash:
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(data)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, output)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        self.entries[str(file.resolve())] = record['entry']
+        self.save()
+        row = record['entry']['row']
+        if row.get('canonical_generation'):
+            from ribosome.core.artifacts import ArtifactRepository
+            repository = self.artifact_repository or ArtifactRepository(row['canonical_repository'])
+            repository.commit(row['canonical_generation'])
+        journal.unlink()
+        return True
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -287,15 +450,13 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
     from pathlib import Path
     from ribosome.core.dom import model as dom_model
     from ribosome.core.dom.summary import natural_text as dom_summary
+    from ribosome.core.dom.summary import object as shared_summary
 
     if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
     if isinstance(progress_interval, bool) or not isinstance(progress_interval, (int, float)) \
             or not math.isfinite(progress_interval) or progress_interval <= 0:
         raise ValueError("progress_interval must be finite and positive")
-    global _batch_active
-    if _batch_active:
-        raise RuntimeError("A summarization batch is already running; await it before starting another")
     files = [Path(file) for file in files]
     if not files:
         return []
@@ -307,11 +468,12 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
         for index, file in enumerate(files):
             results[index] = checkpoint.completed(file)
     pending = iter((index, file) for index, file in enumerate(files) if results[index] is None)
-    summarize_node = dom_summary.summarize_node_async
     document_progress = ContextVar("document_progress", default=None)
     active = {}
     totals = {"nodes": 0, "done_nodes": 0, "documents": sum(row is not None for row in results), "status": "starting"}
-    _batch_active = True
+    runtime_token = None
+    resources = _claim_summary_resources(files, checkpoint_path)
+    resources.__enter__()
     try:
         with progress_factory(total=len(files), desc="Documents", unit="doc", position=0) as documents, \
              progress_factory(total=0, desc="Nodes (active documents)", unit="node", position=1) as nodes:
@@ -332,8 +494,8 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
                     await asyncio.sleep(progress_interval)
                     render()
 
-            async def summarize_with_progress(node, *args, **kwargs):
-                result = await summarize_node(node, *args, **kwargs)
+            async def summarize_with_progress(implementation, node, *args, **kwargs):
+                result = await implementation(node, *args, **kwargs)
                 state = document_progress.get()
                 if state is not None and isinstance(node, dict) and "t" in node:
                     state["done"] += 1
@@ -389,8 +551,9 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
                 for index, md_file in pending:
                     await process_document(index, md_file)
 
-            with patch.object(dom_model, "summarize_node_async", summarize_with_progress), \
-                 patch.object(dom_summary, "summarize_node_async", summarize_with_progress):
+            runtime_token = shared_summary._summary_runtime.set(
+                shared_summary.SummaryRuntime(node_wrapper=summarize_with_progress))
+            if runtime_token is not None:
                 tasks = []
                 display_task = asyncio.create_task(renderer())
                 try:
@@ -406,7 +569,11 @@ async def summarize_documents(files, client, model, database, *, concurrency=4,
                     await asyncio.gather(display_task, return_exceptions=True)
                     render()
     finally:
-        _batch_active = False
-        if checkpoint:
-            checkpoint.save()
+        if runtime_token is not None:
+            shared_summary._summary_runtime.reset(runtime_token)
+        try:
+            if checkpoint:
+                checkpoint.save()
+        finally:
+            resources.__exit__(None, None, None)
     return results

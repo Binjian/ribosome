@@ -277,7 +277,9 @@ def test_modes_create_separate_collections_and_catalogs_and_resume(tmp_path):
                 asyncio.run(app['embed_corpora'](corpora, index, rows, progress=False))
                 assert rows[0]['status'] == 'indexed'
                 document = index.get_object(rows[0]['document_id'])
-                assert [index.get_object(identifier).type for identifier in document.children_ids] == [kind, 'figure']
+                if use_tasks:
+                    assert index.get_object(document.children_ids[0]).attributes['semantic_roles'] == ['task']
+                assert [index.get_object(identifier).type for identifier in document.children_ids] == ['table', 'figure']
                 assert index.collection.count() == 3
                 calls = len(provider.calls)
                 index.close()

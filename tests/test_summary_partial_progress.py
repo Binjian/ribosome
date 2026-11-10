@@ -82,7 +82,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
         obj['summary'] = 'summary-' + obj['id']
         return obj
     async def tree_summary(file, *args, **kwargs):
-        tree = dom.extract_markdown_object_tree(file)
+        tree = dom._summary_runtime.get().tree_factory(file)
         # Force an observable refresh before processing resumed objects.
         await asyncio.sleep(.01)
         for node in tree['blocks']:
@@ -101,7 +101,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
     monkeypatch.setattr(dom, '_prepare_ignored_images', snapshot)
     monkeypatch.setattr(dom, 'extract_markdown_object_tree', lambda file: copy.deepcopy(original))
     monkeypatch.setattr(dom, '_object_nodes', lambda tree: iter(tree['blocks']))
-    monkeypatch.setattr(dom, '_summarize_markdown_object_async', summarize)
+    monkeypatch.setattr(dom, '_summarize_markdown_object_async', dom._with_runtime_object(summarize))
     monkeypatch.setattr(dom, 'summarize_markdown_object_tree_async', tree_summary)
     monkeypatch.setattr(app, '_prepare_incremental_tree', lambda *args, **kwargs: ([], 0, False))
     options = dict(checkpoint_path=tmp_path / 'checkpoint.json', progress_factory=Progress,

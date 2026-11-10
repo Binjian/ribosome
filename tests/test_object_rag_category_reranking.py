@@ -18,7 +18,7 @@ def application_config(monkeypatch):
     monkeypatch.setenv('OBJECT_RAG_CATEGORY_BOOST', '0.15')
     notebook = nbformat.read('nbs/05.application.rag.object.ipynb', as_version=4)
     namespace = {}
-    exec(next(c.source for c in notebook.cells if c.id == 'b4efd573'), namespace)
+    exec(next(c.source for c in notebook.cells if c.cell_type == 'code' and 'def rerank_by_category(' in c.source), namespace)
     return namespace
 
 
@@ -115,9 +115,8 @@ def test_category_bonus_changes_winner_before_top_k_and_preserves_raw_distance(r
     assert hit['category_match'] is True
     assert hit['category_boost'] == 0.15
     assert hit['score'] == pytest.approx(0.95)
-    request, = rag.collection.calls
-    assert set(request['ids']) == {'matching', 'generic', 'weak-match'}
-    assert request['n_results'] == 3  # Overfetch before reranking, not top_k=1.
+    assert {frozenset(request['ids']) for request in rag.collection.calls} == {frozenset({'matching', 'weak-match'}), frozenset({'generic'})}
+    assert all(request['n_results'] == 1 for request in rag.collection.calls)  # Reserve both category partitions before reranking.
     assert 'Evidence for matching' in result['context']
     assert 'Evidence for generic' not in result['context']
     assert rag.embedder.calls == [dict(model='fake', input='question')]
@@ -181,7 +180,7 @@ def test_application_service_cell_and_wrappers_enable_category_reranking(rag, ap
     (rag.index_dir / 'chroma').mkdir()
     application_config.update(INDEX_DIR=rag.index_dir, EMBED_MODEL='fake', RAG_MODEL='fake')
     notebook = nbformat.read('nbs/05.application.rag.object.ipynb', as_version=4)
-    exec(next(c.source for c in notebook.cells if c.id == '9c6c540c'), application_config)
+    exec(next(c.source for c in notebook.cells if c.cell_type == 'code' and 'app = ObjectRAG(' in c.source), application_config)
     try:
         result = asyncio.run(application_config['retrieve']('question', 'arc_welding', top_k=1))
         assert result['hits'][0]['record']['id'] == 'matching'

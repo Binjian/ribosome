@@ -121,7 +121,7 @@ class OllamaEmbeddingPool:
             else:
                 await self._changed.wait()
 
-    async def _probe_server(self, index, model):
+    async def _probe_server(self, index, model, *, expected_digest=None, require_digest=False):
         self._health_inflight += 1
         self.metrics[index]['health_checks'] += 1
         phase = 'model metadata'
@@ -131,6 +131,19 @@ class OllamaEmbeddingPool:
                 capabilities = response.get('capabilities') if isinstance(response, dict) else getattr(response, 'capabilities', None)
                 if capabilities is not None and 'embedding' not in capabilities:
                     raise ValueError(f'Model {model!r} does not report embedding support: {capabilities}')
+                digest = response.get('digest') if isinstance(response, dict) else getattr(response, 'digest', None)
+                if digest is None and (require_digest or expected_digest):
+                    listing = await self.servers[index].list()
+                    models = listing.get('models', []) if isinstance(listing, dict) else getattr(listing, 'models', [])
+                    for item in models:
+                        name = item.get('model', item.get('name')) if isinstance(item, dict) else (getattr(item, 'model', None) or getattr(item, 'name', None))
+                        if name in {model, model + ':latest'}:
+                            digest = item.get('digest') if isinstance(item, dict) else getattr(item, 'digest', None)
+                            break
+                if (require_digest or expected_digest) and not digest:
+                    raise ValueError('Resolved model digest unavailable')
+                if expected_digest and digest != expected_digest:
+                    raise ValueError('Resolved model digest does not match EncoderSpec')
                 phase = 'synthetic embedding'
                 response = await self.servers[index].embed(model=model, input=HEALTH_CHECK_TEXT)
                 vectors = response.get('embeddings', response.get('embedding')) if isinstance(response, dict) else getattr(response, 'embeddings', None)
@@ -139,6 +152,7 @@ class OllamaEmbeddingPool:
                 vector = vectors[0] if vectors and isinstance(vectors[0], (list, tuple)) else vectors
                 if not vector or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vector) or not any(vector):
                     raise ValueError('Health check returned no usable embedding vector')
+                return digest
         except (TimeoutError, httpx.TimeoutException) as exc:
             self.metrics[index]['health_failures'] += 1
             raise TimeoutError(f'Ollama embedding health check timeout at {self.hosts[index]} during {phase} '
@@ -159,6 +173,7 @@ class OllamaEmbeddingPool:
             raise RuntimeError('Ollama embedding pool is closed; rerun preflight')
         if self._checking:
             raise RuntimeError('Await embedding preflight before starting requests')
+        kwargs.setdefault('truncate', False)
         self._inflight += 1
         token = object()
         self._requests[token] = (None, perf_counter())
@@ -171,7 +186,9 @@ class OllamaEmbeddingPool:
                 try:
                     if recovery:
                         try:
-                            await self._probe_server(index, model)
+                            identity = getattr(self, 'model_identity', None) or {}
+                            digest = identity.get('digest') if identity.get('model') == model else None
+                            await self._probe_server(index, model, expected_digest=digest)
                         except Exception as exc:
                             raise _HealthCheckError(f'Recovery embedding probe failed: {exc}') from exc
                     async with asyncio.timeout(self.request_timeout):
@@ -215,15 +232,17 @@ class OllamaEmbeddingPool:
             self._requests.pop(token, None)
             self._inflight -= 1
 
-    async def check_models(self, model):
+    async def check_models(self, model, *, expected_digest=None, require_digest=False):
         if self._closed:
             raise RuntimeError('Ollama embedding pool is closed; rerun preflight')
         if self._inflight or self._checking:
             raise RuntimeError('Await active embedding requests and preflight before checking models')
         self._checking = True
         try:
-            results = await asyncio.gather(*(self._probe_server(i, model) for i in range(len(self.hosts))), return_exceptions=True)
+            results = await asyncio.gather(*(self._probe_server(i, model, expected_digest=expected_digest,
+                require_digest=require_digest) for i in range(len(self.hosts))), return_exceptions=True)
             errors = []
+            digests = []
             for index, result in enumerate(results):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
@@ -232,8 +251,16 @@ class OllamaEmbeddingPool:
                     errors.append(f'{self.hosts[index]}: {type(result).__name__}: {result}')
                 else:
                     self._mark_healthy(index)
-            if len(errors) == len(self.hosts):
+                    digests.append(result)
+            # Legacy preflight can use a healthy subset; explicit encoder
+            # verification must validate every configured host.
+            if len(errors) == len(self.hosts) or (errors and (require_digest or expected_digest)):
                 raise RuntimeError('Ollama embedding preflight failed: ' + '; '.join(errors))
+            known = {value for value in digests if value}
+            if len(known) > 1 or (known and any(value is None for value in digests)):
+                raise RuntimeError('Ollama embedding preflight failed: pooled model digests disagree or are unverified')
+            self.model_identity = dict(model=model, digest=next(iter(known)) if known else None,
+                                       verified=bool(known), hosts=list(self.hosts))
         finally:
             self._checking = False
         return model

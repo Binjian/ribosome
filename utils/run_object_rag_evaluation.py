@@ -16,6 +16,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import nbformat
+from notebook_cells import label_cells
 from object_rag_evaluation import (
     EvaluationRun, QueryEmbeddingCache, answer_blocks, atomic_json, atomic_text, case_metrics, csv_rows, digest, grouped_metrics,
     plain, read_json, sample_units, source_key, compatible_review, cache_readonly_snapshots,
@@ -180,7 +181,7 @@ def author_identity(row, units):
 
 
 def build():
-    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    notebook = label_cells(nbformat.read(NOTEBOOK, as_version=4))
     groups, metadata = defaultdict(list), defaultdict(list)
     for row in csv_rows(ROOT):
         seed, population, units = sample_units(ROOT/row['path'], row['path'])
@@ -260,7 +261,7 @@ def build():
 
 
 def namespace():
-    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    notebook = label_cells(nbformat.read(NOTEBOOK, as_version=4))
     ns = {}
     for cell_id in ['evaluation-config', 'evaluation-imports', 'evaluation-helpers', 'general-operation-prompt-bank',
                     'arc-welding-prompt-bank', 'sampled-banks-start']:
@@ -548,7 +549,7 @@ def publish():
                 'the supplied-context and source-review checks address that distinction.\n')
     next(c for c in notebook.cells if c.id == 'evaluation-review').source = report
     if latest:
-        snapshot = json.loads(nbformat.writes(nbformat.read(NOTEBOOK, as_version=4)))
+        snapshot = json.loads(nbformat.writes(label_cells(nbformat.read(NOTEBOOK, as_version=4))))
         atomic_json(Path(latest['directory'])/'notebook-snapshots'/(digest(snapshot)[:16]+'.ipynb'), snapshot)
         notebook.metadata['object_rag_evaluation'] = dict(run_id=latest['run_id'], total_cases=len(cases),
             completed_retrievals=int(frame.retrieval_complete.sum()), completed_answers=completed)

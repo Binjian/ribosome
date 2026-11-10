@@ -39,7 +39,7 @@ def test_summarize_node_async_recurses_into_subnodes():
 
     assert child_summary
     assert "Nested child text" in child_summary
-    assert result["s"] == ""
+    assert result["s"] == child_summary
 
 
 def test_summarize_nodes_without_content_have_empty_summaries():

@@ -161,7 +161,7 @@ def test_failures_preserve_old_rows_and_retry_converges(stage):
     if stage == 'query':
         assert not provider.calls
     if stage == 'provider':
-        assert len(collection.rows) == len(old_ids) + 1  # successful root upsert is recoverable
+        assert set(collection.rows) == old_ids  # complete provider preparation precedes every write
     if method:
         setattr(collection, method, original)
     result, _, _ = run(changed, collection)

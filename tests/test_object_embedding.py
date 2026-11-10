@@ -403,7 +403,8 @@ def test_parallel_preparation_uses_both_servers_and_preserves_reuse_counts(tmp_p
     async def scenario():
         seen = set()
         both = asyncio.Event()
-        async def embed(self, model, input):
+        async def embed(self, model, input, *, truncate):
+            assert truncate is False
             seen.add(str(self._client.base_url).rstrip('/'))
             if len(seen) == 2:
                 both.set()
