@@ -13,7 +13,7 @@ __all__ = ['OCRQualityIssueKind', 'OCRFixScope', 'OCRFixAction', 'OCR_NATIVE_TEX
            'OCRRepairRoundResult', 'OCRRepairLoopResult', 'repair_layout_regions_from_native_pdf',
            'stage_layout_ocr_repairs', 'execute_ocr_repair_round', 'execute_ocr_repairs_until_stable']
 
-# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #79d87b4a
+# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #5
 import asyncio
 import html
 import json
@@ -38,7 +38,7 @@ from ribosome.preprocessing.ocr.utils import (
 )
 
 
-# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #a012f6d8
+# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #6
 def _layout_repetition_reason(content: str) -> str | None:
     fence_count = content.count("```")
     if fence_count >= 12:
@@ -66,7 +66,7 @@ def _layout_repetition_reason(content: str) -> str | None:
     return None
 
 
-# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #b7b6214f
+# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #7
 OCRQualityIssueKind = Literal[
     "failed", "incomplete", "recovered", "suspicious_completed"
 ]
@@ -565,7 +565,7 @@ def collect_ocr_repair_queue(
         if report.needs_repair
     ]
 
-# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #4972c3ae
+# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #8
 OCRFixScope = Literal["file", "region"]
 OCRFixAction = Literal[
     "rebuild_sidecar",
@@ -1418,7 +1418,7 @@ async def split_and_retry_layout_regions(
         max_split_depth=max_split_depth,
     )
 
-# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #76db5d53
+# %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #9
 OCRRepairAttemptStatus = Literal["completed", "failed", "skipped", "dry_run"]
 OCRRepairStopReason = Literal[
     "clean",

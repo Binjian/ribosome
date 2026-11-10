@@ -51,10 +51,11 @@ def test_notebook_is_valid_offline_and_all_cells_compile():
 @pytest.mark.parametrize('use_tasks', [True, False])
 def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path, monkeypatch, use_tasks):
     (tmp_path / 'pyproject.toml').write_text('')
-    (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://localhost:11434,http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
+    (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://172.27.74.49:11434,http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
     monkeypatch.syspath_prepend(str(tmp_path))
     import ollama
     monkeypatch.setattr(ollama, 'AsyncClient', lambda **kw: pytest.fail('Configuration opened a provider client'))
+    monkeypatch.setattr(chromadb, 'PersistentClient', lambda **kw: pytest.fail('Configuration opened an index'))
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path), 'OLLAMA_EMBED_MODEL': 'override-model'}, clear=True):
         namespace = {}
         source = code_with('PROJ_ROOT = resolve_project_root()').replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
@@ -202,7 +203,7 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
         async def aclose(self):
             calls.append(('close', None))
 
-    hosts = ['http://localhost:11434', 'http://172.27.74.16:11434']
+    hosts = ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
     namespace.update(INPUT_DIRS=[tmp_path], OllamaEmbeddingPool=Pool,
                      INPUT_PATTERN='*_tasks.json',
                      OLLAMA_HOSTS=hosts, SERVER_CONCURRENCY=1, headers={},
@@ -222,8 +223,9 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
     assert not (tmp_path / 'db').exists()
 
 
-def test_application_defaults_to_qwen_single_host_index_without_processing(tmp_path, monkeypatch):
+def test_dotenv_hosts_do_not_change_default_task_configuration(tmp_path, monkeypatch):
     (tmp_path / 'pyproject.toml').write_text('')
+    (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://172.27.74.49:11434,http://172.27.74.16:11434\n')
     monkeypatch.syspath_prepend(str(tmp_path))
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
         app = {}

@@ -1,3 +1,8 @@
+For standalone or llm-backend package exports, use `uv run ribosome-prepare
+--profile standalone` or `--profile llm-backend`. See
+[preparation profiles](../docs/preparation-profiles.md) for defaults, environment
+configuration and packaging.
+
 These Python scripts preserve the notebook cell IDs and metadata while applying
 this embedding correctness change. They resolve the project root from their own
 location and can run from any working directory:
@@ -27,38 +32,27 @@ then retrieve summaries with raw source content and parent/child context. The
 implementation plan is in [object-embedding-plan.md](../docs/object-embedding-plan.md).
 For folder-based batch processing with preflight, progress, failure reports, and
 catalog inspection, run [05.application.embedding.object.ipynb](../nbs/05.application.embedding.object.ipynb).
-The application notebook defaults to `*_tasks.json`, the `task_embeddings`
-collection, and `qwen3-embedding:8b`. Repository deployment endpoints are shared
-in `ribosome/ollama_config.py`: embeddings use only `http://172.27.74.49:11434`;
-RAG answers and evaluation judging use only `http://172.27.74.16:11434`.
-Legacy host environment variables cannot override the applications' split.
-Embedding, generation and judge clients connect directly with `trust_env=False`,
-bypassing environment HTTP proxies for these private servers. Other tools
-retain their existing proxy environment.
-Summary routing and checkpoint compatibility remain configured separately.
 
-The async `OllamaEmbeddingPool` checks model metadata and a synthetic embedding
-before indexing. Health timeout errors identify the stalled metadata or
-synthetic-embedding phase. Transient failures get two retries with exponential backoff;
-a failed host is quarantined for 30 seconds and must pass a single recovery probe
-before its capacity reopens. The 300-second inference deadline starts after a local
-slot is available. The panel shows health, retries, probes, queued work, request
-outcomes and separate document failures. Cancellation awaits requests and preserves
-completed publications and reusable cached vectors.
+The application notebook defaults to `qwen3-embedding:8b` with the async
+`OllamaEmbeddingPool` in `embedding_ollama_pool.py`. Embedding requests use
+`http://172.27.74.49:11434` from `ribosome.ollama_config`, with four concurrent
+requests by default. Optional RAG generation uses `http://172.27.74.16:11434`.
+Host environment settings do not override these notebook endpoints. Preflight
+requires the embedding model on the configured server. Set `OLLAMA_EMBED_MODEL`,
+`RIBOSOME_EMBED_SERVER_CONCURRENCY`, and `RIBOSOME_EMBED_REQUEST_TIMEOUT` in the
+project `.env` to configure these settings; existing environment values take
+precedence. Corpus indexing, the
+live concurrency display, optional fresh-index rebuilds, catalog inspection, and
+evidence retrieval are all in the application notebook. The core notebook contains
+the reusable API and an offline functional test. The workflow uses
+`USE_TASKS=True` by default, selecting `*_tasks.json` and
+`db/task_embeddings/qwen3-embedding-8b-172.27.74.49-11434/`. Set `USE_TASKS=False`
+for `*_semantics.json` and the corresponding directory under `db/object_embeddings`.
+These host-specific directories preserve earlier indexes.
+The provider host set and model identify the vector space; worker limits do not.
 
-Models, optional authentication and worker limits remain configurable through
-`OLLAMA_EMBED_MODEL`, `OLLAMA_API_KEY`, `RIBOSOME_EMBED_SERVER_CONCURRENCY` (four),
-`RIBOSOME_EMBED_REQUEST_TIMEOUT` (300), `RIBOSOME_EMBED_REQUEST_RETRIES` (two),
-`RIBOSOME_EMBED_QUARANTINE_SECONDS` (30), and `RIBOSOME_EMBED_HEALTH_TIMEOUT` (60).
-The default task index is
-`db/task_embeddings/qwen3-embedding-8b-172.27.74.49-11434/`.
-`USE_TASKS=False` selects semantic inputs, `object_summaries`, and the corresponding
-host-specific directory under `db/object_embeddings/`, which is also the RAG and
-evaluation default. Existing indexes retain their original fingerprints. A new
-host configuration requires a separate index; subsequent runs of that configuration
-resume with `FORCE_REBUILD=False`. The host set and model identify the vector space;
-worker limits and temporary health quarantine do not. Historical comparison paths
-must be replaced with compatible `.49` indexes before rerunning the comparison.
+###
+
 Offline validation:
 
 ```sh

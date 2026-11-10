@@ -347,3 +347,57 @@ def test_missing_magick_explains_inkscape_dependency(tmp_path, monkeypatch):
     monkeypatch.delenv("ProgramFiles(x86)", raising=False)
     with pytest.raises(FileNotFoundError, match="Inkscape converter also requires ImageMagick"):
         win._find_magick()
+
+
+def test_import_does_not_require_private_env_file(tmp_path):
+    import os
+    import subprocess
+    env = {**os.environ, 'PROJ_ROOT': str(tmp_path)}
+    result = subprocess.run(
+        [sys.executable, '-c',
+         'from ribosome.preprocessing.parsing.ms_office.markitdown import utils, win; '
+         'assert not utils.ENV_FILE.exists()'],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_office_root_is_required_only_when_requested(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(utils, 'PROJ_ROOT', tmp_path)
+    monkeypatch.setattr(utils, 'ENV_FILE', tmp_path / '.env')
+    monkeypatch.delenv('OFFICE_FILES_ROOT', raising=False)
+    with pytest.raises(RuntimeError, match='OFFICE_FILES_ROOT is not configured'):
+        asyncio.run(utils.get_office_files_root())
+
+    monkeypatch.setenv('OFFICE_FILES_ROOT', 'office')
+    with pytest.raises(FileNotFoundError, match='OFFICE_FILES_ROOT is not a directory'):
+        asyncio.run(utils.get_office_files_root())
+
+    office = tmp_path / 'office'
+    office.mkdir()
+    assert asyncio.run(utils.get_office_files_root()) == office
+
+
+def test_optional_dotenv_loads_settings_without_overriding_environment(tmp_path):
+    import os
+    import subprocess
+
+    (tmp_path / 'office').mkdir()
+    (tmp_path / '.env').write_text(
+        'OFFICE_FILES_ROOT=office\nMARKITDOWN_MAX_CONCURRENCY=2\nEXIFTOOL_BINARY=from-dotenv\n',
+        encoding='utf-8',
+    )
+    env = {**os.environ, 'PROJ_ROOT': str(tmp_path), 'EXIFTOOL_BINARY': 'from-environment'}
+    for name in ('OFFICE_FILES_ROOT', 'MARKITDOWN_MAX_CONCURRENCY', 'PYTHON_DOTENV_DISABLED'):
+        env.pop(name, None)
+    result = subprocess.run(
+        [sys.executable, '-c',
+         'import asyncio; '
+         'from ribosome.preprocessing.parsing.ms_office.markitdown import utils; '
+         'assert utils.EXIFTOOL_BINARY == "from-environment"; '
+         'assert utils.DEFAULT_MAX_CONCURRENCY == 2; '
+         'assert asyncio.run(utils.get_office_files_root()) == utils.PROJ_ROOT / "office"'],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

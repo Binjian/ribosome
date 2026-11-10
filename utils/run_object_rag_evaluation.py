@@ -16,6 +16,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import nbformat
+from notebook_cells import defined_names, find_cell, load_question_banks
 from object_rag_evaluation import (
     EvaluationRun, QueryEmbeddingCache, answer_blocks, atomic_json, atomic_text, case_metrics, csv_rows, digest, grouped_metrics,
     plain, read_json, sample_units, source_key, compatible_review, cache_readonly_snapshots,
@@ -194,7 +195,7 @@ def build():
             authoring=authored['author_model'],
             selection='curated distinct short-manual tasks' if row['category'] == 'load_analysis' else 'seeded chapter/kind round-robin',
             selected_lines=[(u['line_start'], u['line_end']) for u in authored['sampled_units']]))
-    start = next(i for i,c in enumerate(notebook.cells) if c.id == 'sampled-manual-tests')
+    start = notebook.cells.index(find_cell(notebook, heading='## CSV manual sampling tests'))
     notebook.cells = notebook.cells[:start]
     notebook.cells.append(nbformat.v4.new_markdown_cell(
         '## CSV manual sampling tests\n\nThe following 18 families contain **760 new cases**, '
@@ -259,21 +260,19 @@ def build():
     print('Built', len(groups), 'families', sum(map(len, groups.values())), 'new cases')
 
 
-def namespace():
-    notebook = nbformat.read(NOTEBOOK, as_version=4)
+def namespace(notebook=None):
+    if notebook is None:
+        notebook = nbformat.read(NOTEBOOK, as_version=4)
     ns = {}
-    for cell_id in ['evaluation-config', 'evaluation-imports', 'evaluation-helpers', 'general-operation-prompt-bank',
-                    'arc-welding-prompt-bank', 'sampled-banks-start']:
-        exec(next(c.source for c in notebook.cells if c.id == cell_id), ns)
-    for cell in notebook.cells:
-        if cell.id.startswith('sampled-') and cell.id.endswith('-bank'):
-            exec(cell.source, ns)
+    for name in ['rerank_by_category', 'select_cases', 'coverage_case_metrics']:
+        exec(find_cell(notebook, defines=name).source, ns)
+    load_question_banks(notebook, ns)
     return notebook, ns
 
 
 async def run(concurrency, prepare_only=False, skip_prepare=False):
     notebook, ns = namespace()
-    setup = next(c.source for c in notebook.cells if c.id == 'evaluation-services')
+    setup = find_cell(notebook, defines=('app', 'collection', 'generation_client')).source
     exec(setup, ns)
     cases = ns['GENERAL_OPERATION_CASES']+ns['ARC_WELDING_CASES']+ns['SAMPLED_CASES']
     cache = QueryEmbeddingCache(ns['embedding_client'], ns['app'].embed_model,
@@ -282,7 +281,7 @@ async def run(concurrency, prepare_only=False, skip_prepare=False):
     cache_readonly_snapshots(ns['app'])
     evaluation = EvaluationRun(ns['app'], cases, ROOT/'db/object_rag_tests/results', settings=dict(
         category_boost=ns['CATEGORY_SCORE_BOOST'], rag_host=ns['RAG_HOST'],
-        rerank_source=next(c.source for c in notebook.cells if c.id == 'evaluation-config')))
+        rerank_source=find_cell(notebook, defines='rerank_by_category').source))
     print('RUN', evaluation.run_id, evaluation.directory, flush=True)
     atomic_json(ROOT/'db/object_rag_tests/latest.json', dict(directory=str(evaluation.directory),
         run_id=evaluation.run_id, case_bank=str(evaluation.case_bank_path),
@@ -313,7 +312,7 @@ def markdown_table(frame):
 def historical_review(notebook, cases):
     """Evidence-backed observations about preserved outputs, never fresh scores."""
     legacy = {c['id']: c for c in cases}
-    outputs = next(c for c in notebook.cells if c.id == 'general-operation-answers').outputs
+    outputs = find_cell(notebook, defines='general_operation_answer_metrics').outputs
     answers, case_id = {}, None
     for output in outputs:
         text = output.get('data', {}).get('text/markdown', '')
@@ -379,7 +378,7 @@ def publish():
             setattr(app, name, value)
         compatible = EvaluationRun(app, cases, ROOT/'db/object_rag_tests/results', settings=dict(
             category_boost=ns['CATEGORY_SCORE_BOOST'], rag_host=ns['RAG_HOST'],
-            rerank_source=next(c.source for c in notebook.cells if c.id == 'evaluation-config')))
+            rerank_source=find_cell(notebook, defines='rerank_by_category').source))
     finally:
         app.close()
     latest = read_json(ROOT/'db/object_rag_tests/latest.json', {})
@@ -393,9 +392,12 @@ def publish():
             if state.get('case_digest') == digest(case) and state.get('run_id') == latest['run_id']:
                 states[case['id']] = state
     frame = pd.DataFrame([case_metrics(c, states.get(c['id'], {}), available) for c in cases])
+    legacy_source = 'evaluation.show_answers(GENERAL_OPERATION_CASES + ARC_WELDING_CASES)'
+    legacy_cell = find_cell(notebook, containing=legacy_source, required=False)
     previous_fresh_outputs = bool(notebook.metadata.get('object_rag_evaluation')) or any(
-        c.get('outputs') and (c.id in ('recorded-legacy-results', 'full-evaluation-run') or
-                             c.id.startswith('sampled-') and c.id.endswith('-run')) for c in notebook.cells)
+        c.get('outputs') and (c is legacy_cell or 'evaluation_metrics' in defined_names(c)
+                             or any(name.endswith('_sample_results') for name in defined_names(c)))
+        for c in notebook.cells)
     if not states and previous_fresh_outputs:
         raise FileNotFoundError('No compatible saved results; the existing notebook and outputs were preserved')
     sampled = frame[frame.case_id.str.startswith('sample_')]
@@ -546,7 +548,7 @@ def publish():
                 'Related tables can still be returned. Finding the correct manual therefore '
                 'does not establish that the requested procedural fact reached the model; '
                 'the supplied-context and source-review checks address that distinction.\n')
-    next(c for c in notebook.cells if c.id == 'evaluation-review').source = report
+    find_cell(notebook, heading='## Algorithm and document review').source = report
     if latest:
         snapshot = json.loads(nbformat.writes(nbformat.read(NOTEBOOK, as_version=4)))
         atomic_json(Path(latest['directory'])/'notebook-snapshots'/(digest(snapshot)[:16]+'.ipynb'), snapshot)
@@ -555,7 +557,7 @@ def publish():
     # Publish the exact run's answers/summaries as saved notebook outputs, while
     # preserving the moved historical cells and their outputs without alteration.
     for category in sorted({c['category'] for c in cases if c['id'].startswith('sample_')}):
-        cell = next(c for c in notebook.cells if c.id == f'sampled-{category}-run')
+        cell = find_cell(notebook, defines=f'{category}_sample_results')
         selected = [c for c in cases if c['id'].startswith('sample_') and c['category'] == category]
         completed_cases = [c for c in selected if states.get(c['id'])]
         cell.outputs = []  # Never leave another run's outputs under the current report.
@@ -567,16 +569,16 @@ def publish():
                 for case in completed_cases for text in answer_blocks(case, states[case['id']])]
     legacy_id = 'recorded-legacy-results'
     if states:
-        if not any(c.id == legacy_id for c in notebook.cells):
-            position = next(i for i,c in enumerate(notebook.cells) if c.id == 'evaluation-review')
+        if legacy_cell is None:
+            position = notebook.cells.index(find_cell(notebook, heading='## Algorithm and document review'))
             notebook.cells.insert(position, nbformat.v4.new_code_cell(
                 '# | notest\n# Fresh saved results, separate from historical outputs above.\n'
                 'evaluation.show_answers(GENERAL_OPERATION_CASES + ARC_WELDING_CASES)\n', id=legacy_id))
-        cell = next(c for c in notebook.cells if c.id == legacy_id)
+        cell = find_cell(notebook, containing=legacy_source)
         cell.outputs = [nbformat.v4.new_output('display_data', data={'text/markdown': text})
             for case in cases if not case['id'].startswith('sample_') and states.get(case['id'])
             for text in answer_blocks(case, states[case['id']])]
-        cell = next(c for c in notebook.cells if c.id == 'full-evaluation-run')
+        cell = find_cell(notebook, defines=('ALL_EVALUATION_CASES', 'evaluation_metrics'))
         cell.outputs = [nbformat.v4.new_output('display_data', data={
             'text/plain': grouped_metrics(frame, columns).to_string(index=False),
             'text/html': grouped_metrics(frame, columns).to_html(index=False)})

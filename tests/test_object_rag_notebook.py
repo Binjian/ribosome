@@ -23,13 +23,24 @@ def test_notebook_valid_and_compiles():
             compile(cell.source, str(NOTEBOOK), 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
             # Saved outputs are valid after interactive notebook use.
 
-def test_aliases_and_mapping():
+def test_aliases_and_mapping(tmp_path):
+    # Category loading is a unit test, not a dependency on a private corpus.
+    import pandas as pd
+    mapping = tmp_path / 'proj_config/coding_categories'
+    mapping.mkdir(parents=True)
+    (mapping / 'category_names.csv').write_text(
+        'category,chinese_name\nvision,视觉\ngeneral_operation,通用操作\n', encoding='utf-8')
+    pd.DataFrame([
+        {'category': 'vision', 'path': 'assets/code-docs.4.0/.md/manual.md', 'version': 'A'},
+        {'category': 'vision', 'path': 'assets/md.json.semantics.coding.5.0/manual.md', 'version': 'B'},
+    ]).to_excel(mapping / 'coding_manuals_markdown.all.xlsx', index=False)
     ns = namespace()
+    ns['PROJ_ROOT'] = tmp_path
     canonical = ns['canonical']
     assert canonical('assets/code-docs.4.0/.md/manual_semantics.json') == ('manual','4.0')
     assert canonical('assets/md.json.semantics.coding.5.0/manual.md') == ('manual','5.0')
     categories, entries = ns['load_mapping']()
-    assert len(categories) == 18
+    assert categories == {"vision": "视觉", "general_operation": "通用操作"}
     assert {e['profile'] for e in entries} >= {'4.0','5.0'}
 
 def test_real_catalog_read_only_coverage():
@@ -113,7 +124,9 @@ def test_content_summary_accompanies_supported_and_unsupported_answers(supported
     assert '[E1] Exact evidence' in user['content']
     assert 'actual code statement' in system['content']
     assert 'follow-up' in system['content']
-    assert request['format']['properties']['supported'] == {'type': 'boolean'}
+    assert request['format']['properties']['supported']['type'] == 'boolean'
+    assert 'contextual code example' in request['format']['properties']['supported']['description']
+    assert 'prose-only answer' in request['format']['properties']['supported']['description']
     assert 'instruction_statement' in request['format']['required']
     assert request['stream'] is False
     assert request['options']['num_predict'] == 128
@@ -136,12 +149,12 @@ def example_payload(supported=True):
     return dict(
         supported=supported,
         explanation='Assign the prepared value.' if supported else 'Missing documented assignment syntax.',
-        scenario='Copy an input into the working variable.',
-        environment='Synthetic manual: source and result are integer variables.',
-        expected_result='result holds the copied value.',
+        scenario='Copy an input into the working variable.' if supported else '',
+        environment='Synthetic manual: source and result are integer variables.' if supported else '',
+        expected_result='result holds the copied value.' if supported else '',
         code='SET source, 5\nSET target, source\nSET result, target' if supported else '',
         instruction_statement='SET target, source' if supported else '',
-        language='text', manual='Synthetic C-1, corpus 5.0', citations=['E1'],
+        language='text' if supported else '', manual='Synthetic C-1, corpus 5.0' if supported else '', citations=['E1'] if supported else [],
     )
 
 
@@ -205,3 +218,21 @@ def test_row_evidence_includes_surrounding_table_syntax():
     result = asyncio.run(app.retrieve('assignment', 'general_operation'))
     assert 'Syntax: SET target, source' in result['context']
     assert 'Parent table context, source lines 1-20' in result['context']
+
+
+def test_omitted_example_cannot_hide_requested_details_in_unrendered_fields():
+    import asyncio
+    from ribosome.rag.object import ObjectRAG
+    app = object.__new__(ObjectRAG)
+    app.rag_model, app.max_output_tokens = 'fake', 2048
+    payload = example_payload(supported=False)
+    payload['environment'] = 'Required prerequisites hidden outside the main answer.'
+    async def retrieve(*args, **kwargs):
+        return dict(hits=[], context='[E1] Command prerequisites and sequence.')
+    class Generator:
+        async def chat(self, **kwargs):
+            return {'message': {'content': json.dumps(payload)}}
+    app.retrieve, app.generator = retrieve, Generator()
+    result = asyncio.run(app.answer('Explain prerequisites.', 'general_operation'))
+    assert result['example_status'] == 'unavailable'
+    assert 'Omitted examples require empty fields: environment' in result['example_error']

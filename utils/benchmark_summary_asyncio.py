@@ -232,7 +232,7 @@ async def benchmark(args):
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "samples.json").write_text(
         json.dumps(samples, default=str, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    client = SummaryAsyncClient(host=host if args.live else "http://localhost:11434")
+    client = SummaryAsyncClient(host=host if args.live else "http://172.27.74.49:11434")
     client.summary_model = model if args.live else "offline"
     async def simulated_chat(self, *positional, **kwargs):
         await asyncio.sleep(args.mock_latency)

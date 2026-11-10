@@ -16,7 +16,7 @@ from utils.embedding_ollama_pool import OllamaEmbeddingPool
 from utils.embedding_progress import EmbeddingProgressDisplay
 
 
-HOSTS = ['http://localhost:11434', 'http://172.27.74.16:11434']
+HOSTS = ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
 
 
 def test_status_snapshot_reports_eight_running_one_queued_and_cleans_up(monkeypatch):

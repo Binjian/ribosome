@@ -16,6 +16,7 @@ from object_rag_evaluation import (
     EvaluationRun, QueryEmbeddingCache, atomic_json, case_metrics, csv_rows, expected_hit,
     plain, read_json, sample_units, source_key, source_units, compatible_review, review_input, review_text, digest, cache_readonly_snapshots,
 )
+from notebook_cells import find_cell
 
 
 @pytest.fixture
@@ -313,7 +314,9 @@ def test_new_notebook_compiles_and_relocation_is_complete():
     notebook = nbformat.read('nbs/06.test.rag.object.question_with_location.ipynb', as_version=4)
     nbformat.validate(application)
     nbformat.validate(notebook)
-    assert not any(c.id in ['general-operation-tests', 'arc-welding-tests'] for c in application.cells)
+    assert not any(c.cell_type == 'markdown' and c.source.splitlines()[:1] in [
+        ['## General-operation manual version tests'], ['## Arc-welding manual version tests']]
+        for c in application.cells)
     assert any('06.test.rag.object.question_with_location.ipynb' in c.source for c in application.cells)
     for cell in notebook.cells:
         if cell.cell_type == 'code':
@@ -360,7 +363,7 @@ def test_rerunning_a_family_bank_does_not_duplicate_cases_or_manifest():
     notebook, ns = namespace()
     before_ids = [c['id'] for c in ns['SAMPLED_CASES']]
     before_manifest = deepcopy(ns['SAMPLING_MANIFEST'])
-    bank = next(c for c in notebook.cells if c.id == 'sampled-general_operation-bank')
+    bank = find_cell(notebook, defines='GENERAL_OPERATION_SAMPLE_CASES')
     exec(bank.source, ns)
     assert [c['id'] for c in ns['SAMPLED_CASES']] == before_ids
     assert ns['SAMPLING_MANIFEST'] == before_manifest

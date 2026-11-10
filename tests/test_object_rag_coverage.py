@@ -14,6 +14,10 @@ import zipfile
 
 import nbformat
 import pytest
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'utils'))
+from notebook_cells import find_cell
 
 NOTEBOOK = Path('nbs/05.application.rag.object.ipynb')
 
@@ -23,20 +27,27 @@ def coverage_namespace():
     evaluation = nbformat.read('nbs/06.test.rag.object.question_with_location.ipynb', as_version=4)
     nbformat.validate(evaluation)
     # Exercise legacy helpers against the moved banks without opening services.
-    notebook.cells = notebook.cells[:-2] + [c for c in evaluation.cells if c.id.startswith(
-        ('general-operation-', 'arc-welding-'))] + notebook.cells[-2:]
+    start = evaluation.cells.index(find_cell(evaluation, heading='## General-operation manual version tests'))
+    end = evaluation.cells.index(find_cell(evaluation, heading='## CSV manual sampling tests'))
+    notebook.cells = notebook.cells[:-2] + evaluation.cells[start:end] + notebook.cells[-2:]
     ns = {'USE_PERSISTENT_EVALUATION': False}
-    exec(notebook.cells[2].source, ns)
-    for cell_id in ['coverage-prompt-bank', 'coverage-test-helpers',
-                    'general-operation-prompt-bank', 'arc-welding-prompt-bank']:
-        exec(next(c.source for c in notebook.cells if c.id == cell_id), ns)
+    for name in ['rerank_by_category', 'COVERAGE_CASES', 'coverage_case_metrics',
+                 'GENERAL_OPERATION_CASES', 'ARC_WELDING_CASES']:
+        exec(find_cell(notebook, defines=name).source, ns)
     return notebook, ns
 
 
 def test_every_category_and_both_manual_subsection_layouts_are_covered():
     _, ns = coverage_namespace()
-    from ribosome.rag.object import load_mapping
-    categories, _ = load_mapping(ns['PROJ_ROOT']/'proj_config/coding_categories')
+    # The supported taxonomy is an independent expectation, not a dependency on
+    # private category CSVs and workbooks absent from standalone checkouts.
+    categories = {
+        'adhesive_dispensing', 'arc_welding', 'fds', 'general_operation',
+        'grinding', 'laser_welding', 'load_analysis', 'material_handling',
+        'offline_interface', 'palletizing', 'pneumatic_spot_welding',
+        'spot_welding', 'spr_riveting', 'stud_welding', 'teaching_free_welding',
+        'tool_quick_change', 'tracking', 'vision',
+    }
     cases = ns['COVERAGE_CASES'] + ns['GENERAL_OPERATION_CASES']
     assert len(ns['COVERAGE_CASES']) == 17
     assert all(case['category'] != 'general_operation' for case in ns['COVERAGE_CASES'])
@@ -160,8 +171,8 @@ def test_batch_continues_after_failures_replays_evidence_and_does_not_leak_refer
               app=SimpleNamespace(retrieve=retrieve, generator=Generator(), rag_model='test', max_output_tokens=128))
 
     async def run():
-        for cell_id in ['81ab0242', 'f1538ef2']:
-            cell = next(c for c in notebook.cells if c.id == cell_id)
+        for name in ['coverage_retrieval_metrics', 'coverage_answer_metrics']:
+            cell = find_cell(notebook, defines=name)
             await eval(compile(cell.source, str(NOTEBOOK), 'exec',
                                flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT), ns)
 
@@ -200,41 +211,41 @@ def test_category_and_manual_sections_keep_separate_selections_top_k_and_results
                                   snapshot=lambda category: (None, None, dict(indexed=[], missing=[])),
                                   generator=Generator(), rag_model='test', max_output_tokens=128))
 
-    def execute(cell_id, *replacements):
-        source = next(c.source for c in notebook.cells if c.id == cell_id)
+    def execute(name, *replacements):
+        source = find_cell(notebook, defines=name).source
         for old, new in replacements:
             source = source.replace(old, new)
         exec(source, ns)
 
-    async def execute_async(cell_id):
-        source = next(c.source for c in notebook.cells if c.id == cell_id)
+    async def execute_async(name):
+        source = find_cell(notebook, defines=name).source
         await eval(compile(source, str(NOTEBOOK), 'exec',
                            flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT), ns)
 
-    execute('513b4572', ('COVERAGE_CASE_IDS = None', "COVERAGE_CASE_IDS = ['category_arc_welding']"),
+    execute('COVERAGE_CASE_IDS', ('COVERAGE_CASE_IDS = None', "COVERAGE_CASE_IDS = ['category_arc_welding']"),
             ('COVERAGE_TOP_K = 8', 'COVERAGE_TOP_K = 3'))
-    execute('8ec7778c')
+    execute('INSPECT_CASE_ID')
 
     async def run():
-        await execute_async('81ab0242')
-        await execute_async('f1538ef2')
+        await execute_async('coverage_retrieval_metrics')
+        await execute_async('coverage_answer_metrics')
         category_results = ns['coverage_answer_results']
         saved_results = deepcopy(category_results)
-        execute('general-operation-selection',
+        execute('GENERAL_OPERATION_CASE_IDS',
                 ('GENERAL_OPERATION_CASE_IDS = None',
                  "GENERAL_OPERATION_CASE_IDS = ['general_50_alarm_6035']"),
                 ('GENERAL_OPERATION_TOP_K = 8', 'GENERAL_OPERATION_TOP_K = 5'))
-        await execute_async('general-operation-retrieval')
-        await execute_async('general-operation-answers')
+        await execute_async('general_operation_retrieval_metrics')
+        await execute_async('general_operation_answer_metrics')
         assert ns['coverage_answer_results'] is category_results
         assert category_results == saved_results
         manual_results = ns['general_operation_answer_results']
         saved_manual_results = deepcopy(manual_results)
-        execute('arc-welding-selection',
+        execute('ARC_WELDING_CASE_IDS',
                 ('ARC_WELDING_CASE_IDS = None', "ARC_WELDING_CASE_IDS = ['arc_50_alarm_20081']"),
                 ('ARC_WELDING_TOP_K = 8', 'ARC_WELDING_TOP_K = 7'))
-        await execute_async('arc-welding-retrieval')
-        await execute_async('arc-welding-answers')
+        await execute_async('arc_welding_retrieval_metrics')
+        await execute_async('arc_welding_answer_metrics')
         assert ns['coverage_answer_results'] is category_results
         assert category_results == saved_results
         assert ns['general_operation_answer_results'] is manual_results
@@ -251,9 +262,9 @@ def test_category_and_manual_sections_keep_separate_selections_top_k_and_results
     assert set(ns['general_operation_answer_results']) == {'general_50_alarm_6035'}
     assert ns['arc_welding_answer_errors'] == {}
     assert set(ns['arc_welding_answer_results']) == {'arc_50_alarm_20081'}
-    manual_index = next(i for i, c in enumerate(notebook.cells) if c.id == 'general-operation-tests')
-    arc_index = next(i for i, c in enumerate(notebook.cells) if c.id == 'arc-welding-tests')
-    cleanup_index = next(i for i, c in enumerate(notebook.cells) if c.id == 'e7686d54')
+    manual_index = notebook.cells.index(find_cell(notebook, heading='## General-operation manual version tests'))
+    arc_index = notebook.cells.index(find_cell(notebook, heading='## Arc-welding manual version tests'))
+    cleanup_index = notebook.cells.index(find_cell(notebook, heading='## Cleanup'))
     assert manual_index < arc_index < cleanup_index
     assert not any(c.cell_type == 'markdown' and c.source.startswith('## ')
                    for c in notebook.cells[arc_index+1:cleanup_index])

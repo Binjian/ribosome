@@ -372,7 +372,7 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
     namespace = {}
     exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), namespace)
-    assert captured == {'hosts': ['http://127.0.0.1:11434', 'http://configured:11434'],
+    assert captured == {'hosts': ['http://172.27.74.49:11434', 'http://configured:11434'],
                         'concurrency_per_server': 4, 'headers': {'Authorization': 'Bearer test-key'},
                         'request_timeout': 300.0, 'max_tokens': 2048, 'think': False,
                         'request_retries': 2}
