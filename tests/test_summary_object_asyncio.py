@@ -350,6 +350,8 @@ def test_notebook_validates_compiles_and_uses_both_corpora():
         'await summarize_object_documents(' in cell.source
         for cell in notebook.cells if cell.cell_type == 'code'
     )
+    assert notebook.cells[3].source.startswith('## Summarize the remaining Markdown files')
+    assert notebook.cells[7].source.startswith('## Discovery and provider preflight')
     assert 'DOMClass' not in config and 'chromadb' not in config
 
 
@@ -384,6 +386,11 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     assert namespace['IGNORED_IMAGES_DIR'] == tmp_path / 'assets' / 'images_ignored'
     assert namespace['PREVIEW_OUTPUTS'] == 3
     assert namespace['RESUME'] is True
+    assert namespace['RUN_REMAINING_SUMMARY'] is False
+    assert namespace['REMAINING_SOURCE_DIR'] == tmp_path / 'assets' / 'md.json.semantics.summary'
+    assert namespace['REMAINING_COMPARE_DIRS'] == namespace['INPUT_DIRS']
+    assert namespace['REMAINING_INPUT_DIR'] == tmp_path / 'assets' / 'md.json.semantics.remaining'
+    assert namespace['REMAINING_CHECKPOINT'] == namespace['REMAINING_INPUT_DIR'] / '.object-summary-checkpoint.json'
     assert namespace['os'].environ['PROJ_ROOT'] == str(tmp_path)
     env.write_text('OLLAMA_HOST=http://configured:11434\n')
     with pytest.raises(ValueError, match='OLLAMA_SUMMARY_MODEL'):
@@ -393,10 +400,12 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
         exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), {})
 
 
-def test_notebook_remaining_collection_uses_relative_paths_and_preserves_sources(tmp_path):
+def test_notebook_remaining_collection_moves_difference_and_preserves_saved_outputs(tmp_path):
     import pandas as pd
+    from utils.markdown_corpus import move_markdown_difference
 
-    source = tmp_path / 'assets' / 'md.json.semantics.remaining'
+    source = tmp_path / 'assets' / 'md.json.semantics.summary'
+    destination = tmp_path / 'assets' / 'md.json.semantics.remaining'
     v4 = tmp_path / 'assets' / 'code-docs.4.0' / '.md'
     v5 = tmp_path / 'assets' / 'code-docs.5.0' / '.md'
     excluded = document(source / 'covered', 'manual.md')
@@ -409,27 +418,61 @@ def test_notebook_remaining_collection_uses_relative_paths_and_preserves_sources
     ]]
     # Identical basenames/content at different relative paths remain eligible.
     assert all(file.read_bytes() == excluded.read_bytes() for file in retained)
-    checkpoint = source / '.object-summary-checkpoint.json'
+    destination.mkdir()
+    checkpoint = destination / '.object-summary-checkpoint.json'
     checkpoint.write_bytes(b'existing checkpoint')
-    output = retained[0].with_name('manual_semantics.json')
+    output = destination / retained[0].relative_to(source).with_name('manual_semantics.json')
+    output.parent.mkdir(parents=True)
     output.write_bytes(b'existing summary')
-    before = {file: file.read_bytes() for file in source.rglob('*') if file.is_file()}
+    before = {file: file.read_bytes() for file in [checkpoint, output]}
     notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
     cell = next(cell for cell in notebook.cells
-                if cell.cell_type == 'code' and cell.source.startswith('REMAINING_INPUT_DIR ='))
-    scope = dict(PROJ_ROOT=tmp_path, CHECKPOINT_NAME=checkpoint.name, RESUME=True,
-                 discover_markdown=app.discover_markdown, pd=pd, display=lambda *args: None)
+                if cell.cell_type == 'code' and 'remaining_md_files = move_markdown_difference(' in cell.source)
+    scope = dict(RUN_REMAINING_SUMMARY=True, REMAINING_SOURCE_DIR=source,
+                 REMAINING_COMPARE_DIRS=[v4, v5], REMAINING_INPUT_DIR=destination,
+                 REMAINING_CHECKPOINT=checkpoint, RESUME=True,
+                 move_markdown_difference=move_markdown_difference, pd=pd, display=lambda *args: None)
     exec(compile(cell.source, '<remaining-discovery>', 'exec'), scope)
-    assert scope['remaining_md_files'] == sorted(retained)
+    expected = sorted(destination / file.relative_to(source) for file in retained)
+    assert scope['remaining_md_files'] == expected
     assert scope['remaining_manifest']['relative_path'].tolist() == [
         str(file.relative_to(source)) for file in sorted(retained)]
     assert scope['REMAINING_CHECKPOINT'] == checkpoint
+    assert all(not file.exists() for file in retained) and excluded.exists()
     assert {file: file.read_bytes() for file in before} == before
-    assert {file for file in source.rglob('*') if file.is_file()} == set(before)
+    exec(compile(cell.source, '<remaining-discovery>', 'exec'), scope)
+    assert scope['remaining_md_files'] == expected
+    assert {file: file.read_bytes() for file in before} == before
 
 
-@pytest.mark.parametrize('has_files', [True, False])
-def test_notebook_remaining_batch_reuses_settings_and_handles_empty_selection(tmp_path, has_files):
+def test_notebook_disabled_remaining_section_does_no_io_or_provider_work():
+    import pandas as pd
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('Disabled section must not do filesystem, provider, or display work')
+
+    notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
+    section = next(i for i, cell in enumerate(notebook.cells)
+                   if cell.cell_type == 'markdown' and cell.source.startswith('## Summarize the remaining Markdown files'))
+    scope = dict(RUN_REMAINING_SUMMARY=False, pd=pd, move_markdown_difference=unexpected,
+                 display=unexpected, ollama_client=object(), remaining_md_files=['stale.md'],
+                 remaining_results=[{'status': 'completed'}])
+    end = next((i for i in range(section + 1, len(notebook.cells))
+                if notebook.cells[i].cell_type == 'markdown' and notebook.cells[i].source.startswith('## ')),
+               len(notebook.cells))
+    for cell in notebook.cells[section + 1:end]:
+        if cell.cell_type == 'code':
+            compiled = compile(cell.source, '<disabled-remaining-section>', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+            result = eval(compiled, scope)
+            if result is not None:
+                asyncio.run(result)
+    assert scope['remaining_md_files'] == [] and scope['remaining_results'] == []
+    assert scope['remaining_manifest'].empty and scope['remaining_results_df'].empty
+    assert scope['remaining_batch_metrics'] == {} and scope['remaining_server_metrics'] == []
+
+
+@pytest.mark.parametrize('enabled,has_files', [(True, True), (True, False), (False, True), (False, False)])
+def test_notebook_remaining_batch_reuses_settings_and_handles_empty_selection(tmp_path, enabled, has_files):
     from time import perf_counter
 
     notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
@@ -460,7 +503,7 @@ def test_notebook_remaining_batch_reuses_settings_and_handles_empty_selection(tm
     )
     original_results = [dict(corpus='earlier-corpus')]
     scope = dict(
-        Path=Path, perf_counter=perf_counter, remaining_md_files=files,
+        Path=Path, perf_counter=perf_counter, RUN_REMAINING_SUMMARY=enabled, remaining_md_files=files,
         remaining_selected_paths={str(file) for file in files},
         REMAINING_INPUT_DIR=root, REMAINING_CHECKPOINT=root / '.object-summary-checkpoint.json',
         ollama_client=client, SUMMARY_MODEL='configured-model', DOCUMENT_CONCURRENCY=7,
@@ -470,9 +513,9 @@ def test_notebook_remaining_batch_reuses_settings_and_handles_empty_selection(tm
     asyncio.run(eval(compile(cell.source, '<remaining-batch>', 'exec',
                              flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT), scope))
     assert scope['results'] is original_results
-    assert scope['remaining_batch_metrics'] == dict(request_count=1)
-    assert scope['remaining_server_metrics'] == [dict(host='configured-host')]
-    if has_files:
+    assert scope['remaining_batch_metrics'] == (dict(request_count=1) if enabled else {})
+    assert scope['remaining_server_metrics'] == ([dict(host='configured-host')] if enabled else [])
+    if enabled and has_files:
         assert events == ['preflight', 'reset', 'summarize']
         selected, selected_client, model, kwargs = calls[0]
         assert selected == files and selected_client is client and model == 'configured-model'
@@ -483,7 +526,7 @@ def test_notebook_remaining_batch_reuses_settings_and_handles_empty_selection(tm
         )
         assert scope['remaining_completed_paths'] == (str(file.relative_to(root)),)
     else:
-        assert events == ['reset'] and not calls
+        assert events == (['reset'] if enabled else []) and not calls
         assert scope['remaining_results'] == []
 
 
