@@ -21,6 +21,72 @@ def host(client):
     return str(client._client.base_url).rstrip('/')
 
 
+def test_preflight_and_summary_requests_bypass_environment_proxies(monkeypatch):
+    import httpx
+
+    requests = []
+    for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']:
+        monkeypatch.setenv(key, 'http://proxy.invalid:8080')
+    for key in ['NO_PROXY', 'no_proxy']:
+        monkeypatch.setenv(key, '')
+
+    def transport(*, proxy=None, **kwargs):
+        async def handle(request):
+            if proxy is not None:
+                raise httpx.ReadTimeout('Environment proxy must not receive private-server requests')
+            assert request.headers['authorization'] == 'Bearer offline-secret'
+            requests.append(request)
+            if request.url.path == '/api/tags':
+                return httpx.Response(200, json={'models': [{'name': 'vision', 'model': 'vision'}]})
+            assert request.url.path == '/api/chat'
+            return httpx.Response(200, json={
+                'model': 'vision', 'message': {'role': 'assistant', 'content': 'summary'}, 'done': True,
+            })
+        return httpx.MockTransport(handle)
+
+    monkeypatch.setattr('httpx._client.AsyncHTTPTransport', transport)
+
+    async def scenario():
+        pool = OllamaSummaryPool(hosts=HOSTS, headers={'Authorization': 'Bearer offline-secret'})
+        try:
+            assert all(client._client.trust_env is False for client in [pool, *pool.servers])
+            assert await pool.check_models('vision') == 'vision'
+            for _ in HOSTS:
+                response = await pool.chat(model='vision', messages=[{'role': 'user', 'content': 'document'}])
+                assert response.message.content == 'summary'
+            assert Counter((str(request.url).split('/api/')[0], request.url.path) for request in requests) == Counter(
+                (server, path) for server in HOSTS for path in ['/api/tags', '/api/chat'])
+            assert pool.metrics.snapshot()['request_count'] == 2
+            assert pool.hosts == HOSTS
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('timeout_kind', ['deadline', 'http'])
+def test_preflight_timeout_identifies_endpoint_and_deadline(monkeypatch, timeout_kind):
+    from httpx import ReadTimeout
+
+    async def list_models(self):
+        if timeout_kind == 'http':
+            raise ReadTimeout('')
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(AsyncClient, 'list', list_models)
+
+    async def scenario():
+        pool = OllamaSummaryPool(hosts=HOSTS, request_timeout=0.01)
+        try:
+            with pytest.raises(RuntimeError) as error:
+                await pool.check_models('vision')
+            for server in HOSTS:
+                assert f'{server}: TimeoutError: Model-list request (/api/tags) timed out after 0.01s' in str(error.value)
+            assert pool.metrics.snapshot()['request_count'] == 0
+        finally:
+            await pool.aclose()
+    asyncio.run(scenario())
+
+
 def test_routes_concurrently_with_per_server_limits_and_document_metrics(monkeypatch):
     async def scenario():
         release, filled = asyncio.Event(), asyncio.Event()

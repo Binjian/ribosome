@@ -393,6 +393,100 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
         exec(compile(notebook.cells[2].source, '<object-batch-config>', 'exec'), {})
 
 
+def test_notebook_remaining_collection_uses_relative_paths_and_preserves_sources(tmp_path):
+    import pandas as pd
+
+    source = tmp_path / 'assets' / 'md.json.semantics.remaining'
+    v4 = tmp_path / 'assets' / 'code-docs.4.0' / '.md'
+    v5 = tmp_path / 'assets' / 'code-docs.5.0' / '.md'
+    excluded = document(source / 'covered', 'manual.md')
+    document(v4 / 'covered', 'manual.md')
+    document(v5 / 'covered', 'manual.md')  # Exclude the union once.
+    document(source / 'version5', 'guide.MD')
+    document(v5 / 'version5', 'guide.MD')
+    retained = [document(source / folder, name) for folder, name in [
+        ('different', 'manual.md'), ('nested', 'shared.md'), ('keep', 'shared.md'),
+    ]]
+    # Identical basenames/content at different relative paths remain eligible.
+    assert all(file.read_bytes() == excluded.read_bytes() for file in retained)
+    checkpoint = source / '.object-summary-checkpoint.json'
+    checkpoint.write_bytes(b'existing checkpoint')
+    output = retained[0].with_name('manual_semantics.json')
+    output.write_bytes(b'existing summary')
+    before = {file: file.read_bytes() for file in source.rglob('*') if file.is_file()}
+    notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
+    cell = next(cell for cell in notebook.cells
+                if cell.cell_type == 'code' and cell.source.startswith('REMAINING_INPUT_DIR ='))
+    scope = dict(PROJ_ROOT=tmp_path, CHECKPOINT_NAME=checkpoint.name, RESUME=True,
+                 discover_markdown=app.discover_markdown, pd=pd, display=lambda *args: None)
+    exec(compile(cell.source, '<remaining-discovery>', 'exec'), scope)
+    assert scope['remaining_md_files'] == sorted(retained)
+    assert scope['remaining_manifest']['relative_path'].tolist() == [
+        str(file.relative_to(source)) for file in sorted(retained)]
+    assert scope['REMAINING_CHECKPOINT'] == checkpoint
+    assert {file: file.read_bytes() for file in before} == before
+    assert {file for file in source.rglob('*') if file.is_file()} == set(before)
+
+
+@pytest.mark.parametrize('has_files', [True, False])
+def test_notebook_remaining_batch_reuses_settings_and_handles_empty_selection(tmp_path, has_files):
+    from time import perf_counter
+
+    notebook = read('nbs/05.application.summary.object.ipynb', as_version=4)
+    cell = next(cell for cell in notebook.cells
+                if cell.cell_type == 'code' and 'def show_remaining_completed_files(' in cell.source)
+    root = tmp_path / 'assets' / 'md.json.semantics.remaining'
+    file = root / 'nested' / '<manual>.MD'
+    files = [file] if has_files else []
+    events, calls = [], []
+
+    async def check_models(model):
+        assert model == 'configured-model'
+        events.append('preflight')
+
+    async def summarize(selected, client, model, **kwargs):
+        events.append('summarize')
+        calls.append((selected, client, model, kwargs))
+        kwargs['completed_callback']([
+            dict(file=str(file), status='completed'),
+            dict(file=str(root / 'excluded.md'), status='completed'),
+        ])
+        return [dict(file=str(file), status='completed')]
+
+    client = SimpleNamespace(
+        check_models=check_models, reset_metrics=lambda: events.append('reset'),
+        metrics=SimpleNamespace(snapshot=lambda **kwargs: dict(request_count=1)),
+        server_snapshots=lambda **kwargs: [dict(host='configured-host')],
+    )
+    original_results = [dict(corpus='earlier-corpus')]
+    scope = dict(
+        Path=Path, perf_counter=perf_counter, remaining_md_files=files,
+        remaining_selected_paths={str(file) for file in files},
+        REMAINING_INPUT_DIR=root, REMAINING_CHECKPOINT=root / '.object-summary-checkpoint.json',
+        ollama_client=client, SUMMARY_MODEL='configured-model', DOCUMENT_CONCURRENCY=7,
+        RESUME=True, OLLAMA_HOSTS=['configured-host'], LANG='en', LEAF_MIN_LEN=123, MIN_LEN=456,
+        summarize_object_documents=summarize, results=original_results,
+    )
+    asyncio.run(eval(compile(cell.source, '<remaining-batch>', 'exec',
+                             flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT), scope))
+    assert scope['results'] is original_results
+    assert scope['remaining_batch_metrics'] == dict(request_count=1)
+    assert scope['remaining_server_metrics'] == [dict(host='configured-host')]
+    if has_files:
+        assert events == ['preflight', 'reset', 'summarize']
+        selected, selected_client, model, kwargs = calls[0]
+        assert selected == files and selected_client is client and model == 'configured-model'
+        assert {key: value for key, value in kwargs.items() if key != 'completed_callback'} == dict(
+            corpus=root.name, concurrency=7, progress_interval=0.25,
+            checkpoint_path=root / '.object-summary-checkpoint.json',
+            resume=True, checkpoint_host=['configured-host'], lang='en', leaf_min_len=123, min_len=456,
+        )
+        assert scope['remaining_completed_paths'] == (str(file.relative_to(root)),)
+    else:
+        assert events == ['reset'] and not calls
+        assert scope['remaining_results'] == []
+
+
 def test_saved_output_preview_includes_nested_rows_and_items_and_accepts_only_intentional_empty_summaries(tmp_path, monkeypatch):
     from PIL import Image
     monkeypatch.setenv('PROJ_ROOT', str(tmp_path))

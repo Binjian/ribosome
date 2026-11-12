@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from ollama import AsyncClient
 from httpx import TimeoutException as HTTPTimeoutError
+from ribosome.ollama_config import OLLAMA_TRUST_ENV
 
 from utils.summary_asyncio import RequestMetrics, SummaryAsyncClient, _document_id
 
@@ -20,7 +21,8 @@ class OllamaSummaryPool(SummaryAsyncClient):
     Inherits aggregate/document metrics and generation/deadline controls. Transient
     timeouts retry with bounded backoff after returning their server slot. Other
     failures retain atomic document failure semantics. Requests are always awaited.
-    All servers must pass preflight before processing a corpus.
+    All servers must pass preflight before processing a corpus. Private Ollama
+    services are reached directly, bypassing environment HTTP proxies.
     """
 
     def __init__(self, *, hosts, concurrency_per_server=4, headers=None,
@@ -38,11 +40,12 @@ class OllamaSummaryPool(SummaryAsyncClient):
         if isinstance(request_retries, bool) or not isinstance(request_retries, int) or request_retries < 0:
             raise ValueError('request_retries must be a non-negative integer')
         super().__init__(host=hosts[0], headers=headers, request_timeout=request_timeout,
-                         max_tokens=max_tokens, think=think)
+                         max_tokens=max_tokens, think=think, trust_env=OLLAMA_TRUST_ENV)
         self.hosts = hosts
         self.concurrency_per_server = concurrency_per_server
         self.request_retries = request_retries
-        self.servers = [AsyncClient(host=host, headers=headers, timeout=request_timeout) for host in hosts]
+        self.servers = [AsyncClient(host=host, headers=headers, timeout=request_timeout,
+                                    trust_env=OLLAMA_TRUST_ENV) for host in hosts]
         self.server_metrics = [RequestMetrics() for _ in hosts]
         self._slots = asyncio.Queue()
         # Interleave slots so an idle pool initially sends work to every server.
@@ -104,14 +107,19 @@ class OllamaSummaryPool(SummaryAsyncClient):
 
     async def check_models(self, model):
         """Check every server concurrently, without loading a model or inferring."""
+        timeout = min(self.request_timeout or 30, 30)
         async def check(index):
-            async with asyncio.timeout(min(self.request_timeout or 30, 30)):
-                response = await self.servers[index].list()
+            try:
+                async with asyncio.timeout(timeout):
+                    response = await self.servers[index].list()
+            except (TimeoutError, HTTPTimeoutError) as exc:
+                raise TimeoutError(f'Model-list request (/api/tags) timed out after {timeout:g}s') from exc
             available = {item.model for item in response.models}
             if model not in available:
                 raise ValueError(f'Model {model!r} unavailable; installed: {sorted(available)}')
         results = await asyncio.gather(*(check(i) for i in range(len(self.hosts))), return_exceptions=True)
-        errors = [f'{host}: {result}' for host, result in zip(self.hosts, results)
+        errors = [f'{host}: {type(result).__name__}: {str(result).strip() or repr(result)}'
+                  for host, result in zip(self.hosts, results)
                   if isinstance(result, BaseException)]
         if errors:
             raise RuntimeError('Ollama preflight failed: ' + '; '.join(errors))
