@@ -208,13 +208,17 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
 
     class Pool:
         def __init__(self, **kwargs):
+            self.hosts = kwargs['hosts']
             calls.append(('setup', kwargs))
 
-        async def check_models(self, model):
-            calls.append(('check_models', model))
+        async def check_models(self, model, *, require_all=False):
+            calls.append(('check_models', (model, require_all)))
             if failure:
                 raise RuntimeError('remote model missing')
             return model
+
+        def server_snapshots(self):
+            return [dict(host=host, health='healthy') for host in self.hosts]
 
         async def aclose(self):
             calls.append(('close', None))
@@ -233,7 +237,7 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
         assert calls[-1] == ('close', None)
     else:
         asyncio.run(eval(code, namespace))
-        assert calls[-1] == ('check_models', 'qwen3-embedding:8b')
+        assert calls[-1] == ('check_models', ('qwen3-embedding:8b', True))
     assert calls[0] == ('setup', {'hosts': hosts, 'concurrency_per_server': 1, 'headers': {}, 'request_timeout': 300,
                                 'request_retries': 2, 'quarantine_seconds': 30, 'health_timeout': 60})
     assert not (tmp_path / 'db').exists()
@@ -285,6 +289,7 @@ def test_modes_create_separate_collections_and_catalogs_and_resume(tmp_path):
             exec(compile(config, str(NOTEBOOK), 'exec'), app)
             exec(compile(code_with('def discover_semantics'), str(NOTEBOOK), 'exec'), app)
             provider = Provider()
+            provider.hosts = app['OLLAMA_HOSTS']
             app['ollama_client'] = provider
             corpora = app['discover_semantics']([folder], pattern=app['INPUT_PATTERN'])
             assert len(corpora[0][1]) == 1
@@ -319,6 +324,80 @@ def test_modes_create_separate_collections_and_catalogs_and_resume(tmp_path):
     assert len({catalog for catalog, _, _ in snapshots}) == 3
     assert len({collection.id for _, _, collection in snapshots}) == 3
     assert {file: file.read_bytes() for file in original_sources} == original_sources
+
+
+def test_notebook_preflight_and_indexing_send_summaries_to_both_servers(tmp_path, monkeypatch):
+    from ollama import AsyncClient
+    from utils.embedding_ollama_pool import HEALTH_CHECK_TEXT
+
+    (tmp_path / 'pyproject.toml').write_text('')
+    semantics(tmp_path / 'assets/md.json.semantics.remaining', 'a')
+    requests = []
+
+    async def show(self, model):
+        return {'capabilities': ['embedding']}
+
+    async def embed(self, *, model, input):
+        if input != HEALTH_CHECK_TEXT:
+            requests.append((str(self._client.base_url).rstrip('/'), input))
+        await asyncio.sleep(0)
+        return {'embeddings': [[1.0, 2.0]], 'model': model}
+
+    monkeypatch.setattr(AsyncClient, 'show', show)
+    monkeypatch.setattr(AsyncClient, 'embed', embed)
+    app = helpers()
+    with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
+        exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
+    preflight = compile(code_with('await ollama_client.check_models'), str(NOTEBOOK), 'exec',
+                        flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    setup = code_with('object_index = ObjectEmbeddingIndex(').split('\nresults = []', 1)[0]
+
+    async def scenario():
+        await eval(preflight, app)
+        try:
+            exec(compile(setup, str(NOTEBOOK), 'exec'), app)
+            index = app['object_index']
+            try:
+                rows = []
+                await app['embed_corpora'](app['corpora'], index, rows, progress=False)
+                assert rows[0]['status'] == 'indexed'
+                assert {host for host, _ in requests} == set(app['OLLAMA_HOSTS'])
+                assert {text for _, text in requests} == {'Document', 'Object'}
+                assert len(requests) == 2
+                repeated = []
+                await app['embed_corpora'](app['corpora'], index, repeated, progress=False)
+                assert repeated[0]['status'] == 'unchanged'
+                assert len(requests) == 2
+            finally:
+                index.close()
+        finally:
+            await app['ollama_client'].aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('stale', ['selector', 'client', 'identity', 'concurrency'])
+def test_indexing_rejects_stale_single_server_runtime_before_opening_database(tmp_path, monkeypatch, stale):
+    (tmp_path / 'pyproject.toml').write_text('')
+    app = {}
+    with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
+        exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
+    provider = Provider()
+    provider.hosts = list(app['OLLAMA_HOSTS'])
+    app['ollama_client'] = provider
+    if stale == 'selector':
+        del app['OLLAMA_SERVER_MODE']
+    elif stale == 'client':
+        provider.hosts = ['http://172.27.74.49:11434']
+    elif stale == 'identity':
+        app['EMBEDDING_CONFIG'] = {'provider': 'ollama-pool', 'hosts': ['http://172.27.74.49:11434']}
+    else:
+        app['EMBEDDING_CONCURRENCY'] = 4
+    monkeypatch.setattr(chromadb, 'PersistentClient', lambda **kw: pytest.fail('Opened a stale index'))
+    setup = code_with('object_index = ObjectEmbeddingIndex(').split('\nresults = []', 1)[0]
+    with pytest.raises(RuntimeError, match='Stale embedding'):
+        exec(compile(setup, str(NOTEBOOK), 'exec'), app)
+    assert not (tmp_path / 'db').exists()
 
 
 @pytest.mark.parametrize('mode', ['object', 'task', 'remaining'])

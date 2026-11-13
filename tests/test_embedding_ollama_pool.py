@@ -174,7 +174,8 @@ def test_requests_release_slots_on_failure_and_cancellation(monkeypatch, outcome
 
 
 @pytest.mark.parametrize('failure', [None, 'offline', 'not-embedding', 'inference-stalled'])
-def test_preflight_probes_both_hosts_concurrently_and_quarantines_bad_host(monkeypatch, failure):
+@pytest.mark.parametrize('require_all', [False, True])
+def test_preflight_probes_both_hosts_concurrently_and_quarantines_bad_host(monkeypatch, failure, require_all):
     async def scenario():
         seen, both = set(), asyncio.Event()
         async def show(self, model):
@@ -199,7 +200,11 @@ def test_preflight_probes_both_hosts_concurrently_and_quarantines_bad_host(monke
         monkeypatch.setattr(AsyncClient, 'embed', embed)
         pool = OllamaEmbeddingPool(hosts=HOSTS, health_timeout=0.03)
         try:
-            assert await pool.check_models(MODEL) == MODEL
+            if failure and require_all:
+                with pytest.raises(RuntimeError, match=HOSTS[1]):
+                    await pool.check_models(MODEL, require_all=True)
+            else:
+                assert await pool.check_models(MODEL, require_all=require_all) == MODEL
             assert seen == set(HOSTS)
             assert HOSTS[0] in probes
             assert (HOSTS[1] in probes) == (failure in {None, 'inference-stalled'})

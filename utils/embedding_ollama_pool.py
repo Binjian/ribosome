@@ -215,7 +215,8 @@ class OllamaEmbeddingPool:
             self._requests.pop(token, None)
             self._inflight -= 1
 
-    async def check_models(self, model):
+    async def check_models(self, model, *, require_all=False):
+        """Probe selected servers; optionally require every server at startup."""
         if self._closed:
             raise RuntimeError('Ollama embedding pool is closed; rerun preflight')
         if self._inflight or self._checking:
@@ -232,7 +233,7 @@ class OllamaEmbeddingPool:
                     errors.append(f'{self.hosts[index]}: {type(result).__name__}: {result}')
                 else:
                     self._mark_healthy(index)
-            if len(errors) == len(self.hosts):
+            if errors and (require_all or len(errors) == len(self.hosts)):
                 raise RuntimeError('Ollama embedding preflight failed: ' + '; '.join(errors))
         finally:
             self._checking = False
