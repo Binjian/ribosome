@@ -100,3 +100,33 @@ and then `build`; this recreates the appended sections, so publish recorded resu
 again afterward. The short load-analysis manual uses explicitly curated distinct
 tasks, recorded in its sampling manifest. `OBJECT_RAG_INDEX` and the existing
 Ollama environment settings control the index and services.
+
+## Baidu Unlimited OCR 2 host deployment
+
+[`deploy_unlimited_ocr_v2.py`](deploy_unlimited_ocr_v2.py) is a standalone Python
+3.10+ installer. Run it on the Linux NVIDIA GPU host as the service account,
+without sudo. It installs Baidu's checksum-pinned custom SGLang wheel in a
+separate venv, downloads a pinned model revision, creates a private API key and
+client configuration, and starts an authenticated user systemd service:
+
+```sh
+python3 utils/deploy_unlimited_ocr_v2.py deploy --dry-run --client-host 172.27.74.16
+python3 utils/deploy_unlimited_ocr_v2.py deploy --gpu 0 --port 7870 --client-host 172.27.74.16 --smoke-test
+```
+
+The default install directory is `~/services/unlimited-ocr-v2`. Existing settings
+and credentials are preserved; supplied options override the corresponding
+settings. Stop an existing instance before redeploying. `--no-start` prepares the
+environment and user unit without starting it; `--no-systemd` prepares a manual
+deployment instead. `--skip-gpu-check` requires one of those preparation modes.
+
+Actions include `run`, `check --smoke-test`, `status`, `start`, `restart`, `stop`,
+and `logs`. `client-env --client-host HOST` prints notebook settings **including
+the API key**; a private `client.env` is also saved in the install directory.
+Copy those settings into the existing project `.env` without replacing its other
+values. The script does not change drivers, other inference services, firewall
+rules, notebook environments, or corpus checkpoints. User-service persistence
+after logout requires administrator-enabled lingering.
+
+See the [installation tutorial](../docs/baidu-unlimited-ocr-v2-upgrade-plan.md#tutorial-install-and-run-the-sglang-service)
+for prerequisites, transfer-to-host commands, service management, and tuning.
