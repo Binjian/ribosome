@@ -114,6 +114,12 @@ default directory is `~/services/unlimited-ocr-v2`; select another directory wit
 unit contains no credentials. Copy settings from `client.env` into the notebook's
 existing `.env`, then restart its kernel.
 
+The installer also creates a private `cuda/` layout from the environment's NVIDIA
+CUDA 13 packages, including the compiler and linker aliases needed by SGLang's
+JIT kernels. The launcher uses it for `CUDA_HOME`, `CUDA_PATH`, and compiler/library
+search paths, so an older `/usr/local/cuda` does not take precedence. Explicit
+`CUDA_HOME` or `CUDA_PATH` entries in `service.env` can select another toolkit.
+
 Reruns preserve the key, settings, and saved model commit. Explicit flags override
 settings; `--model-revision main` selects the then-current upstream model commit.
 Stop the service before reinstalling or changing its environment. A running
@@ -490,12 +496,15 @@ To deliberately shut the service down, use
 
 | Symptom | Check or adjustment |
 | --- | --- |
+| Unit has a bad setting; `WorkingDirectory= path is not absolute` | Use the updated installer, which writes an unquoted `WorkingDirectory` path. Rerun deployment to replace the old managed unit and reload systemd. |
 | `Connection refused` | Check `systemctl --user status`, startup logs, and the configured port. For LAN access, verify `OCR_BIND=0.0.0.0` and routing/firewall rules. For a tunnel, keep the SSH session open. |
 | HTTP 401 | The client must send the exact `OCR_API_KEY` from `service.env` as its bearer token. |
 | Model not found or the notebook reports v1 | Confirm `/v1/models` advertises `Unlimited-OCR-2`; replace the old `.env` value and restart the notebook kernel. |
 | Unknown v2 CLI options or unsupported architecture | Verify the installed SGLang version is `0.5.20.dev13+g75b9b06b02`; use the pinned Baidu wheel and run `python -m sglang.launch_server --help` in its venv. |
 | Dependency resolution or import failure | Keep the server venv isolated, check the selected wheel against upstream, and resolve `uv pip check` failures. Do not force an installation with `--no-deps` or mix the separate Transformers-only pins into it. |
 | CUDA is unavailable, a driver error, or missing kernel images | Check `nvidia-smi`, `torch.version.cuda`, GPU capability, and the exact exception. A supported driver alone does not guarantee that every custom kernel supports your GPU. |
+| CUDA JIT reports an unsupported GCC version while using `/usr/local/cuda` | Rerun the updated installer to prepare its private CUDA 13 toolkit. Check for `CUDA_HOME` or `CUDA_PATH` overrides in `service.env` that still select an older toolkit. |
+| Loaded weights leave no GPU memory for the KV cache | Raise `--mem-fraction-static` above the minimum reported in the log. On this 24 GB RTX 4090 the reported minimum was `0.732`; `--mem-fraction-static 0.85` allows room for the cache. Stop the service before redeploying with the new value. |
 | CUDA out of memory | Begin with an otherwise available GPU, one request, graphs disabled, and client `CROP_MODE=False`. Lower both page-window values from `4` to `2` if needed. Lowering `--mem-fraction-static` leaves more memory outside the KV pool, but cannot make model weights fit an undersized GPU. |
 | Shared-memory allocation failure | Check available `/dev/shm`. A container needs an adequate shared-memory allocation; this tutorial's main path runs directly on the host. |
 | Length-limited response or native page-count mismatch | Check logs, `MAX_TOKENS`, and `MAX_PAGE_TOKENS`. The notebook allocates `MAX_TOKENS × page_count` globally. Do not treat incomplete streamed output as a completed document. |
@@ -507,6 +516,8 @@ performance recipe rather than changing only one graph limit. Increasing the
 page window toward upstream's `10` can retain more cross-page context at a higher
 memory cost. Client and server page-token caps should remain consistent.
 
-This tutorial's commands have been checked against the documented interface and
-the distributed wheel. Installation and inference have not been executed on the
-remote GPU host as part of this documentation change.
+On 2026-11-13, authenticated health/model checks and the native v2 synthetic
+single-page smoke test passed on a 24 GB RTX 4090 with the private CUDA 13
+toolkit, page window `4`, and `OCR_MEM_FRACTION_STATIC=0.85`. This validates the
+single-page deployment; larger documents still need workload-specific memory
+and output checks.

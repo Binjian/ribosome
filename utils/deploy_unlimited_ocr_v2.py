@@ -233,7 +233,9 @@ def service_unit(root: Path) -> str:
     return (
         f"{MANAGED}\n[Unit]\nDescription=Baidu Unlimited OCR 2 SGLang server\n"
         "After=network-online.target\n\n[Service]\nType=exec\n"
-        f"WorkingDirectory={systemd_quote(str(root))}\n"
+        # WorkingDirectory takes a literal path, not a quoted command argument.
+        # Quotes are part of the path here; only systemd specifiers need escaping.
+        f"WorkingDirectory={str(root).replace('%', '%%')}\n"
         f"ExecStart={' '.join(systemd_quote(str(item)) for item in command)}\n"
         "Restart=on-failure\nRestartSec=10\nTimeoutStopSec=120\n"
         "KillMode=control-group\nEnvironment=PYTHONUNBUFFERED=1\n\n"
@@ -364,6 +366,57 @@ REVISION_PROBE = """import sys
 from huggingface_hub import HfApi
 print(HfApi().model_info('baidu/Unlimited-OCR-2', revision=sys.argv[1]).sha)
 """
+CUDA_TOOLKIT_PROBE = """import sysconfig
+from pathlib import Path
+print(Path(sysconfig.get_path('purelib')) / 'nvidia' / 'cu13')
+"""
+
+
+def prepare_cuda_toolkit(root: Path, toolkit: Path) -> Path:
+    """Expose pip's CUDA 13 toolkit in the layout expected by SGLang's JIT."""
+    required = (
+        "bin/nvcc",
+        "bin/ptxas",
+        "include/cuda_runtime.h",
+        "include/crt/host_config.h",
+        "include/cccl",
+        "nvvm/bin/cicc",
+        "nvvm/libdevice",
+        "lib/libcudart.so.13",
+    )
+    missing = [name for name in required if not (toolkit / name).exists()]
+    if missing:
+        raise DeploymentError(
+            f"Incomplete NVIDIA CUDA 13 JIT toolkit in {toolkit}: {', '.join(missing)}; "
+            "repair the service environment's NVIDIA CUDA 13 packages and rerun deploy"
+        )
+
+    cuda = root / "cuda"
+    libraries = cuda / "lib64"
+    for directory in (cuda, libraries):
+        if directory.is_symlink():
+            raise DeploymentError(
+                f"Refusing to modify a linked CUDA directory: {directory}"
+            )
+        directory.mkdir(exist_ok=True)
+
+    def link(target: Path, path: Path) -> None:
+        if path.is_symlink():
+            if path.resolve() == target.resolve():
+                return
+            path.unlink()
+        elif path.exists():
+            raise DeploymentError(f"Refusing to replace a CUDA toolkit file: {path}")
+        path.symlink_to(target, target_is_directory=target.is_dir())
+
+    for name in ("bin", "include", "nvvm"):
+        link(toolkit / name, cuda / name)
+    for library in (toolkit / "lib").iterdir():
+        link(library, libraries / library.name)
+    # Wheels ship the SONAME, while the JIT linker requests -lcudart.
+    link(toolkit / "lib/libcudart.so.13", libraries / "libcudart.so")
+    link(libraries, cuda / "lib")
+    return cuda
 
 
 def install_runtime(args, root: Path, values: dict[str, str]) -> dict:
@@ -399,6 +452,8 @@ def install_runtime(args, root: Path, values: dict[str, str]) -> dict:
         ]
     )
     execute([uv, "pip", "check", "--python", python])
+    toolkit = execute([python, "-c", CUDA_TOOLKIT_PROBE], capture=True)
+    prepare_cuda_toolkit(root, Path(toolkit.stdout.strip()))
     installed = execute([python, "-c", VERSION_PROBE], capture=True)
     if json.loads(installed.stdout)["sglang"] != SGLANG_VERSION:
         raise DeploymentError(
@@ -407,7 +462,7 @@ def install_runtime(args, root: Path, values: dict[str, str]) -> dict:
     if not args.skip_gpu_check:
         execute(
             [python, "-c", GPU_PROBE],
-            env={**os.environ, "CUDA_VISIBLE_DEVICES": values["CUDA_VISIBLE_DEVICES"]},
+            env=launch_command(root, values)[1],
         )
     frozen = execute([uv, "pip", "freeze", "--python", python], capture=True)
     atomic_write(root / "installed-packages.txt", frozen.stdout)
@@ -462,6 +517,16 @@ def launch_command(
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         "PYTHONUNBUFFERED": "1",
     }
+    # Persist explicit toolkit choices in service.env; inherited shell settings
+    # must not select an older global toolkit instead of this service's CUDA 13.
+    cuda = Path(values.get("CUDA_HOME") or values.get("CUDA_PATH") or root / "cuda")
+    env["CUDA_HOME"] = env["CUDA_PATH"] = str(cuda)
+    env["PATH"] = os.pathsep.join(
+        [str(root / ".venv/bin"), str(cuda / "bin"), env.get("PATH", os.defpath)]
+    )
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(
+        part for part in (str(cuda / "lib64"), env.get("LD_LIBRARY_PATH")) if part
+    )
     command = [
         str(root / ".venv/bin/python"),
         "-m",
@@ -615,6 +680,10 @@ def dry_run(args, root, values):
     )
     print(
         f"Install SGLang {SGLANG_VERSION}, fastokens 0.3.2, PyMuPDF 1.27.2.2; run uv pip check."
+    )
+    print(
+        "Prepare a private CUDA 13 toolkit layout from the installed NVIDIA packages "
+        "for JIT compilation."
     )
     print(
         f"Download {MODEL_ID}, revision {args.model_revision or 'saved revision, or main for a new install'}."

@@ -31,6 +31,24 @@ def wheel(path, version=deploy.SGLANG_VERSION):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def cuda_toolkit(path):
+    for name in (
+        "bin/nvcc",
+        "bin/ptxas",
+        "include/cuda_runtime.h",
+        "include/crt/host_config.h",
+        "nvvm/bin/cicc",
+        "lib/libcudart.so.13",
+        "lib/libcudart_static.a",
+    ):
+        target = path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(name)
+    (path / "include/cccl").mkdir(exist_ok=True)
+    (path / "nvvm/libdevice").mkdir(exist_ok=True)
+    return path
+
+
 def test_standalone_dry_run_does_not_change_host_or_print_key(tmp_path):
     root = tmp_path / "new install"
     script = Path(deploy.__file__).resolve()
@@ -163,6 +181,10 @@ class FakeCommands:
             (binaries / "hf").touch()
         if deploy.VERSION_PROBE in command:
             output = json.dumps({"sglang": deploy.SGLANG_VERSION})
+        if deploy.CUDA_TOOLKIT_PROBE in command:
+            output = str(
+                cuda_toolkit(self.root / ".venv/lib/python3.10/site-packages/nvidia/cu13")
+            )
         if deploy.REVISION_PROBE in command:
             output = "b" * 40
         if "download" in command:
@@ -326,6 +348,89 @@ def test_launch_protocol_and_unit_keep_credentials_out_of_unit(tmp_path):
     assert "Type=exec" in unit and "KillMode=control-group" in unit
     assert "space and %% directory" in unit
     ast.parse(deploy.SMOKE_PROBE, feature_version=(3, 10))
+
+
+def test_private_cuda_toolkit_exposes_jit_linker_layout_without_changing_packages(
+    tmp_path,
+):
+    toolkit = cuda_toolkit(tmp_path / "site-packages/nvidia/cu13")
+    before = {
+        path.relative_to(toolkit): path.read_bytes()
+        for path in toolkit.rglob("*")
+        if path.is_file()
+    }
+    cuda = deploy.prepare_cuda_toolkit(tmp_path, toolkit)
+    # Both nvcc's profile and SGLang's -L$CUDA_HOME/lib64 -lcudart must work.
+    assert (cuda / "bin/nvcc").samefile(toolkit / "bin/nvcc")
+    assert (cuda / "include/cccl").samefile(toolkit / "include/cccl")
+    assert (cuda / "nvvm/libdevice").samefile(toolkit / "nvvm/libdevice")
+    assert (cuda / "lib64/libcudart.so").samefile(toolkit / "lib/libcudart.so.13")
+    assert (cuda / "lib/libcudart_static.a").samefile(toolkit / "lib/libcudart_static.a")
+    assert deploy.prepare_cuda_toolkit(tmp_path, toolkit) == cuda
+    assert before == {
+        path.relative_to(toolkit): path.read_bytes()
+        for path in toolkit.rglob("*")
+        if path.is_file()
+    }
+
+
+def test_incomplete_cuda_toolkit_fails_before_creating_private_layout(tmp_path):
+    toolkit = cuda_toolkit(tmp_path / "site-packages/nvidia/cu13")
+    (toolkit / "lib/libcudart.so.13").unlink()
+    with pytest.raises(deploy.DeploymentError, match="libcudart.so.13.*rerun deploy"):
+        deploy.prepare_cuda_toolkit(tmp_path, toolkit)
+    assert not (tmp_path / "cuda").exists()
+
+
+def test_launch_uses_service_cuda_instead_of_inherited_global_toolkit(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CUDA_HOME", "/usr/local/cuda-12.1")
+    monkeypatch.setenv("CUDA_PATH", "/usr/local/cuda-12.1")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/existing/libraries")
+    config = {**deploy.DEFAULTS, "OCR_API_KEY": "key"}
+    _, env = deploy.launch_command(tmp_path, config)
+    assert env["CUDA_HOME"] == env["CUDA_PATH"] == str(tmp_path / "cuda")
+    assert env["PATH"].split(":") == [
+        str(tmp_path / ".venv/bin"),
+        str(tmp_path / "cuda/bin"),
+        "/usr/bin",
+    ]
+    assert env["LD_LIBRARY_PATH"].split(":") == [
+        str(tmp_path / "cuda/lib64"),
+        "/existing/libraries",
+    ]
+    assert not (tmp_path / "cuda").exists()
+    # Explicit service.env settings still choose a different toolkit.
+    _, custom_env = deploy.launch_command(
+        tmp_path, {**config, "CUDA_PATH": "/custom/cuda13"}
+    )
+    assert custom_env["CUDA_HOME"] == custom_env["CUDA_PATH"] == "/custom/cuda13"
+    assert "/custom/cuda13/bin" in custom_env["PATH"].split(":")
+
+
+@pytest.mark.parametrize(
+    "directory,unit_directory",
+    [
+        ("service", "service"),
+        ("space and % directory", "space and %% directory"),
+    ],
+)
+def test_unit_working_directory_is_an_unquoted_literal_path(
+    tmp_path, directory, unit_directory
+):
+    root = tmp_path / directory
+    unit = deploy.service_unit(root)
+    working_directory = next(
+        line for line in unit.splitlines() if line.startswith("WorkingDirectory=")
+    )
+    assert working_directory == f"WorkingDirectory={tmp_path}/{unit_directory}"
+    # ExecStart has its own quoting rules and still identifies our managed unit.
+    assert "ExecStart=" + deploy.systemd_quote(str(root / ".venv/bin/python")) in unit
+    path = tmp_path / deploy.SERVICE
+    path.write_text(unit)
+    deploy.check_unit_owner(path, root)
 
 
 def test_runtime_lock_prevents_environment_changes(tmp_path, monkeypatch):
