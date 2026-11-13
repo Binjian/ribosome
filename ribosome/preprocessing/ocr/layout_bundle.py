@@ -162,6 +162,7 @@ def _stable_semantic_layout_projection(payload: Mapping[str, Any]) -> dict[str, 
                     "content": region.get("content"),
                     "error": region.get("error"),
                     "recovery": region.get("recovery"),
+                    **({"native": region["native"]} if "native" in region else {}),
                     "finish_reason": region.get("finish_reason"),
                 }
             )
@@ -182,7 +183,86 @@ def _stable_semantic_layout_projection(payload: Mapping[str, Any]) -> dict[str, 
         "layout_model": payload.get("layout_model"),
         "dpi": payload.get("dpi"),
         "pages": pages,
+        **({"native_merge_groups": payload["native"].get("merge_groups", [])} if payload.get("native") else {}),
     }
+
+def _native_merge_groups(
+    layout: Mapping[str, Any],
+) -> list[tuple[str, tuple[tuple[int, int], ...]]]:
+    """Validate optional native groups without changing physical region evidence."""
+    native = layout.get("native") or {}
+    if not isinstance(native, Mapping):
+        raise ValueError("native provenance must be an object")
+    regions = {
+        (page["page_number"], region["index"]): region
+        for page in layout.get("pages") or []
+        if isinstance(page, Mapping)
+        for region in page.get("regions") or []
+    }
+    positions = {key: position for position, key in enumerate(regions)}
+    used: set[tuple[int, int]] = set()
+    groups = []
+    for group in native.get("merge_groups") or []:
+        if not isinstance(group, Mapping) or group.get("kind") not in {"text", "table"}:
+            raise ValueError("invalid native merge group")
+        members = tuple(tuple(key) for key in group.get("members") or [])
+        if len(members) < 2 or any(
+            len(key) != 2
+            or any(type(value) is not int for value in key)
+            or key not in regions
+            or key in used
+            for key in members
+        ):
+            raise ValueError(
+                "native merge members must reference distinct existing regions"
+            )
+        if len(set(members)) != len(members) or list(members) != sorted(
+            members, key=positions.__getitem__
+        ):
+            raise ValueError("native merge members must follow document reading order")
+        kind = str(group["kind"])
+        if any(regions[key].get("task_type") != kind for key in members):
+            raise ValueError("native merge group contains incompatible region types")
+        used.update(members)
+        groups.append((kind, members))
+    return groups
+
+
+def _merge_native_content(contents: Sequence[str], kind: str) -> str:
+    """Join current fragments, removing repeated leading HTML table headers."""
+    fragments = [value.strip() for value in contents if value.strip()]
+    if kind != "table":
+        return "".join(fragments)
+    if len(fragments) < 2:
+        return fragments[0] if fragments else ""
+    row_pattern = re.compile(r"<tr\b[^>]*>.*?</tr>", re.I | re.S)
+    rows = row_pattern.findall(fragments[0])
+    if not rows:
+        return "\n\n".join(fragments)
+
+    def key(row: str) -> tuple[int, str]:
+        text = unicodedata.normalize(
+            "NFKC", html.unescape(re.sub(r"<[^>]+>", " ", row))
+        )
+        return len(re.findall(r"<t[hd]\b", row, re.I)), "".join(text.split()).casefold()
+
+    headers = [key(row) for row in rows[:5]]
+    extras = []
+    for fragment in fragments[1:]:
+        incoming = row_pattern.findall(fragment)
+        if not incoming:
+            extras.append(fragment)
+            continue
+        count = 0
+        for row, header in zip(incoming[:5], headers):
+            if key(row) != header:
+                break
+            count += 1
+        rows.extend(incoming[count:])
+    opening = re.search(r"<table\b[^>]*>", fragments[0], re.I)
+    table = (opening.group() if opening else "<table>") + "".join(rows) + "</table>"
+    return "\n\n".join([table, *extras])
+
 
 # %% ../../../nbs/03.preprocessing.ocr.layout_bundle.ipynb #3
 ValidationSeverity = Literal["warning", "error"]
@@ -683,6 +763,11 @@ class LayoutBundleValidator:
 
         if observed_page_numbers != list(range(1, len(observed_page_numbers) + 1)):
             issues.append(BundleValidationIssue("page_number_gap", "page numbers are not contiguous from 1"))
+
+        try:
+            _native_merge_groups(payload)
+        except (ValueError, TypeError, KeyError) as error:
+            issues.append(BundleValidationIssue("invalid_native_merge_groups", str(error)))
 
         markdown = paths.markdown_path.read_text(encoding="utf-8")
         markdown_page_numbers = [int(match.group("page")) for match in _PAGE_MARKER_RE.finditer(markdown)]
@@ -1356,7 +1441,7 @@ class LayoutHierarchyBuilder:
         repeated = {text for text, pages in by_text_pages.items() if len(pages) >= threshold}
         for region in document.regions:
             normalized = _normalized_compare_text(region.canonical_text)
-            region.is_boilerplate = region.label in self.boilerplate_labels or bool(normalized and normalized in repeated)
+            region.is_boilerplate = region.label in self.boilerplate_labels or bool(not document.raw_layout.get("native") and normalized and normalized in repeated)
 
     @staticmethod
     def _summary_text(region: LayoutRegion) -> str:
@@ -1404,7 +1489,8 @@ class LayoutHierarchyBuilder:
 
     def build(self, document: LayoutDocument) -> tuple[LayoutSection, ...]:
         self._mark_boilerplate(document)
-        self._mark_nested_figures(document)
+        if not document.raw_layout.get("native"):
+            self._mark_nested_figures(document)
         root = LayoutSection(
             parent_id=f"{document.document_id}:section:root",
             document_id=document.document_id,
@@ -1443,7 +1529,27 @@ class LayoutHierarchyBuilder:
                 sections.append(toc_section)
                 sections_by_id[toc_section.parent_id] = toc_section
                 current = toc_section
-            heading = self._heading(region)
+            native_level = (region.provenance.get("native") or {}).get("heading_level")
+            if "native" in region.provenance and region.label in {"paragraph_title", "title", "doc_title"}:
+                level = min(6, max(1, native_level or 1))
+                for stale_level in [depth for depth in active if depth >= level]:
+                    active.pop(stale_level, None)
+                parent = active[max(active)]
+                title = _plain_markdown(region.canonical_text).strip()
+                section_path = " > ".join([*(section.title for depth, section in sorted(active.items()) if depth), title])
+                current = LayoutSection(
+                    parent_id=f"{document.document_id}:section:native:p{region.page_number}r{region.region_index}",
+                    document_id=document.document_id, number=None, title=title, level=level,
+                    section_path=section_path, parent_section_id=parent.parent_id,
+                    page_start=region.page_number, page_end=region.page_number,
+                )
+                sections.append(current)
+                sections_by_id[current.parent_id] = current
+                active[level] = current
+                toc_section = None
+                heading = None
+            else:
+                heading = self._heading(region)
             if heading is not None:
                 number, title = heading
                 level = number.count(".") + 1
@@ -1860,15 +1966,18 @@ class LayoutChunker:
         document: LayoutDocument,
         region: LayoutRegion,
         sequence: int,
+        members: Sequence[LayoutRegion] | None = None,
     ) -> tuple[list[LayoutRetrievalRecord], int]:
-        normalized = normalize_html_table(region.canonical_text)
+        evidence = list(members) if members is not None else [region]
+        content = _merge_native_content([item.canonical_text for item in evidence], "table")
+        normalized = normalize_html_table(content)
         if not normalized.rows or len(normalized.text) <= self.max_table_characters:
-            return [self._make_record(document, [region], exact_text=normalized.text, content_type="toc" if region.is_toc else "table_rows", sequence=sequence)], sequence + 1
+            return [self._make_record(document, evidence, exact_text=normalized.text, content_type="toc" if region.is_toc else "table_rows", sequence=sequence)], sequence + 1
         if len(normalized.rows) == 1:
             records = [
                 self._make_record(
                     document,
-                    [region],
+                    evidence,
                     exact_text=part,
                     content_type="toc" if region.is_toc else "table_rows",
                     sequence=sequence + offset,
@@ -1893,7 +2002,7 @@ class LayoutChunker:
         for group in groups:
             rows = [header, *group]
             text = "\n".join(" | ".join(cell for cell in row if cell) for row in rows)
-            records.append(self._make_record(document, [region], exact_text=text, content_type="toc" if region.is_toc else "table_rows", sequence=sequence))
+            records.append(self._make_record(document, evidence, exact_text=text, content_type="toc" if region.is_toc else "table_rows", sequence=sequence))
             sequence += 1
         return records, sequence
 
@@ -1917,6 +2026,8 @@ class LayoutChunker:
         prose_size = 0
         sequence = 1
         regions = list(document.regions)
+        by_key = {region.key: region for region in regions}
+        native_groups = {key: (kind, members) for kind, members in _native_merge_groups(document.raw_layout) for key in members}
 
         def flush_prose() -> None:
             nonlocal prose_group, prose_size, sequence
@@ -1930,6 +2041,22 @@ class LayoutChunker:
             prose_group, prose_size = [], 0
 
         for position, region in enumerate(regions):
+            native_group = native_groups.get(region.key)
+            if native_group is not None:
+                kind, keys = native_group
+                if region.key != keys[0]:
+                    continue
+                flush_prose()
+                members = [by_key[key] for key in keys]
+                if kind == "table":
+                    table_records, sequence = self._table_records(document, region, sequence, members=members)
+                    records.extend(table_records)
+                else:
+                    text = _merge_native_content([member.canonical_text for member in members], "text")
+                    for part in self._split_text(text, self.max_prose_characters):
+                        records.append(self._make_record(document, members, exact_text=part, content_type="prose", sequence=sequence))
+                        sequence += 1
+                continue
             if region.is_boilerplate:
                 continue
             if region.task_type == "table":
