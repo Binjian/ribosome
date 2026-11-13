@@ -383,10 +383,13 @@ UNLIMITED_OCR_MAX_CONCURRENCY=1
 UNLIMITED_OCR_PAGE_CONCURRENCY=1
 ```
 
-The service API key is separate from any Hugging Face download token. Replace the
-old v1 model value rather than adding a duplicate entry. Restart an existing
-notebook kernel after editing `.env`; already-exported process variables take
-precedence over this project's `load_dotenv(..., override=False)`.
+The service API key is separate from any Hugging Face download token. Copy the
+key and v2 model setting from the deployment's private `client.env`, replacing
+the old entries rather than adding duplicates. The notebook configuration cell
+rereads connection settings from `.env` and prefers them over inherited kernel
+values; rerun that cell and the model-list cell after editing the file. Library
+callers still use `load_dotenv(..., override=False)`, so refresh their process
+environment or restart them after changing `.env`.
 
 This test creates one synthetic image under a temporary directory and calls the
 same native path as the notebook. It does not discover or rebuild your corpus:
