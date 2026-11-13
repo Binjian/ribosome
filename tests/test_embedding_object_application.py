@@ -48,8 +48,8 @@ def test_notebook_is_valid_offline_and_all_cells_compile():
             assert '# | notest' in cell.source
 
 
-@pytest.mark.parametrize('use_tasks', [True, False])
-def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path, monkeypatch, use_tasks):
+@pytest.mark.parametrize('mode', ['object', 'task', 'remaining'])
+def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path, monkeypatch, mode):
     (tmp_path / 'pyproject.toml').write_text('')
     (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://172.27.74.49:11434,http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -58,19 +58,26 @@ def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path
     monkeypatch.setattr(chromadb, 'PersistentClient', lambda **kw: pytest.fail('Configuration opened an index'))
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path), 'OLLAMA_EMBED_MODEL': 'override-model'}, clear=True):
         namespace = {}
-        source = code_with('PROJ_ROOT = resolve_project_root()').replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
+        source = code_with('PROJ_ROOT = resolve_project_root()').replace('EMBEDDING_MODE = "remaining"', f'EMBEDDING_MODE = "{mode}"')
         exec(compile(source, str(NOTEBOOK), 'exec'), namespace)
         assert namespace['EMBED_MODEL'] == 'override-model'
         assert namespace['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434']
         assert namespace['EMBEDDING_CONCURRENCY'] == 4
         assert namespace['headers'] == {'Authorization': 'Bearer fake-secret'}
         assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': ['http://172.27.74.49:11434']}
-        assert namespace['INPUT_DIRS'] == [tmp_path / 'assets/code-docs.4.0/.md', tmp_path / 'assets/code-docs.5.0/.md']
+        expected_inputs = ([tmp_path / 'assets/md.json.semantics.remaining'] if mode == 'remaining' else
+                           [tmp_path / 'assets/code-docs.4.0/.md', tmp_path / 'assets/code-docs.5.0/.md'])
+        assert namespace['INPUT_DIRS'] == expected_inputs
+        use_tasks = mode == 'task'
         directory = 'task_embeddings' if use_tasks else 'object_embeddings'
+        index_root = tmp_path / 'db' / directory
+        if mode == 'remaining':
+            index_root /= 'md.json.semantics.remaining'
+        assert namespace['EMBEDDING_MODE'] == mode
         assert namespace['USE_TASKS'] is use_tasks
         assert namespace['INPUT_PATTERN'] == ('*_tasks.json' if use_tasks else '*_semantics.json')
         assert namespace['COLLECTION_NAME'] == ('task_embeddings' if use_tasks else 'object_summaries')
-        assert namespace['CATALOG_PATH'] == tmp_path / f'db/{directory}/override-model-172.27.74.49-11434/catalog.sqlite3'
+        assert namespace['CATALOG_PATH'] == index_root / 'override-model-172.27.74.49-11434/catalog.sqlite3'
         assert not namespace['INDEX_DIR'].exists()
 
 
@@ -223,7 +230,7 @@ def test_preflight_checks_pool_and_closes_on_error(tmp_path, failure):
     assert not (tmp_path / 'db').exists()
 
 
-def test_dotenv_hosts_do_not_change_default_task_configuration(tmp_path, monkeypatch):
+def test_dotenv_hosts_do_not_change_default_remaining_configuration(tmp_path, monkeypatch):
     (tmp_path / 'pyproject.toml').write_text('')
     (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://172.27.74.49:11434,http://172.27.74.16:11434\n')
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -236,10 +243,11 @@ def test_dotenv_hosts_do_not_change_default_task_configuration(tmp_path, monkeyp
         assert app['REQUEST_RETRIES'] == 2
         assert app['QUARANTINE_SECONDS'] == 30
         assert app['HEALTH_TIMEOUT'] == 60
-        assert app['USE_TASKS'] is True
-        assert app['INPUT_PATTERN'] == '*_tasks.json'
-        assert app['COLLECTION_NAME'] == 'task_embeddings'
-        assert app['INDEX_DIR'] == tmp_path / 'db/task_embeddings/qwen3-embedding-8b-172.27.74.49-11434'
+        assert app['EMBEDDING_MODE'] == 'remaining'
+        assert app['USE_TASKS'] is False
+        assert app['INPUT_PATTERN'] == '*_semantics.json'
+        assert app['COLLECTION_NAME'] == 'object_summaries'
+        assert app['INDEX_DIR'] == tmp_path / 'db/object_embeddings/md.json.semantics.remaining/qwen3-embedding-8b-172.27.74.49-11434'
         assert app['FORCE_REBUILD'] is False
         assert not app['INDEX_DIR'].exists()
 
@@ -259,16 +267,18 @@ def test_modes_create_separate_collections_and_catalogs_and_resume(tmp_path):
     setup = code_with('object_index = ObjectEmbeddingIndex(').split('\nresults = []', 1)[0]
     snapshots = []
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
-        for use_tasks, kind, name in [(False, 'table', 'object_summaries'), (True, 'task', 'task_embeddings')]:
+        for mode, kind, name in [('object', 'table', 'object_summaries'),
+                                 ('task', 'task', 'task_embeddings'),
+                                 ('remaining', 'table', 'object_summaries')]:
             app = {}
-            config = code_with('PROJ_ROOT = resolve_project_root()').replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
+            config = code_with('PROJ_ROOT = resolve_project_root()').replace('EMBEDDING_MODE = "remaining"', f'EMBEDDING_MODE = "{mode}"')
             exec(compile(config, str(NOTEBOOK), 'exec'), app)
             exec(compile(code_with('def discover_semantics'), str(NOTEBOOK), 'exec'), app)
             provider = Provider()
             app['ollama_client'] = provider
             corpora = app['discover_semantics']([folder], pattern=app['INPUT_PATTERN'])
             assert len(corpora[0][1]) == 1
-            assert corpora[0][1][0].name.endswith('_tasks.json' if use_tasks else '_semantics.json')
+            assert corpora[0][1][0].name.endswith('_tasks.json' if mode == 'task' else '_semantics.json')
             exec(compile(setup, str(NOTEBOOK), 'exec'), app)
             index = app['object_index']
             try:
@@ -291,24 +301,27 @@ def test_modes_create_separate_collections_and_catalogs_and_resume(tmp_path):
                 assert len(provider.calls) == calls
             finally:
                 index.close()
-            # Creating the second mode must not write the first mode's catalog.
+            # Creating another mode must not write any previous mode's catalog.
             for catalog, digest, collection in snapshots:
                 assert hashlib.sha256(catalog.read_bytes()).hexdigest() == digest
                 assert collection.count() == 3
             snapshots.append((index.catalog_path, hashlib.sha256(index.catalog_path.read_bytes()).hexdigest(), index.collection))
-    assert snapshots[0][0] != snapshots[1][0]
-    assert snapshots[0][2].id != snapshots[1][2].id
+    assert len({catalog for catalog, _, _ in snapshots}) == 3
+    assert len({collection.id for _, _, collection in snapshots}) == 3
     assert {file: file.read_bytes() for file in original_sources} == original_sources
 
 
-@pytest.mark.parametrize('use_tasks', [True, False])
-def test_force_rebuild_uses_a_fresh_directory_only_for_selected_mode(tmp_path, use_tasks):
+@pytest.mark.parametrize('mode', ['object', 'task', 'remaining'])
+def test_force_rebuild_uses_a_fresh_directory_only_for_selected_mode(tmp_path, mode):
     (tmp_path / 'pyproject.toml').write_text('')
     source = code_with('PROJ_ROOT = resolve_project_root()')
-    source = source.replace('USE_TASKS = True', f'USE_TASKS = {use_tasks}')
+    source = source.replace('EMBEDDING_MODE = "remaining"', f'EMBEDDING_MODE = "{mode}"')
     source = source.replace('FORCE_REBUILD = False', 'FORCE_REBUILD = True')
-    directory = 'task_embeddings' if use_tasks else 'object_embeddings'
-    old = tmp_path / f'db/{directory}/qwen3-embedding-8b-172.27.74.49-11434/catalog.sqlite3'
+    directory = 'task_embeddings' if mode == 'task' else 'object_embeddings'
+    index_root = tmp_path / 'db' / directory
+    if mode == 'remaining':
+        index_root /= 'md.json.semantics.remaining'
+    old = index_root / 'qwen3-embedding-8b-172.27.74.49-11434/catalog.sqlite3'
     old.parent.mkdir(parents=True)
     old.write_bytes(b'previous index')
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
