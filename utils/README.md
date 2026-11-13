@@ -3,6 +3,19 @@ For standalone or llm-backend package exports, use `uv run ribosome-prepare
 [preparation profiles](../docs/preparation-profiles.md) for defaults, environment
 configuration and packaging.
 
+To copy source PDFs corresponding to `assets/md.json.semantics.remaining` into
+`assets/pdf.remaining`, preserving the source folders:
+
+```sh
+python utils/copy_remaining_pdfs.py --dry-run
+python utils/copy_remaining_pdfs.py
+```
+
+The script matches relative paths, including the extra document folder created
+by Markdown conversion. Documents without a corresponding PDF are reported and
+skipped. Reruns reuse identical copies and reject conflicting destination files.
+Use `--markdown-dir`, `--pdf-dir`, or `--output-dir` to select other directories.
+
 These Python scripts preserve the notebook cell IDs and metadata while applying
 this embedding correctness change. They resolve the project root from their own
 location and can run from any working directory:
