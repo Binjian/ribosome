@@ -49,7 +49,14 @@ def test_notebook_is_valid_offline_and_all_cells_compile():
 
 
 @pytest.mark.parametrize('mode', ['object', 'task', 'remaining'])
-def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize('server_mode,expected_hosts,host_directory', [
+    ('16', ['http://172.27.74.16:11434'], '172.27.74.16-11434'),
+    ('49', ['http://172.27.74.49:11434'], '172.27.74.49-11434'),
+    ('both', ['http://172.27.74.16:11434', 'http://172.27.74.49:11434'],
+     '172.27.74.16-11434--172.27.74.49-11434'),
+])
+def test_configuration_reads_env_with_overrides_without_opening_clients(
+        tmp_path, monkeypatch, mode, server_mode, expected_hosts, host_directory):
     (tmp_path / 'pyproject.toml').write_text('')
     (tmp_path / '.env').write_text('OLLAMA_EMBED_HOSTS=http://172.27.74.49:11434,http://from-file:11434\nOLLAMA_EMBED_MODEL=file-model\nOLLAMA_API_KEY=fake-secret\n')
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -59,12 +66,14 @@ def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path), 'OLLAMA_EMBED_MODEL': 'override-model'}, clear=True):
         namespace = {}
         source = code_with('PROJ_ROOT = resolve_project_root()').replace('EMBEDDING_MODE = "remaining"', f'EMBEDDING_MODE = "{mode}"')
+        source = source.replace('OLLAMA_SERVER_MODE = "both"', f'OLLAMA_SERVER_MODE = "{server_mode}"')
         exec(compile(source, str(NOTEBOOK), 'exec'), namespace)
         assert namespace['EMBED_MODEL'] == 'override-model'
-        assert namespace['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434']
-        assert namespace['EMBEDDING_CONCURRENCY'] == 4
+        assert namespace['OLLAMA_SERVER_MODE'] == server_mode
+        assert namespace['OLLAMA_HOSTS'] == expected_hosts
+        assert namespace['EMBEDDING_CONCURRENCY'] == 4 * len(expected_hosts)
         assert namespace['headers'] == {'Authorization': 'Bearer fake-secret'}
-        assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': ['http://172.27.74.49:11434']}
+        assert namespace['EMBEDDING_CONFIG'] == {'provider': 'ollama-pool', 'hosts': expected_hosts}
         expected_inputs = ([tmp_path / 'assets/md.json.semantics.remaining'] if mode == 'remaining' else
                            [tmp_path / 'assets/code-docs.4.0/.md', tmp_path / 'assets/code-docs.5.0/.md'])
         assert namespace['INPUT_DIRS'] == expected_inputs
@@ -77,7 +86,7 @@ def test_configuration_reads_env_with_overrides_without_opening_clients(tmp_path
         assert namespace['USE_TASKS'] is use_tasks
         assert namespace['INPUT_PATTERN'] == ('*_tasks.json' if use_tasks else '*_semantics.json')
         assert namespace['COLLECTION_NAME'] == ('task_embeddings' if use_tasks else 'object_summaries')
-        assert namespace['CATALOG_PATH'] == index_root / 'override-model-172.27.74.49-11434/catalog.sqlite3'
+        assert namespace['CATALOG_PATH'] == index_root / f'override-model-{host_directory}/catalog.sqlite3'
         assert not namespace['INDEX_DIR'].exists()
 
 
@@ -238,8 +247,9 @@ def test_dotenv_hosts_do_not_change_default_remaining_configuration(tmp_path, mo
         app = {}
         exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
         assert app['EMBED_MODEL'] == 'qwen3-embedding:8b'
-        assert app['OLLAMA_HOSTS'] == ['http://172.27.74.49:11434']
-        assert app['EMBEDDING_CONCURRENCY'] == 4
+        assert app['OLLAMA_SERVER_MODE'] == 'both'
+        assert app['OLLAMA_HOSTS'] == ['http://172.27.74.16:11434', 'http://172.27.74.49:11434']
+        assert app['EMBEDDING_CONCURRENCY'] == 8
         assert app['REQUEST_RETRIES'] == 2
         assert app['QUARANTINE_SECONDS'] == 30
         assert app['HEALTH_TIMEOUT'] == 60
@@ -247,7 +257,7 @@ def test_dotenv_hosts_do_not_change_default_remaining_configuration(tmp_path, mo
         assert app['USE_TASKS'] is False
         assert app['INPUT_PATTERN'] == '*_semantics.json'
         assert app['COLLECTION_NAME'] == 'object_summaries'
-        assert app['INDEX_DIR'] == tmp_path / 'db/object_embeddings/md.json.semantics.remaining/qwen3-embedding-8b-172.27.74.49-11434'
+        assert app['INDEX_DIR'] == tmp_path / 'db/object_embeddings/md.json.semantics.remaining/qwen3-embedding-8b-172.27.74.16-11434--172.27.74.49-11434'
         assert app['FORCE_REBUILD'] is False
         assert not app['INDEX_DIR'].exists()
 
@@ -321,14 +331,14 @@ def test_force_rebuild_uses_a_fresh_directory_only_for_selected_mode(tmp_path, m
     index_root = tmp_path / 'db' / directory
     if mode == 'remaining':
         index_root /= 'md.json.semantics.remaining'
-    old = index_root / 'qwen3-embedding-8b-172.27.74.49-11434/catalog.sqlite3'
+    old = index_root / 'qwen3-embedding-8b-172.27.74.16-11434--172.27.74.49-11434/catalog.sqlite3'
     old.parent.mkdir(parents=True)
     old.write_bytes(b'previous index')
     with patch.dict(os.environ, {'PROJ_ROOT': str(tmp_path)}, clear=True):
         app = {}
         exec(compile(source, str(NOTEBOOK), 'exec'), app)
     assert app['INDEX_DIR'].parent == old.parent.parent
-    assert app['INDEX_DIR'].name.startswith('qwen3-embedding-8b-172.27.74.49-11434-')
+    assert app['INDEX_DIR'].name.startswith('qwen3-embedding-8b-172.27.74.16-11434--172.27.74.49-11434-')
     assert app['CATALOG_PATH'] == app['INDEX_DIR'] / 'catalog.sqlite3'
     assert not app['INDEX_DIR'].exists()
     assert old.read_bytes() == b'previous index'
@@ -342,7 +352,7 @@ def test_host_environment_overrides_cannot_change_embedding_or_comparison_server
         app = {}
         exec(compile(code_with('PROJ_ROOT = resolve_project_root()'), str(NOTEBOOK), 'exec'), app)
         exec(compile(code_with('RAG_HOST ='), str(NOTEBOOK), 'exec'), app)
-    assert app['OLLAMA_HOSTS'] == app['HOSTS'] == ['http://172.27.74.49:11434']
+    assert app['OLLAMA_HOSTS'] == app['HOSTS'] == ['http://172.27.74.16:11434', 'http://172.27.74.49:11434']
     assert app['RAG_HOST'] == 'http://172.27.74.16:11434'
 
 
