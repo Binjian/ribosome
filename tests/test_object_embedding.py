@@ -145,6 +145,54 @@ def test_paths_ids_and_duplicate_summaries(tmp_path):
     assert collect_object_records(tree, tmp_path / 'a_semantics.json')[1].id == first[1].id
 
 
+def ordered_prose_tree(start):
+    """Saved semantic ASTs can retain string starts from HTML ordered lists."""
+    def plain(text):
+        return {'t': 'Plain', 'c': [{'t': 'Str', 'c': text, 's': 'GENERATED_INLINE'}]}
+
+    nested = {'t': 'OrderedList', 'c': [
+        ['3', {'t': 'Decimal'}, {'t': 'Period'}], [[plain('Nested raw')]],
+    ]}
+    ordered = {'t': 'OrderedList', 's': 'GENERATED_LIST', 'c': [
+        [start, {'t': 'Decimal'}, {'t': 'Period'}],
+        [[plain('First raw'), nested], [plain('Second raw')]],
+    ]}
+    return {'summary': 'Document summary', 'objects': [record(7, 'figure', 'Figure summary')],
+            'blocks': [{'t': 'Section', 's': 'GENERATED_SECTION', 'c': [
+                {'t': 'Header', 'c': [1, ['', [], []], [{'t': 'Str', 'c': 'Setup'}]]},
+                {'t': 'Content', 'c': [ordered]},
+            ]}]}
+
+
+@pytest.mark.parametrize('start', [1, '1', 21, '21', 0, '0', -2, '-2', ' 21 '])
+def test_prose_ordered_lists_accept_string_starts_without_changing_source(tmp_path, start):
+    tree = ordered_prose_tree(start)
+    before = copy.deepcopy(tree)
+    raw = json.dumps(tree, ensure_ascii=False, indent=2)
+    records = collect_object_records(tree, tmp_path / 'ordered_semantics.json', raw_json=raw)
+    passage = next(value for value in records if value.type == 'prose')
+    first = int(start)
+    assert passage.content == f'{first}. First raw\n\n3. Nested raw\n{first + 1}. Second raw'
+    assert 'GENERATED_' not in passage.content + passage.summary
+    assert passage.section_headings == ['Setup']
+    assert records[0].content == raw and tree == before
+    normalized = copy.deepcopy(tree)
+    normalized['blocks'][0]['c'][1]['c'][0]['c'][0][0] = first
+    normalized_records = collect_object_records(normalized, tmp_path / 'ordered_semantics.json')
+    assert [(value.id, value.summary, value.content) for value in normalized_records[1:]] == [
+        (value.id, value.summary, value.content) for value in records[1:]
+    ]
+
+
+@pytest.mark.parametrize('start', ['bad', '1.5', '', True, 1.5, None])
+def test_invalid_ordered_list_starts_report_integer_requirement(tmp_path, start):
+    tree = ordered_prose_tree(start)
+    before = copy.deepcopy(tree)
+    with pytest.raises(ValueError, match='OrderedList start must be an integer'):
+        collect_object_records(tree, tmp_path / 'ordered_semantics.json')
+    assert tree == before
+
+
 def test_row_child_ids_follow_column_order_when_only_later_cells_have_children(tmp_path):
     cells = [record(f'1.row.1.cell.{i}', 'table_cell', f'Cell {i}', column=i) for i in range(1, 4)]
     row = record('1.row.1', 'table_row', 'Row', children=[cells[2]], cells=copy.deepcopy(cells))

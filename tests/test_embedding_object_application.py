@@ -12,7 +12,7 @@ import pytest
 from nbformat import read, validate
 
 from ribosome.core.dom.embedding.object import IndexingResult, ObjectEmbeddingIndex
-from test_object_embedding import Provider, record
+from test_object_embedding import Provider, ordered_prose_tree, record
 
 
 NOTEBOOK = Path('nbs/05.application.embedding.object.ipynb')
@@ -165,6 +165,36 @@ def test_batch_indexes_all_valid_files_reports_failures_and_resumes(tmp_path):
             assert [row['type'] for row in preview] == ['document', 'figure']
             assert preview[1]['parent_id'] == preview[0]['id']
         assert {file: file.read_bytes() for file in before} == before
+    finally:
+        client.delete_collection(collection.name)
+
+
+def test_batch_indexes_legacy_ordered_lists_and_reuses_completed_vectors(tmp_path):
+    namespace = helpers()
+    source = tmp_path / 'legacy_semantics.json'
+    source.write_text(json.dumps(ordered_prose_tree('21'), ensure_ascii=False))
+    before = source.read_bytes()
+    corpora = namespace['discover_semantics']([tmp_path])
+    client = chromadb.EphemeralClient()
+    collection = client.create_collection('application-legacy-ordered-list',
+        metadata={'hnsw:space': 'cosine'}, embedding_function=None)
+    provider = Provider()
+    try:
+        with ObjectEmbeddingIndex(tmp_path / 'catalog.sqlite3', collection=collection,
+                                  llm_client=provider) as index:
+            rows = []
+            asyncio.run(namespace['embed_corpora'](corpora, index, rows, progress=False))
+            assert [row['status'] for row in rows] == ['indexed']
+            requested = [summary for _, summary in provider.calls]
+            assert any('21. First raw' in summary and '22. Second raw' in summary for summary in requested)
+            generation = rows[0]['generation_id']
+            count = len(provider.calls)
+            repeated = []
+            asyncio.run(namespace['embed_corpora'](corpora, index, repeated, progress=False))
+            assert [row['status'] for row in repeated] == ['unchanged']
+            assert repeated[0]['generation_id'] == generation
+            assert len(provider.calls) == count
+            assert source.read_bytes() == before
     finally:
         client.delete_collection(collection.name)
 
