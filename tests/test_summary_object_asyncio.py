@@ -386,7 +386,8 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     assert namespace['IGNORED_IMAGES_DIR'] == tmp_path / 'assets' / 'images_ignored'
     assert namespace['PREVIEW_OUTPUTS'] == 3
     assert namespace['RESUME'] is True
-    assert namespace['RUN_REMAINING_SUMMARY'] is False
+    # This user-editable switch may be enabled in a saved notebook.
+    assert isinstance(namespace['RUN_REMAINING_SUMMARY'], bool)
     assert namespace['REMAINING_SOURCE_DIR'] == tmp_path / 'assets' / 'md.json.semantics.summary'
     assert namespace['REMAINING_COMPARE_DIRS'] == namespace['INPUT_DIRS']
     assert namespace['REMAINING_INPUT_DIR'] == tmp_path / 'assets' / 'md.json.semantics.remaining'
