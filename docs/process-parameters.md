@@ -264,6 +264,7 @@ milliseconds. Infinite waits such as `T=-1` are outside this interface.
 | `resources` | Deduplicated registers, positions, frames, and I/O used by the program |
 | `unbounded_banks` | Used banks with no caller-supplied index bounds |
 | `validation` | Syntax-check result for the selected parser |
+| `parsed_parameters` | Parser-derived process instructions, named operands, and original-source positions |
 | `application_profile` | Selected native application profile, if any |
 | `domain_diagnostics` | Documented application diagnostics |
 
@@ -271,3 +272,44 @@ Invalid specifications or generated source raise `ValueError` (including
 Pydantic `ValidationError`) instead of returning an invalid program. The output
 can be inspected or passed to existing validation workflows; the generator
 does not execute, upload, or publish it.
+
+## Inspect parameters parsed from source
+
+The generator calls `treesitter4robotcode.dialects.parse_process_parameters` so
+its result includes the operands actually present in the generated program. The
+[complete code-generation notebook](../nbs/05.application.code_generation.ipynb)
+also records this inventory for model candidates and includes the reference
+program's parsed operands in its generation prompt.
+
+```python
+from treesitter4robotcode.dialects import parse_process_parameters
+
+parsed = parse_process_parameters(
+    "NOP\nSET R[3] 125.5\nMOVL P[2] V = R[3] ACC = 60 FINE\nEND",
+    "rc5",
+)
+assert parsed["valid"]
+motion = next(item for item in parsed["instructions"] if item["kind"] == "motion")
+assert motion["fields"]["target"][0]["text"] == "P[2]"
+print(motion["fields"])
+```
+
+The report has `dialect`, `valid`, `diagnostics`, and `instructions`. Recognized
+instructions include bindings, frame selections, motion, output, input waits,
+and native RC5 stud initialization, welding, and process checks. Each record has
+its grammar node `type`, original `text`, one-based `start`/`end` source
+locations, and named `fields`. Positions use UTF-8 byte columns and exclusive
+ends. Field values are always lists, preserving repeated parameters; nested
+assignment fields preserve their own values and locations.
+
+Records follow source order, including nested instructions. They are a partial
+inventory of recognized process instructions, not a control-flow or execution
+model. Registers and expressions remain source operands rather than resolved
+runtime values. A `SET R[10] 120` assignment alone cannot identify current,
+voltage, or units; that meaning remains in the caller's process specification.
+Invalid syntax returns diagnostics and an empty instruction inventory.
+
+After updating the grammars, rebuild/reinstall the native `tree-sitter-siasun`
+package and refresh the exported `treesitter4robotcode.dialects` and Ribosome
+modules before starting a new notebook kernel. This keeps named parser fields
+and notebook extraction in sync.

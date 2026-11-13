@@ -102,3 +102,61 @@ assert not any(name == 'llm_backend' or name.startswith('llm_backend.') for name
 print('tutorial run-all passed')
 """, TUTORIAL)
     assert result.stdout.strip().endswith("tutorial run-all passed")
+
+
+def test_complete_codegen_notebook_records_candidate_parameters_offline(tmp_path):
+    backend = ROOT.parents[1]
+    if not (backend / "src/llm_backend/process_parameters.py").is_file():
+        pytest.skip("complete code-generation example uses the backend checkout")
+    script = """
+import contextlib
+import io
+import json
+import os
+from pathlib import Path
+import socket
+import sys
+
+os.environ['IPYTHONDIR'] = sys.argv[2]
+os.environ['LLM_BACKEND_ROOT'] = sys.argv[1]
+os.environ['CODEGEN_OUTPUT_DIR'] = str(Path(sys.argv[2]) / 'artifacts')
+
+def no_network(*args, **kwargs):
+    raise AssertionError('Default notebook execution must remain offline')
+
+socket.socket.connect = no_network
+socket.create_connection = no_network
+from IPython.core.interactiveshell import InteractiveShell
+
+shell = InteractiveShell.instance()
+notebook = json.loads((Path(sys.argv[1]) / 'vendors/ribosome/nbs/05.application.code_generation.ipynb').read_text())
+for index, cell in enumerate(notebook['cells']):
+    if cell['cell_type'] != 'code':
+        continue
+    source = ''.join(cell['source']).replace('WRITE_ARTIFACTS = True', 'WRITE_ARTIFACTS = False')
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        result = shell.run_cell(source, store_history=False)
+    if result.error_before_exec or result.error_in_exec:
+        raise AssertionError(f'Cell {index} failed: {output.getvalue()}')
+
+assert shell.user_ns['RUN_LLM_GENERATION'] is False
+assert shell.user_ns['RUN_LEAN_VALIDATION'] is False
+assert shell.user_ns['WRITE_ARTIFACTS'] is False
+assert shell.user_ns['artifact_paths'] == []
+assert not (Path(sys.argv[2]) / 'artifacts').exists()
+reports = shell.user_ns['validation_reports']
+assert set(reports) == {'transfer_rc4', 'transfer_rc5', 'stud_weld_rc5'}
+for name, report in reports.items():
+    assert report['valid'], (name, report)
+    assert report['parsed_parameters']['valid']
+    assert report['parsed_parameters']['instructions']
+    expected = shell.user_ns['examples'][name][1].parsed_parameters
+    assert report['parsed_parameters'] == expected
+print('complete code-generation notebook passed')
+"""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", script, str(backend), str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.strip().endswith("complete code-generation notebook passed")
