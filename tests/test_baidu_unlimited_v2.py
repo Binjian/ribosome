@@ -531,3 +531,95 @@ def test_openai_client_serializes_v2_payload_and_reads_sse():
         captured[0]["messages"][0]["content"][-1]["text"]
         == "<PAGE><image>Multi page parsing."
     )
+
+
+def test_native_empty_text_keeps_crop_and_other_regions(tmp_path):
+    source, target = tmp_path / "source.png", tmp_path / "source.md"
+    image(source)
+    raw = "<PAGE>" + block("text", "Keep this.") + block("other", "") + block("title", "")
+    result = asyncio.run(ocr.ocr_image(source, target, client=Client(Stream(raw))))
+    assert result.status == "processed", result.error
+    layout = json.loads(result.metadata_path.read_text())
+    regions = layout["pages"][0]["regions"]
+    assert regions[0]["content"] == "Keep this."
+    for region in regions[1:]:
+        assert region["status"] == "preserved" and region["content"] == ""
+        assert "preserved for review" in region["recovery"]
+        assert (target.parent / region["asset"]).is_file()
+    assert "Keep this." in target.read_text() and "preserved for review" in target.read_text()
+    LayoutBundleValidator().validate(LayoutBundlePaths.from_layout(result.metadata_path))
+
+
+def test_native_repairs_only_bad_page_and_reuses_repair_after_publication_failure(tmp_path, monkeypatch):
+    source, target = tmp_path / "source.pdf", tmp_path / "source.md"
+    pdf(source, 3)
+    raw = ("<PAGE>" + block("text", "First original.")
+           + "<PAGE>" + block("text", "Malformed.", "[900,100,100,200]")
+           + "<PAGE>" + block("text", "Third original."))
+    page_raw = "<PAGE>" + block("text", "Second repaired.")
+    client = Client(Stream(raw), Stream(page_raw))
+    with monkeypatch.context() as patch:
+        patch.setattr(ocr, "_publish_layout_bundle", lambda *_: (_ for _ in ()).throw(OSError("publish failed")))
+        failed = asyncio.run(ocr.ocr_pdf(source, target, client=client, dpi=72))
+    assert failed.status == "failed" and "publish failed" in failed.error
+    assert len(client.calls) == 2
+    assert len(client.calls[0]["messages"][0]["content"]) == 4
+    assert len(client.calls[1]["messages"][0]["content"]) == 2
+    assert client.calls[1]["max_tokens"] == 8192
+    work = ocr._layout_workspace_paths(target)[0]
+    assert json.loads((work / "native-response.json").read_text())["raw_content"] == raw
+    assert json.loads((work / "native-page-repairs/page-0002.json").read_text())["raw_content"] == page_raw
+    retry = Client()
+    result = asyncio.run(ocr.ocr_pdf(source, target, client=retry, dpi=72))
+    assert result.status == "processed", result.error
+    assert retry.calls == []
+    layout = json.loads(result.metadata_path.read_text())
+    assert layout["native"]["raw_content"] == raw
+    assert layout["native"]["page_repairs"][0]["page_number"] == 2
+    assert [page["regions"][0]["content"] for page in layout["pages"]] == [
+        "First original.", "Second repaired.", "Third original."]
+    LayoutBundleValidator().validate(LayoutBundlePaths.from_layout(result.metadata_path))
+
+
+def test_native_page_repair_is_bounded_and_keeps_provider_evidence(tmp_path):
+    source, target = tmp_path / "source.png", tmp_path / "source.md"
+    image(source)
+    raw = "<PAGE><BLOCK>text[945,<td>"
+    client = Client(Stream(raw), Stream(raw), Stream(raw))
+    failed = asyncio.run(ocr.ocr_image(source, target, client=client))
+    assert failed.status == "failed" and "after 2 page-only attempts" in failed.error
+    assert len(client.calls) == 3 and not target.exists()
+    work = ocr._layout_workspace_paths(target)[0]
+    assert json.loads((work / "native-response.json").read_text())["raw_content"] == raw
+    assert len(list((work / "native-page-repairs").glob("*-invalid-*.json"))) == 2
+    retry = Client(Stream("<PAGE>" + block("text", "Recovered.")))
+    result = asyncio.run(ocr.ocr_image(source, target, client=retry))
+    assert result.status == "processed", result.error
+    assert len(retry.calls) == 1 and "Recovered." in target.read_text()
+
+
+def test_native_page_count_mismatch_never_guesses_physical_page_identity(tmp_path):
+    source, target = tmp_path / "source.pdf", tmp_path / "source.md"
+    pdf(source, 2)
+    client = Client(Stream("<PAGE>" + block("text", "Only one page.")))
+    result = asyncio.run(ocr.ocr_pdf(source, target, client=client, dpi=72))
+    assert result.status == "failed" and "page count mismatch" in result.error
+    assert len(client.calls) == 1 and not target.exists()
+
+
+def test_native_truncated_page_retry_changes_crop_mode_without_publishing_partial_text(tmp_path):
+    source, target = tmp_path / "source.png", tmp_path / "source.md"
+    image(source)
+    original = "<PAGE><BLOCK>text[945,<td>"
+    truncated = "<PAGE>" + block("text", "Unfinished retry.")
+    good = "<PAGE>" + block("text", "Complete repaired page.")
+    client = Client(Stream(original), Stream(truncated, finish="length"), Stream(good))
+    result = asyncio.run(ocr.ocr_image(source, target, client=client))
+    assert result.status == "processed", result.error
+    assert len(client.calls) == 3
+    assert client.calls[1]["extra_body"]["images_config"]["crop_mode"] is True
+    assert client.calls[2]["extra_body"]["images_config"]["crop_mode"] is False
+    layout = json.loads(result.metadata_path.read_text())
+    assert layout["native"]["page_repairs"][0]["crop_mode"] is False
+    assert "Complete repaired page." in target.read_text()
+    assert "Unfinished retry." not in target.read_text()
