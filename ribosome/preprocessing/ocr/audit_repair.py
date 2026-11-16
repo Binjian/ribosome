@@ -11,7 +11,8 @@ __all__ = ['OCRQualityIssueKind', 'OCRFixScope', 'OCRFixAction', 'OCR_NATIVE_TEX
            'OCRSplitFragment', 'split_layout_region_image', 'stitch_split_ocr_content',
            'split_and_stitch_layout_regions', 'split_and_retry_layout_regions', 'OCRRepairAttempt',
            'OCRRepairRoundResult', 'OCRRepairLoopResult', 'repair_layout_regions_from_native_pdf',
-           'stage_layout_ocr_repairs', 'execute_ocr_repair_round', 'execute_ocr_repairs_until_stable']
+           'stage_layout_ocr_repairs', 'execute_ocr_repair_round', 'execute_ocr_repairs_until_stable',
+           'repair_native_layout_regions']
 
 # %% ../../../nbs/03.preprocessing.ocr.audit_repair.ipynb #5
 import asyncio
@@ -711,6 +712,11 @@ def _region_fix_strategy(
                 "Retry OCR on the regenerated crop and validate the response.",
             ),
         )
+    if "manual review required" in lowered:
+        return (
+            "manual_review", "Review the retained source crop after bounded retries produced no usable text.",
+            ("Compare the source crop and surrounding page; classify visual-only content explicitly or supply reviewed text.",),
+        )
     if issue.issue_kind == "recovered":
         return (
             "verify_recovery",
@@ -1126,6 +1132,19 @@ def _split_repair_region(
     return page, region
 
 
+async def _gather_repair_coroutines(*coroutines):
+    """Cancel sibling OCR requests before a failed tile starts another strategy."""
+    tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+    try:
+        return await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 async def _recognize_adaptive_split_tile(
     tile: OCRSplitTile,
     proposal: OCRFixProposal,
@@ -1180,7 +1199,7 @@ async def _recognize_adaptive_split_tile(
         )
         for child in children
     )
-    nested = await asyncio.gather(
+    nested = await _gather_repair_coroutines(
         *(
             _recognize_adaptive_split_tile(
                 child,
@@ -1239,6 +1258,11 @@ async def split_and_stitch_layout_regions(
             raise FileNotFoundError(f"split-and-stitch crop is unavailable for {proposal}")
         with Image.open(crop_path) as opened:
             crop = opened.convert("RGB")
+        rotation = region.get("ocr_rotation_degrees", 0)
+        if type(rotation) is not int or rotation not in {0, 90, 180, 270}:
+            raise ValueError("OCR rotation must be 0, 90, 180 or 270 clockwise degrees")
+        if rotation:
+            crop = crop.rotate(-rotation, expand=True)
         tiles = split_layout_region_image(
             crop,
             tile_height=tile_height,
@@ -1246,7 +1270,7 @@ async def split_and_stitch_layout_regions(
             boundary_search=boundary_search,
         )
 
-        recognized_groups = await asyncio.gather(
+        recognized_groups = await _gather_repair_coroutines(
             *(
                 _recognize_adaptive_split_tile(
                     tile,
@@ -1336,6 +1360,7 @@ async def split_and_stitch_layout_regions(
         region.update(candidate)
         region["split_repair"] = {
             "version": 2,
+            "rotation_degrees_clockwise": rotation,
             "tile_height": tile_height,
             "overlap": overlap,
             "boundary_search": boundary_search,
@@ -2327,3 +2352,191 @@ async def execute_ocr_repairs_until_stable(
         remaining_proposals=remaining_proposals,
         stop_reason=stop_reason,
     )
+
+def _clean_native_crop_text(raw: str) -> str:
+    """Flatten crop OCR without discarding text preceding native layout blocks.
+
+    Crop geometry is already known from the source bundle; model-supplied boxes
+    do not relocate evidence. Whole-document native parsing stays strict.
+    """
+    from ribosome.preprocessing.ocr.baidu_unlimited import (
+        _NATIVE_PAGE_RE, _NATIVE_BLOCK_RE, _NATIVE_CONTROL_RE,
+        _NativeLayoutError, clean_grounding,
+    )
+    segments = _NATIVE_PAGE_RE.split(raw.strip())
+    if len(segments) > 2:
+        raise _NativeLayoutError("A region crop response must not contain multiple physical pages")
+    body = "\n".join(segments)
+    matches = list(_NATIVE_BLOCK_RE.finditer(body))
+    if not matches:
+        return clean_grounding(_NATIVE_CONTROL_RE.sub("", body)).strip()
+    contents = [body[:matches[0].start()]]
+    for position, match in enumerate(matches):
+        end = matches[position + 1].start() if position + 1 < len(matches) else len(body)
+        block = body[match.end():end].lstrip()
+        for _ in range(2):
+            level = re.match(r"<\s*LEVEL\s*\d+\s*>\s*", block, re.I)
+            if level:
+                block = block[level.end():]
+            else:
+                break
+        coordinates = re.match(r"\[\s*-?\d+\s*[,，]\s*-?\d+\s*[,，]\s*-?\d+\s*[,，]\s*-?\d+\s*\]\s*", block)
+        if coordinates is None:
+            raise _NativeLayoutError("Crop block header has incomplete coordinates")
+        contents.append(block[coordinates.end():])
+    return clean_grounding(_NATIVE_CONTROL_RE.sub("", "\n".join(contents))).strip()
+
+
+async def repair_native_layout_regions(
+    report: OCRFileQualityReport,
+    proposals: Sequence[OCRFixProposal],
+    source_path: str | Path,
+    recognize_tile: Callable[..., Awaitable[OCRSplitFragment]],
+    render_markdown: OCRSplitMarkdownRenderer,
+    *,
+    tile_height: int = 1400,
+    overlap: int = 96,
+    boundary_search: int = 128,
+    min_tile_height: int = 320,
+    max_split_depth: int = 4,
+) -> str:
+    """Repair native regions independently, preserving progress and provenance.
+
+    The recognizer receives (image, proposal, tile, contextual_retry). Empty or
+    malformed crop responses get one padded page-context retry. Persistent empty
+    output remains an explicit manual-review finding, never a fabricated pass.
+    """
+    from dataclasses import replace
+    from ribosome.preprocessing.ocr.baidu_unlimited import (
+        _EmptyOCROutputError, _NativeLayoutError, _layout_retry_crop,
+    )
+
+    source = Path(source_path).expanduser().resolve()
+    sidecar = report.sidecar_path
+
+    def read_state():
+        state = _layout_repair_state_path(sidecar)
+        layout = json.loads(state.read_text(encoding="utf-8"))
+        if layout.get("settings", {}).get("layout_mode") != "native":
+            raise ValueError("Native repair requires a native layout bundle")
+        if not _source_signature_is_compatible(layout.get("source_signature"), _source_signature(source)):
+            raise ValueError(f"Source signature changed for {source}")
+        return state, layout
+
+    read_state()  # Fail before touching any evidence if the source changed.
+    selected = {(p.page_number, p.region_index) for p in proposals if p.scope == "region"}
+    native = tuple(
+        replace(p, action="discard_and_reprocess")
+        for p in proposals if p.scope == "region" and p.action not in {"review_or_discard", "manual_review"}
+    )
+    if native and source.suffix.casefold() == ".pdf":
+        repair_layout_regions_from_native_pdf(
+            report, native, source, render_markdown, skip_unavailable_native_text=True,
+        )
+    remaining = tuple(
+        p for p in propose_ocr_repairs([audit_layout_ocr_file(sidecar)])
+        if (p.page_number, p.region_index) in selected and p.action != "manual_review"
+    )
+    page_images: dict[int, Image.Image] = {}
+
+    def page_image(page):
+        number = int(page["page_number"])
+        if number not in page_images:
+            width, height = int(page["width"]), int(page["height"])
+            if source.suffix.casefold() == ".pdf":
+                import pymupdf
+                with pymupdf.open(source) as pdf:
+                    physical = pdf[number - 1]
+                    pixmap = physical.get_pixmap(
+                        matrix=pymupdf.Matrix(width / physical.rect.width, height / physical.rect.height),
+                        alpha=False, annots=False,
+                    )
+                    image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            else:
+                with Image.open(source) as opened:
+                    image = opened.convert("RGB")
+            if image.size != (width, height):
+                image = image.resize((width, height), Image.Resampling.LANCZOS)
+            page_images.clear()  # Bound memory to one source page.
+            page_images[number] = image
+        return page_images[number]
+
+    failures = []
+    manual = 0
+    for proposal in remaining:
+        state, layout = read_state()
+        page, region = _split_repair_region(layout, proposal)
+        if proposal.action == "review_or_discard":
+            if region.get("label") not in {"header", "footer", "number"} or str(region.get("content") or "").strip():
+                raise ValueError("Only empty decorative regions can be discarded automatically")
+            _append_layout_repair_history(region, proposal)
+            region.update(status="recovered", content="", raw_content="", error=None,
+                          recovery="Discarded decorative or empty region after audit review", finish_reason="stop")
+            _refresh_layout_repair_status(layout)
+            _publish_layout_repair_state(sidecar, state, layout, render_markdown)
+            continue
+
+        bbox = _quality_bbox(region.get("bbox"))
+        if bbox is None or not (0 <= bbox[0] < bbox[2] <= int(page["width"])
+                                and 0 <= bbox[1] < bbox[3] <= int(page["height"])):
+            failures.append(f"p{proposal.page_number}/r{proposal.region_index}: invalid geometry")
+            continue
+        crop = _quality_path(region.get("asset"), sidecar, prefix=layout.get("asset_prefix"))
+        if crop is None or not crop.is_file():
+            target = _repair_markdown_path(sidecar)
+            relative = Path(f"{target.stem}.assets") / f"page-{proposal.page_number:04d}-region-{proposal.region_index:04d}-repair.png"
+            crop = sidecar.parent / relative
+            crop.parent.mkdir(parents=True, exist_ok=True)
+            page_image(page).crop(bbox).save(crop, format="PNG")
+            _append_layout_repair_history(region, proposal)
+            region["asset"] = relative.as_posix()
+            region["crop_regeneration"] = {"source": str(source), "bbox": list(bbox)}
+            _publish_layout_repair_state(sidecar, state, layout, render_markdown)
+
+        errors = []
+        empty_only = True
+        for contextual in (False, True):
+            async def recognize(image, selected_proposal, tile):
+                return await recognize_tile(image, selected_proposal, tile, contextual)
+
+            try:
+                with TemporaryDirectory(prefix="native-region-retry-") as directory:
+                    candidate = crop
+                    if contextual:
+                        candidate = Path(directory) / "context.png"
+                        _layout_retry_crop(page_image(page), bbox).save(candidate, format="PNG")
+                    retry = replace(proposal, action="split_and_retry", asset_path=candidate)
+                    await split_and_stitch_layout_regions(
+                        audit_layout_ocr_file(sidecar), (retry,), recognize, render_markdown,
+                        tile_height=int(region.get("ocr_tile_height", tile_height)), overlap=overlap, boundary_search=boundary_search,
+                        min_tile_height=min_tile_height, max_split_depth=max_split_depth,
+                    )
+                break
+            except Exception as error:
+                errors.append(f"{type(error).__name__}: {error}")
+                empty_only = empty_only and isinstance(error, _EmptyOCROutputError)
+                if not isinstance(error, (_EmptyOCROutputError, _NativeLayoutError, ValueError)):
+                    break  # Infrastructure errors do not trigger another model request.
+        if errors:
+            state, layout = read_state()
+            _, region = _split_repair_region(layout, proposal)
+            region.setdefault("repair_attempts", []).append({
+                "action": proposal.action, "errors": errors,
+                "contextual_retry": contextual,
+            })
+            unresolved = any(
+                (i.page_number, i.region_index) == (proposal.page_number, proposal.region_index)
+                for i in audit_layout_ocr_file(sidecar).region_issues
+            )
+            if unresolved and empty_only and len(errors) == 2:
+                _append_layout_repair_history(region, proposal)
+                region.update(status="preserved", content="", raw_content="", error=None,
+                              recovery="Manual review required: no usable text after bounded crop and contextual retries; source crop retained.")
+                manual += 1
+            elif unresolved:
+                failures.append(f"p{proposal.page_number}/r{proposal.region_index}: {errors[-1]}")
+            _publish_layout_repair_state(sidecar, state, layout, render_markdown)
+    if failures:
+        raise RuntimeError("Other region repairs were preserved. " + "; ".join(failures))
+    count = len(audit_layout_ocr_file(sidecar).region_issues)
+    return f"Native region repairs published; {count} findings remain, {manual} require visual review"
