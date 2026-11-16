@@ -12,6 +12,46 @@ from ribosome.preprocessing.ocr import baidu_unlimited as ocr
 NOTEBOOK = Path(__file__).resolve().parents[1] / "nbs/03.preprocessing.ocr.audit_repair.ipynb"
 
 
+def offline_self_check():
+    from fastcore.test import test_eq
+    from tempfile import TemporaryDirectory
+
+    notebook = json.loads(NOTEBOOK.read_text())
+    source = "".join(notebook["cells"][22]["source"])
+    namespace = dict(vars(audit))
+    namespace.update(test_eq=test_eq, TemporaryDirectory=TemporaryDirectory)
+    code = compile(source, str(NOTEBOOK), "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    return namespace, code
+
+
+def test_offline_self_checks_report_pass_without_simulated_failure_logs(monkeypatch, capsys):
+    import socket
+
+    def forbidden_network(*args, **kwargs):
+        raise AssertionError("Offline notebook checks must not contact the OCR service")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden_network)
+    namespace, code = offline_self_check()
+    asyncio.run(eval(code, namespace))
+    output = capsys.readouterr()
+    assert output.out == "PASS: offline OCR repair self-checks (including expected error-handling cases).\n"
+    assert "OCR repair" not in output.err
+
+
+def test_offline_self_checks_still_raise_unexpected_failures(capsys):
+    import pytest
+
+    namespace, code = offline_self_check()
+
+    async def unexpected_failure(*args, **kwargs):
+        raise RuntimeError("unexpected self-check defect")
+
+    namespace["execute_ocr_repair_round"] = unexpected_failure
+    with pytest.raises(RuntimeError, match="unexpected self-check defect"):
+        asyncio.run(eval(code, namespace))
+    assert "PASS:" not in capsys.readouterr().out
+
+
 def application(root):
     notebook = json.loads(NOTEBOOK.read_text())
     namespace = dict(vars(audit))
