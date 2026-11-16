@@ -15,6 +15,7 @@ BACKEND_MODULES = {
     "01.core.dom.embedding.natural_text.ipynb": "core.dom.embedding.natural_text",
     "01.core.dom.embedding.object.ipynb": "core.dom.embedding.object",
     "01.rag.object.ipynb": "rag.object",
+    "05.application.process_parameters.ipynb": "application.process_parameters",
 }
 _DEFAULT_EXP = re.compile(r"^#\s*\|\s*default_exp\s+(\S+)\s*$", re.MULTILINE)
 _MODULE_NAME = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
@@ -24,7 +25,8 @@ def prepare(source=None, destination=None, *, profile=None):
     """Export a checkout's runtime modules; explicit profiles override the environment.
 
     Standalone exports every notebook with a default module. The llm-backend
-    profile exports only object RAG, object embedding and natural-text embedding.
+    profile exports object RAG, object/natural-text embedding, and robot process
+    parameter generation.
     Neither profile executes notebook code or reads application dotenv files.
     """
     if profile is None:

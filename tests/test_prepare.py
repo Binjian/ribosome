@@ -1,11 +1,10 @@
 """Profile selection, clean-checkout exports, and notebook execution isolation."""
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
-
 from ribosome.prepare import BACKEND_MODULES, prepare
 
 
@@ -30,8 +29,8 @@ def checkout(tmp_path):
     return source
 
 
-@pytest.mark.parametrize("profile,count", [("standalone", 4), ("llm-backend", 3)])
-def test_profiles_export_repeatably_without_executing_notebooks(checkout, tmp_path, profile, count):
+@pytest.mark.parametrize("profile", ["standalone", "llm-backend"])
+def test_profiles_export_repeatably_without_executing_notebooks(checkout, tmp_path, profile):
     destination = tmp_path / "output"
     destination.mkdir()
     initializer = destination / "__init__.py"
@@ -41,7 +40,7 @@ def test_profiles_export_repeatably_without_executing_notebooks(checkout, tmp_pa
     prepare(checkout, destination, profile=profile)
     assert first == {p.relative_to(destination): p.read_bytes() for p in destination.rglob("*.py")}
     assert initializer.read_text() == '__version__ = "test"\n'
-    assert len([p for p in first if p.name != "__init__.py"]) == count
+    assert len([p for p in first if p.name != "__init__.py"]) == len(BACKEND_MODULES) + (profile == "standalone")
     assert (Path("extra/component.py") in first) == (profile == "standalone")
     for path in destination.rglob("*.py"):
         namespace = {}
@@ -99,5 +98,6 @@ def test_standalone_exports_all_real_source_modules(tmp_path):
     assert (destination / "rag/object.py").is_file()
     assert (destination / "core/dom/summary/task.py").is_file()
     assert (destination / "preprocessing/ocr/layout_bundle.py").is_file()
+    assert (destination / "application/process_parameters.py").is_file()
     for path in destination.rglob("*.py"):
         compile(path.read_text(), str(path), "exec")

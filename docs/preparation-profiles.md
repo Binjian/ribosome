@@ -11,8 +11,10 @@ RIBOSOME_PROFILE=llm-backend uv run ribosome-prepare
 ```
 
 `standalone` is the default for Ribosome's command and exports every notebook
-with a `default_exp` module. `llm-backend` exports only natural-text embedding,
-object embedding and object RAG. `--profile` overrides `RIBOSOME_PROFILE`; unknown
+with a `default_exp` module. `llm-backend` exports natural-text embedding,
+object embedding, object RAG, and `application.process_parameters` from
+`nbs/05.application.process_parameters.ipynb`. The separate process-parameter
+tutorial has no export module. `--profile` overrides `RIBOSOME_PROFILE`; unknown
 profiles fail before exporting. Applications supply their own clients, model
 settings and index/mapping paths through the existing constructors.
 
