@@ -1,12 +1,14 @@
-"""Parse KRL prompts and atomically append completed answers to Markdown batches.
+"""Parse KRL prompts and save completed answers in source-ordered Markdown batches.
 
-The existing, hand-collected Markdown format is accepted without rewriting it.
-New records carry integrity markers so interrupted or edited answers cannot be
+Legacy records retain their Markdown format when moved between batches. New
+records carry integrity markers so interrupted or edited answers cannot be
 silently treated as completed on a subsequent run.
 """
 
 from __future__ import annotations
 
+import base64
+import codecs
 import hashlib
 import json
 import os
@@ -39,6 +41,7 @@ class _Saved:
     question: Question
     answer: str
     path: Path
+    raw: bytes
 
 
 def _canonical(text: str) -> str:
@@ -93,8 +96,9 @@ def parse_questions(path: str | Path) -> list[Question]:
     return questions
 
 
-def _saved_records(path: Path) -> list[_Saved]:
-    text = path.read_bytes().decode("utf-8-sig")
+def _read_batch(path: Path) -> tuple[bytes, list[_Saved]]:
+    original = path.read_bytes()
+    text = original.decode("utf-8-sig")
     headings = []
     active_record = None
     active_fence = None
@@ -168,8 +172,15 @@ def _saved_records(path: Path) -> list[_Saved]:
                 raise ValueError(f"Saved Q&A integrity check failed for {question.id:04d} in {path}")
         if not prompt or not answer.strip():
             raise ValueError(f"Empty saved question/answer {question.id:04d} in {path}")
-        records.append(_Saved(question, answer, path))
-    return records
+        records.append(_Saved(question, answer, path, text[offset:end].encode("utf-8")))
+    prefix = text[:headings[0][0]].encode("utf-8") if headings else text.encode("utf-8")
+    if original.startswith(codecs.BOM_UTF8):
+        prefix = codecs.BOM_UTF8 + prefix
+    return prefix, records
+
+
+def _saved_records(path: Path) -> list[_Saved]:
+    return _read_batch(path)[1]
 
 
 def _atomic_bytes(path: Path, content: bytes) -> None:
@@ -196,11 +207,12 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
 
 
 class CollectionStore:
-    """Append completed answers, filling existing batches before creating more.
+    """Keep completed answers in source order, filling batches before creating more.
 
     One collector process should own an output series at a time. The caller can
     hold a process lock for the duration of its browser session. Each save also
     reloads all outputs to detect changes made since this instance was created.
+    Call recover() under that lock before opening an interrupted batch rewrite.
     """
 
     def __init__(self, output_path: str | Path, questions: Iterable[Question],
@@ -211,6 +223,7 @@ class CollectionStore:
         self.batch_size = batch_size
         values = list(questions)
         self.questions = {question.id: question for question in values}
+        self._order = {question.id: index for index, question in enumerate(values)}
         if len(values) != len(self.questions):
             raise ValueError("Duplicate source question IDs")
         self._reload()
@@ -230,7 +243,87 @@ class CollectionStore:
         return self.output_path.with_name(
             f"{self.output_path.stem}_{number:03d}{self.output_path.suffix}")
 
+    @staticmethod
+    def _journal_path(output_path: Path) -> Path:
+        return output_path.with_name(f".{output_path.name}.ordering.json")
+
+    @classmethod
+    def recover(cls, output_path: str | Path) -> None:
+        """Roll back an interrupted reorder; the caller must own the output lock."""
+        output = Path(output_path)
+        journal = cls._journal_path(output)
+        if not journal.exists():
+            return
+        data = json.loads(journal.read_text(encoding="utf-8"))
+        if (not isinstance(data, dict) or data.get("version") != 1
+                or not isinstance(data.get("files"), list) or not data["files"]):
+            raise ValueError(f"Invalid ordering recovery journal: {journal}")
+        snapshots = []
+        for number, entry in enumerate(data["files"], 1):
+            path = output if number == 1 else output.with_name(
+                f"{output.stem}_{number:03d}{output.suffix}")
+            if (not isinstance(entry, dict) or entry.get("name") != path.name
+                    or "before" not in entry
+                    or (entry["before"] is not None and not isinstance(entry["before"], str))):
+                raise ValueError(f"Invalid ordering recovery journal: {journal}")
+            before = None if entry["before"] is None else base64.b64decode(
+                entry["before"], validate=True)
+            snapshots.append((path, before))
+        # Validate the complete journal before restoring any file. Retain it if
+        # restoration fails, so the next locked run can retry the rollback.
+        for path, before in snapshots:
+            if before is None:
+                path.unlink(missing_ok=True)
+            elif not path.exists() or path.read_bytes() != before:
+                _atomic_bytes(path, before)
+        journal.unlink()
+
+    def _publish_sorted(self, records: list[_Saved]) -> None:
+        records = sorted(records, key=lambda record: self._order[record.question.id])
+        updates = []
+        for offset in range(0, len(records), self.batch_size):
+            path = self._batch_path(offset // self.batch_size + 1)
+            content = self._prefixes.get(path, (
+                "# KRL工艺参数问答采集\n\n"
+                "来源：https://www.kukacenter.com/chat 的 KRL编程模式。\n\n\n"
+            ).encode("utf-8"))
+            for record in records[offset:offset + self.batch_size]:
+                if content and not content.endswith((b"\n\n", b"\r\n\r\n")):
+                    content += b"\n\n"
+                content += record.raw
+            before = path.read_bytes() if path.exists() else None
+            updates.append((path, before, content))
+        if not any(before != after for _, before, after in updates):
+            return
+        journal = self._journal_path(self.output_path)
+        snapshots = {"version": 1, "files": [
+            {"name": path.name, "before": None if before is None else
+             base64.b64encode(before).decode("ascii")}
+            for path, before, _ in updates
+        ]}
+        _atomic_bytes(journal, json.dumps(snapshots).encode("utf-8"))
+        try:
+            for path, before, after in updates:
+                if before != after:
+                    _atomic_bytes(path, after)
+            journal.unlink()
+        except BaseException:
+            # Cross-batch insertion can move existing records between files.
+            # Roll back the whole series on failure/cancellation, not just the
+            # last file, to avoid lost or duplicate completed answers.
+            self.recover(self.output_path)
+            raise
+
+    def ensure_order(self) -> None:
+        """Repair older completion-ordered batches without regenerating answers."""
+        self._reload()
+        if list(self._saved) != sorted(self._saved, key=self._order.__getitem__):
+            self._publish_sorted(list(self._saved.values()))
+            self._reload()
+
     def _reload(self) -> None:
+        if self._journal_path(self.output_path).exists():
+            raise ValueError("Interrupted ordering update; rerun the collector to recover under the output lock")
         numbered = {}
         pattern = re.compile(rf"^{re.escape(self.output_path.stem)}_(\d+)"
                              rf"{re.escape(self.output_path.suffix)}$")
@@ -246,8 +339,9 @@ class CollectionStore:
             raise ValueError("Output batch numbering has a gap")
         self._batches = []
         self._saved = {}
+        self._prefixes = {}
         for number, path in sorted(numbered.items()):
-            records = _saved_records(path)
+            self._prefixes[path], records = _read_batch(path)
             if len(records) > self.batch_size or (number != max(numbered) and len(records) != self.batch_size):
                 raise ValueError(f"Unexpected number of records in batch {path}: {len(records)}")
             for record in records:
@@ -286,6 +380,14 @@ class CollectionStore:
                  f"### 小库原始回答\n\n{answer}\n\n"
                  f"{_END_PREFIX}{question.id:04d} -->\n")
         path.parent.mkdir(parents=True, exist_ok=True)
+        ordered_ids = sorted(self._saved, key=self._order.__getitem__)
+        if (list(self._saved) != ordered_ids
+                or (ordered_ids and self._order[question.id] < self._order[ordered_ids[-1]])):
+            self._publish_sorted([
+                *self._saved.values(), _Saved(question, answer, path, block.encode("utf-8")),
+            ])
+            self._reload()
+            return self._saved[question.id].path
         previous = path.read_bytes() if path.exists() else (
             "# KRL工艺参数问答采集\n\n"
             "来源：https://www.kukacenter.com/chat 的 KRL编程模式。\n".encode("utf-8"))

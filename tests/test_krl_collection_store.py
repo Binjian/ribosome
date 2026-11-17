@@ -1,5 +1,7 @@
 """Collection resumes only complete, unchanged Q&A records across atomic batches."""
 
+import base64
+import codecs
 import hashlib
 import json
 
@@ -220,3 +222,127 @@ def test_reject_gapped_or_overfull_batches(tmp_path):
     path.write_text("\n\n".join(legacy_record(value) for value in source), encoding="utf-8")
     with pytest.raises(ValueError, match="number of records"):
         CollectionStore(path, source, batch_size=2)
+
+
+def batch_ids(store):
+    return [[record.question.id for record in store_module._saved_records(path)]
+            for path, _ in store._batches]
+
+
+def test_insert_earlier_answer_rebatches_in_source_order_preserving_content(tmp_path):
+    source = questions(4)
+    path = tmp_path / "collected.md"
+    prefix = codecs.BOM_UTF8 + "# 历史说明\r\n\r\n".encode("utf-8")
+    legacy = legacy_record(source[1]).encode("utf-8")
+    path.write_bytes(prefix + legacy)
+    store = CollectionStore(path, source, batch_size=2)
+    exact = "\n    DEF MAIN()\r\n    END\r\n\n中文末尾空格  \n\n"
+    store.save(source[2], exact, {"session_id": "keep-this-session", "custom": "keep-metadata"})
+    second_path = store.save(source[3], "末尾答案")
+    second_prefix, _ = store_module._read_batch(second_path)
+    existing = [record for batch, _ in store._batches for record in store_module._saved_records(batch)]
+
+    assert store.save(source[0], "缺失的第一个答案") == path
+    assert batch_ids(store) == [[1, 2], [3, 4]]
+    assert path.read_bytes().startswith(prefix)
+    assert second_path.read_bytes().startswith(second_prefix)
+    combined = path.read_bytes() + second_path.read_bytes()
+    assert legacy in combined
+    for record in existing:
+        assert record.raw in combined
+    assert store._saved[3].answer == exact
+    assert b'"session_id": "keep-this-session"' in second_path.read_bytes()
+    assert b'"custom": "keep-metadata"' in second_path.read_bytes()
+    assert store.completed_ids == {1, 2, 3, 4}
+    assert not store._journal_path(path).exists()
+
+
+def test_repair_old_completion_order_is_explicit_and_idempotent(tmp_path):
+    source = questions(4)
+    path = tmp_path / "collected.md"
+    store = CollectionStore(path, source, batch_size=2)
+    for question in source:
+        store.save(question, f"答案{question.id}", {"session_id": f"session-{question.id}"})
+    records = dict(store._saved)
+    for (batch, _), order in zip(store._batches, ([4, 2], [3, 1])):
+        batch.write_bytes(store._prefixes[batch] + b"\n\n".join(records[number].raw for number in order))
+    before = {batch: batch.read_bytes() for batch, _ in store._batches}
+    inspected = CollectionStore(path, source, batch_size=2)
+    assert batch_ids(inspected) == [[4, 2], [3, 1]]
+    assert all(batch.read_bytes() == content for batch, content in before.items())
+
+    inspected.ensure_order()
+    assert batch_ids(inspected) == [[1, 2], [3, 4]]
+    assert all(inspected._saved[number].answer == record.answer for number, record in records.items())
+    after = {batch: batch.read_bytes() for batch, _ in inspected._batches}
+    inspected.ensure_order()
+    assert all(batch.read_bytes() == content for batch, content in after.items())
+
+
+@pytest.mark.parametrize("failure", [OSError("disk error"), KeyboardInterrupt()])
+def test_failed_cross_batch_insertion_rolls_back_all_files(tmp_path, monkeypatch, failure):
+    source = questions(5)
+    path = tmp_path / "collected.md"
+    store = CollectionStore(path, source, batch_size=2)
+    for question in source[1:]:
+        store.save(question, f"答案{question.id}")
+    before = {batch: batch.read_bytes() for batch, _ in store._batches}
+    second_path = path.with_name("collected_002.md")
+    original_atomic = store_module._atomic_bytes
+    failed = False
+
+    def fail_second_batch(target, content):
+        nonlocal failed
+        if target == second_path and not failed:
+            failed = True
+            # The first batch has already changed, so restoring only this
+            # failing file would lose or duplicate completed records.
+            assert path.read_bytes() != before[path]
+            raise failure
+        original_atomic(target, content)
+
+    monkeypatch.setattr(store_module, "_atomic_bytes", fail_second_batch)
+    with pytest.raises(type(failure)):
+        store.save(source[0], "新答案")
+    assert all(batch.read_bytes() == content for batch, content in before.items())
+    assert not path.with_name("collected_003.md").exists()
+    assert not store._journal_path(path).exists()
+    assert CollectionStore(path, source, batch_size=2).completed_ids == {2, 3, 4, 5}
+    store.save(source[0], "新答案")
+    assert batch_ids(store) == [[1, 2], [3, 4], [5]]
+
+
+def test_recover_crashed_reorder_restores_snapshot_and_removes_new_batch(tmp_path):
+    source = questions(5)
+    path = tmp_path / "collected.md"
+    store = CollectionStore(path, source, batch_size=2)
+    for question in source[1:]:
+        store.save(question, f"答案{question.id}")
+    before = {batch: batch.read_bytes() for batch, _ in store._batches}
+    extra = path.with_name("collected_003.md")
+    snapshots = {"version": 1, "files": [
+        {"name": batch.name, "before": base64.b64encode(content).decode("ascii")}
+        for batch, content in before.items()
+    ] + [{"name": extra.name, "before": None}]}
+    journal = store._journal_path(path)
+    journal.write_text(json.dumps(snapshots), encoding="utf-8")
+    path.write_bytes(b"Interrupted rewrite")
+    extra.write_bytes(b"New batch from interrupted rewrite")
+
+    with pytest.raises(ValueError, match="Interrupted ordering update"):
+        CollectionStore(path, source, batch_size=2)
+    assert path.read_bytes() == b"Interrupted rewrite"
+    assert extra.exists() and journal.exists()
+    CollectionStore.recover(path)
+    assert all(batch.read_bytes() == content for batch, content in before.items())
+    assert not extra.exists() and not journal.exists()
+    assert CollectionStore(path, source, batch_size=2).completed_ids == {2, 3, 4, 5}
+
+
+def test_order_follows_source_sequence_instead_of_completion_or_numeric_order(tmp_path):
+    values = questions(3)
+    source = [values[2], values[0], values[1]]
+    store = CollectionStore(tmp_path / "collected.md", source, batch_size=2)
+    for question in reversed(source):
+        store.save(question, f"答案{question.id}")
+    assert batch_ids(store) == [[3, 1], [2]]

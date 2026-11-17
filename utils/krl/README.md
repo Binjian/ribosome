@@ -121,6 +121,12 @@ value, `--delay` is the minimum global spacing between dispatches of new
 questions, allowing their streamed answers to overlap. Stage retries keep their
 existing backoff and are not subject to this spacing.
 
+Answers are stored in question-list order, regardless of which request finishes
+first. Each validated answer is inserted into its source-order position and
+the Markdown batches are adjusted as needed. Completed answers remain saved
+even if an earlier question fails; filling that gap on resume restores its
+correct position without requesting the completed answers again.
+
 Login and CAPTCHA happen once. Workers have independent HTTP sessions with
 copied authentication cookies, but still use the same account. KUKA Center's
 account concurrency limits are unverified; measure a small run before increasing
@@ -144,7 +150,7 @@ For a bounded session or a separate collection:
 
 ## Output and resume rules
 
-With sequential collection, the existing 18 pairs stay in
+With either sequential or concurrent collection, the existing 18 pairs stay in
 `assets/KRL/krl_qa_collected.md`. Samples 0019 and
 0020 fill that file; samples 0021–0040 go into `krl_qa_collected_002.md`, then
 0041–0060 into `_003.md`, and so on. A new collection beginning at 0019 instead
@@ -152,10 +158,18 @@ holds 0019–0038 in its first file. The final batch can contain fewer than 20
 pairs. Existing introductory text, including historical manual counts, is
 preserved; the dry-run report reflects the actual saved records.
 
-Concurrent collection saves in completion order, so a batch can contain
-nonconsecutive sample IDs. Each batch still holds at most `--batch-size` pairs.
-Resume checks completed IDs across all batches and requests only missing
-questions; existing answers are never reordered or replaced.
+Both modes store completed QAs in the order of the source question list. Each
+batch holds at most `--batch-size` pairs; gaps can remain when a question fails
+or a selected range skips questions. Resume checks completed IDs across all
+batches and requests only missing questions. Inserting an earlier answer can
+move existing records between batches, preserving their prompts, exact answer
+text, and metadata. Existing introductory text stays with its original file.
+
+Live runs also repair batches produced by the older completion-order behavior,
+before login or collection. Dry runs inspect existing files without rewriting
+them. A multi-file reorder uses a rollback journal: failure or cancellation
+restores the previous batch contents, and a later live run recovers an update
+interrupted by a process crash under the output lock.
 
 New records include source and exact-answer hashes, answer length, completion
 markers, and collection metadata. Existing prompts must still match the input.
@@ -260,12 +274,15 @@ The implemented design follows these decisions:
    Bound active calls and globally space new-question dispatches with `--delay`.
    Process available failures before starting replacement work.
 4. Keep one coordinator as the only writer under the existing process lock.
-   Publish validated answers atomically in completion order, preserving
-   integrity checks, existing answers, and ID-based resume.
+   Insert validated answers in source-question order, including across batch
+   boundaries and resumed gaps. Keep per-file atomic publication and use a
+   rollback journal for multi-file reordering, preserving existing answers,
+   metadata, integrity checks, and ID-based resume.
 5. On terminal failure or Ctrl+C, stop dispatching and drain active calls before
    closing sessions or releasing the output lock. Save validated successes and
    exit 1 or 130. On a write failure, stop further publishing while draining.
 6. Verify offline: CLI validation, unchanged sequential behavior, one login and
    isolated sessions, bounded overlap, global spacing, single-writer saves,
-   completion-order resume, retry preservation, and graceful failure/Ctrl+C.
+   source-order batching/resume, rollback/recovery, retry preservation, and
+   graceful failure/Ctrl+C.
    Live service concurrency and performance require a separate small trial.

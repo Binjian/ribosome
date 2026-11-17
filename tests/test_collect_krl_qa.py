@@ -16,6 +16,7 @@ import pytest
 import requests
 from urllib3.exceptions import ReadTimeoutError
 from utils.krl import collect_krl_qa as collector
+from utils.krl.krl_collection_store import _saved_records
 
 
 class Response:
@@ -809,7 +810,7 @@ def test_concurrent_calls_overlap_with_isolated_authenticated_sessions(concurren
     assert all("local-change" not in session.cookies for session in (state.sessions[0], state.sessions[2]))
 
 
-def test_concurrent_completion_order_batches_and_resume(concurrent_cli, monkeypatch):
+def test_concurrent_source_order_batches_despite_completion_order_and_resume(concurrent_cli, monkeypatch):
     state = concurrent_cli
     calls = []
 
@@ -827,8 +828,8 @@ def test_concurrent_completion_order_batches_and_resume(concurrent_cli, monkeypa
     first = state.output.read_bytes()
     second_path = state.output.with_name("qa_002.md")
     second = second_path.read_bytes()
-    assert first.index("样本0020".encode()) < first.index("样本0021".encode())
-    assert second.index("样本0022".encode()) < second.index("样本0019".encode())
+    assert first.index("样本0019".encode()) < first.index("样本0020".encode())
+    assert second.index("样本0021".encode()) < second.index("样本0022".encode())
     store = collector.CollectionStore(state.output, state.questions, batch_size=2)
     assert store.completed_ids == {19, 20, 21, 22}
     calls.clear()
@@ -889,6 +890,25 @@ def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_c
     monkeypatch.setattr(collector.KukaClient, "ask", resumed_ask)
     assert collector.main(state.arguments) == 0
     assert set(calls) == set(range(19, 25)) - completed
+    assert [record.question.id for record in _saved_records(state.output)] == list(range(19, 25))
+
+
+def test_live_run_repairs_previous_completion_order_before_login(concurrent_cli):
+    state = concurrent_cli
+    store = collector.CollectionStore(state.output, state.questions)
+    for question in state.questions:
+        state.original_save(store, question, ANSWER, {"session_id": f"session-{question.id}"})
+    records = _saved_records(state.output)
+    prefix = store._prefixes[state.output]
+    state.output.write_bytes(prefix + b"\n\n".join(record.raw for record in reversed(records)))
+    before = state.output.read_bytes()
+
+    assert collector.main([*state.arguments, "--dry-run"]) == 0
+    assert state.output.read_bytes() == before
+    assert collector.main(state.arguments) == 0
+    assert [record.question.id for record in _saved_records(state.output)] == list(range(19, 25))
+    assert all(record.answer == ANSWER for record in _saved_records(state.output))
+    assert not state.sessions and not state.logins
 
 
 def test_write_failure_preserves_output_stops_publication_and_drains(concurrent_cli, monkeypatch):

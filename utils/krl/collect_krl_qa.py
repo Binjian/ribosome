@@ -519,7 +519,8 @@ async def _collect_concurrently(clients, pending, store, delay):
             outcome = await asyncio.to_thread(_ask_worker, client, question)
         except Exception as exc:
             outcome = None, None, exc
-        # Queue before completing the task, preserving observed completion order.
+        # Queue before completing the task; the store inserts the result into
+        # source order even when other questions finish first.
         completed.put_nowait((client, question, outcome))
 
     while active or (index < len(pending) and failure is None and not interrupted):
@@ -727,7 +728,9 @@ def main(argv=None):
                 "Install requests: python -m pip install requests"
             ) from exc
         with output_lock(args.output):
+            CollectionStore.recover(args.output)
             store = CollectionStore(args.output, questions, args.batch_size)
+            store.ensure_order()
             pending = store.pending(args.start, args.end)
             if args.max_questions:
                 pending = pending[: args.max_questions]
