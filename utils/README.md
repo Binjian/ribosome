@@ -3,6 +3,53 @@ For standalone or llm-backend package exports, use `uv run ribosome-prepare
 [preparation profiles](../docs/preparation-profiles.md) for defaults, environment
 configuration and packaging.
 
+To collect the original KUKA Center chatbot answers in **KRL编程** mode:
+
+```sh
+python -m pip install requests
+python utils/collect_krl_qa.py --dry-run
+python utils/collect_krl_qa.py
+```
+
+The default account is `13918961550`. Enter the password at the hidden prompt,
+or provide it with the `KUKA_PASSWORD` environment variable. The script also
+prompts for acceptance of the site's login policies and a four-character image
+CAPTCHA: open the printed image path, read the code, and enter it in the terminal.
+Passwords and authentication cookies are kept in memory. `--username` (or
+`KUKA_USERNAME`) selects another account. `--accept-login-terms` explicitly
+accepts the linked login policies without the consent prompt; CAPTCHA entry is
+still required.
+
+The collector reads every full prompt from `assets/KRL/krl_questions_1000.md`,
+starting at **0019 真空搬运**, and skips previously saved pairs. It preserves the
+existing 0001–0018 answers, adds 0019–0020 to `assets/KRL/krl_qa_collected.md`,
+then writes 0021–0040 to `krl_qa_collected_002.md`, and continues with 20 pairs per
+file. The final batch can contain fewer pairs. Existing introductory text stays
+unchanged, including its historical count of manually collected answers.
+
+Each question uses its own chat conversation and the site's KRL model. The
+collector retains the full original Markdown, including code fences, tables,
+and any reasoning/reference sections supplied by the service. It waits for
+stream EOF, applies the site's answer check, and verifies the persisted answer
+against the stream before atomically publishing a pair. A site refusal is saved
+as the refusal shown by the frontend. Interrupted or inconsistent responses are
+not published. On errors, quota limits, or Ctrl+C, rerun the same command to
+resume from the first missing pair. An interrupted remote question can be asked
+again; completed local pairs are never requested again.
+
+Use `--max-questions 1` for an initial live check, `--end 40` to stop at a sample,
+and `--delay`, `--request-timeout`, or `--answer-timeout` to adjust pacing and
+timeouts. `--questions` and `--output` select other paths. The collector holds a
+process lock on the output series, validates saved prompts and new answer
+integrity markers, and stops on conflicts. It uses the site's frontend HTTP
+endpoints, which may change; it stops if their response contracts differ.
+
+Offline validation (no login or chatbot requests):
+
+```sh
+python -m pytest --confcutdir=tests -q tests/test_krl_collection_store.py tests/test_collect_krl_qa.py
+```
+
 To copy source PDFs corresponding to `assets/md.json.semantics.remaining` into
 `assets/pdf.remaining`, preserving the source folders:
 
