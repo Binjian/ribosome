@@ -60,7 +60,12 @@ class CollectionError(RuntimeError):
 
 
 class RetryableCollectionError(CollectionError):
-    """A transient HTTP failure; retry only the affected collection stage."""
+    """A transient transport or persistence failure; retry the affected stage."""
+
+
+def _answer_for_comparison(answer: str) -> str:
+    """Ignore newline encoding and outer newlines, retaining Markdown spaces."""
+    return answer.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
 
 
 def http_failure(exc: Exception, context: str) -> CollectionError | None:
@@ -248,7 +253,7 @@ class KukaClient:
         self.retry_delay = retry_delay
 
     def retry(self, operation, action):
-        """Bound retries at stage boundaries, with a sanitized reason and backoff."""
+        """Bound transport/persistence retries with a sanitized reason and backoff."""
         delay = min(self.retry_delay, 60.0)
         for attempt in range(self.retries + 1):
             try:
@@ -465,6 +470,47 @@ class KukaClient:
             streamed = read_stream(response, self.answer_timeout)
         return streamed, identifiers
 
+    def _fetch_verified_answer(self, question, streamed, identifiers):
+        """Refetch uncertain persistence without repeating generation or moderation."""
+        saved = self.api(
+            "/api/krl/selectQuestionInfo",
+            dict(identifiers, question=question.prompt, content=question.prompt),
+        )
+        # A completed stream need not be visible in persisted storage yet. Keep
+        # these checks inside the fetch retry, sharing its bounded HTTP budget.
+        if saved is None or (
+            isinstance(saved, dict) and saved.get("answerContent") is None
+        ):
+            raise RetryableCollectionError(
+                "Chat did not return a persisted Markdown answer; nothing saved"
+            )
+        if not isinstance(saved, dict) or not isinstance(saved.get("answerContent"), str):
+            raise CollectionError(
+                "Chat returned an invalid persisted Markdown answer; nothing saved"
+            )
+        answer = saved["answerContent"]
+        if not answer.strip():
+            raise RetryableCollectionError(
+                "Chat returned an empty persisted Markdown answer; nothing saved"
+            )
+        expected = _answer_for_comparison(streamed)
+        actual = _answer_for_comparison(answer)
+        if actual != expected:
+            first_difference = next(
+                (index for index, (left, right) in enumerate(zip(expected, actual))
+                 if left != right),
+                min(len(expected), len(actual)),
+            )
+            # Counts explain persistent mismatches without logging answers,
+            # prompts, credentials, or arbitrary server response text.
+            raise RetryableCollectionError(
+                "Stream and saved answer differ "
+                f"(stream_chars={len(streamed)}, saved_chars={len(answer)}, "
+                f"first_difference={first_difference}); "
+                "refusing a potentially incomplete answer"
+            )
+        return saved
+
     def ask(self, question: Question) -> tuple[str, dict]:
         streamed, identifiers = self.retry(
             f"Question {question.id:04d} generation (new conversation each attempt; "
@@ -494,23 +540,10 @@ class KukaClient:
             # Exactly the replacement displayed by the frontend's answer check.
             return REFUSAL, metadata
         saved = self.retry(
-            f"Question {question.id:04d} saved answer fetch",
-            lambda: self.api(
-                "/api/krl/selectQuestionInfo",
-                dict(identifiers, question=question.prompt, content=question.prompt),
-            ),
+            f"Question {question.id:04d} saved answer fetch/verification",
+            lambda: self._fetch_verified_answer(question, streamed, identifiers),
         )
-        if not isinstance(saved, dict) or not isinstance(
-            saved.get("answerContent"), str
-        ):
-            raise CollectionError(
-                "Chat did not return a persisted Markdown answer; nothing saved"
-            )
         answer = saved["answerContent"]
-        if not answer.strip() or answer.strip("\r\n") != streamed.strip("\r\n"):
-            raise CollectionError(
-                "Stream and saved answer differ; refusing a potentially incomplete answer"
-            )
         metadata.update(answer_id=saved.get("id"), server_time=saved.get("time"))
         return answer, metadata
 
@@ -694,7 +727,7 @@ def build_parser():
     )
     parser.add_argument(
         "--retries", type=int, default=3,
-        help="Additional attempts per stage after transient HTTP errors (default: 3)",
+        help="Additional attempts per stage after transient HTTP errors or saved-answer mismatches (default: 3)",
     )
     parser.add_argument(
         "--retry-delay", type=float, default=5.0,

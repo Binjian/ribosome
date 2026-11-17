@@ -286,17 +286,102 @@ def test_nested_stream_read_timeout_is_identified_without_exposing_exception_tex
 def test_saved_answer_mismatch_prevents_publishing():
     session = answer_session(saved="truncated")
     with pytest.raises(collector.CollectionError, match="differ"):
-        collector.KukaClient(session).ask(QUESTION)
+        collector.KukaClient(session, retries=0).ask(QUESTION)
     assert len(session.calls) == 4
 
 
 def test_saved_answer_comparison_keeps_significant_first_line_indentation():
     session = answer_session(answer="    $OUT[10]=TRUE\n", saved="$OUT[10]=TRUE\n")
     with pytest.raises(collector.CollectionError, match="differ"):
-        collector.KukaClient(session).ask(QUESTION)
+        collector.KukaClient(session, retries=0).ask(QUESTION)
     matching = answer_session(answer="    $OUT[10]=TRUE  \n")
     answer, _ = collector.KukaClient(matching).ask(QUESTION)
     assert answer == "    $OUT[10]=TRUE  \n"
+
+
+@pytest.mark.parametrize("stale", [
+    None, {}, {"answerContent": None}, {"answerContent": ""},
+    {"answerContent": " \n\t"}, {"answerContent": ANSWER[:20]},
+])
+def test_saved_answer_not_ready_retries_only_fetch_until_matching(stale):
+    session = answer_session()
+    session.responses.insert(3, api(stale))
+    answer, metadata = collector.KukaClient(session, retries=1, retry_delay=0).ask(QUESTION)
+    assert answer == ANSWER
+    assert metadata["answer_id"] == "answer-19"
+    assert metadata["server_time"] == "server-time"
+    assert len(session.calls) == 5
+    assert sum(call[1].endswith("/api/session/saveOrUpdate") for call in session.calls) == 1
+    assert sum(call[1].endswith("/api/efs/stream") for call in session.calls) == 1
+    assert sum(call[1].endswith("/api/check") for call in session.calls) == 1
+    assert session.calls[3] == session.calls[4]
+    identifiers = session.calls[1][2]["json"]
+    assert session.calls[3][2]["json"] == {
+        "question": QUESTION.prompt, "content": QUESTION.prompt,
+        **{key: identifiers[key] for key in ("sessionId", "requestId", "uuid")},
+    }
+    assert not session.responses
+
+
+@pytest.mark.parametrize("saved", [[], "unexpected response", 3, {"answerContent": []},
+                                  {"answerContent": 3}, {"answerContent": False}])
+def test_malformed_saved_answer_remains_terminal(saved):
+    session = answer_session()
+    session.responses[-1] = api(saved)
+    with pytest.raises(collector.CollectionError):
+        collector.KukaClient(session, retries=3, retry_delay=0).ask(QUESTION)
+    assert len(session.calls) == 4
+    assert not session.responses
+
+
+def test_saved_answer_mismatch_exhausts_default_fetch_budget_with_safe_diagnostics(caplog):
+    streamed = "stream-secret-contents"
+    saved = "saved-secret-contents"
+    session = answer_session(answer=streamed, saved=saved)
+    session.responses.extend(api({"answerContent": saved}) for _ in range(3))
+    with pytest.raises(collector.CollectionError, match="Stream and saved answer differ") as error:
+        collector.KukaClient(session, retry_delay=0).ask(QUESTION)
+    assert len(session.calls) == 7
+    assert all(call == session.calls[3] for call in session.calls[3:])
+    message = str(error.value)
+    assert "4 attempt(s)" in message
+    assert f"stream_chars={len(streamed)}" in message
+    assert f"saved_chars={len(saved)}" in message
+    assert "first_difference=1" in message
+    assert streamed not in message + caplog.text
+    assert saved not in message + caplog.text
+    assert not session.responses
+
+
+def test_saved_answer_http_and_mismatch_share_one_fetch_retry_budget():
+    session = answer_session(saved=ANSWER[:20])
+    session.responses.insert(3, Response(status=503))
+    session.responses.append(api({"answerContent": ANSWER}))
+    with pytest.raises(collector.CollectionError, match="2 attempt\\(s\\)"):
+        collector.KukaClient(session, retries=1, retry_delay=0).ask(QUESTION)
+    assert len(session.calls) == 5
+    assert session.calls[3] == session.calls[4]
+    # A matching response must not receive an extra retry budget after HTTP recovery.
+    assert len(session.responses) == 1
+
+
+@pytest.mark.parametrize("newline", ["\r\n", "\r"])
+def test_saved_answer_comparison_accepts_line_endings_and_returns_original_saved_text(newline):
+    streamed = "\n    first line  \n\nsecond line\n"
+    saved = "\n\n" + streamed.replace("\n", newline) + "\n"
+    session = answer_session(answer=streamed, saved=saved)
+    answer, _ = collector.KukaClient(session, retries=0).ask(QUESTION)
+    assert answer == saved
+    assert len(session.calls) == 4
+
+
+@pytest.mark.parametrize("saved", ["first line  \nsecond line\n",
+                                  "    first line\nsecond line\n"])
+def test_saved_answer_comparison_rejects_significant_spaces_after_newline_normalization(saved):
+    session = answer_session(answer="    first line  \r\nsecond line\r\n", saved=saved)
+    with pytest.raises(collector.CollectionError, match="differ"):
+        collector.KukaClient(session, retries=0).ask(QUESTION)
+    assert len(session.calls) == 4
 
 
 def test_moderation_refusal_does_not_export_rejected_raw_answer():
@@ -559,6 +644,34 @@ def test_cli_retry_exhaustion_preserves_previous_bytes_and_rerun_resumes_failed_
     assert output.read_bytes() == previous
     assert len(failed.calls) == 4
     assert all(response.closed for response in failed_streams)
+    assert not failed.responses
+    resumed = answer_session(session_id="resumed-session")
+    monkeypatch.setattr(requests, "Session", lambda: resumed)
+    assert collector.main(arguments) == 0
+    assert output.read_bytes().startswith(previous)
+    assert resumed.calls[1][2]["json"]["question"] == parsed[1].prompt
+    assert len(resumed.calls) == 4
+    assert collector.CollectionStore(output, parsed).completed_ids == {19, 20}
+
+
+def test_cli_saved_answer_mismatch_preserves_output_and_resumes_missing_question(tmp_path, monkeypatch):
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 真空搬运\n\n完整问题\n\n## 0020 夹取\n\n第二问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    parsed = collector.parse_questions(questions)
+    collector.CollectionStore(output, parsed).save(parsed[0], ANSWER)
+    previous = output.read_bytes()
+    failed = answer_session(saved="incomplete saved answer", session_id="failed-session")
+    failed.responses.append(api({"answerContent": "still incomplete"}))
+    monkeypatch.setattr(requests, "Session", lambda: failed)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+    arguments = ["--questions", str(questions), "--output", str(output),
+                 "--delay", "0", "--retry-delay", "0", "--retries", "1"]
+    assert collector.main(arguments) == 1
+    assert output.read_bytes() == previous
+    assert collector.CollectionStore(output, parsed).completed_ids == {19}
+    assert len(failed.calls) == 5
     assert not failed.responses
     resumed = answer_session(session_id="resumed-session")
     monkeypatch.setattr(requests, "Session", lambda: resumed)

@@ -83,8 +83,10 @@ Each question gets its own conversation with the KRL model. The collector waits
 for the complete UTF-8 stream, applies the site's answer check, and compares the
 persisted Markdown answer with the stream before saving it. It preserves code
 fences, tables, indentation, and any reasoning/reference sections returned by
-the service. If the site's check rejects an answer, it saves the refusal shown
-by the frontend.
+the service. Comparison tolerates CRLF/LF line-ending differences and outer
+newlines, while preserving spaces and indentation; the original persisted
+Markdown is saved verbatim. If the site's check rejects an answer, it saves the
+refusal shown by the frontend.
 
 ### 3. Continue the remaining questions
 
@@ -103,11 +105,16 @@ up to 60 seconds. A generation retry discards the partial stream and starts a
 fresh conversation and question UUID. The previous remote request may still
 finish. Once a stream is complete, failures in the answer check or saved-answer
 fetch retry only that step, retaining the original stream and identifiers.
+Missing, empty, or mismatching persisted answers also retry the fetch, allowing
+a delayed server save to catch up. HTTP failures and verification mismatches
+share the same fetch retry budget; neither generation nor the answer check is
+repeated. A persistent mismatch still prevents publication. Its log includes
+the stream/saved character counts and the first differing offset after newline
+normalization (starting at zero), without printing answer text.
 
 Use `--retries 0` to disable retries, or adjust `--retries` and `--retry-delay`.
-Authentication/API rejections and answer validation failures stop immediately.
-Exhausting retries or cancelling preserves completed local pairs for the next
-run.
+Authentication/API rejections and malformed response types stop immediately.
+Exhausting retries or cancelling preserves completed local pairs for the next run.
 
 ### 4. Collect concurrently
 
@@ -223,7 +230,7 @@ the process exits or crashes.
 | `--delay` | 2 seconds | Sequential pause; with concurrency > 1, global spacing between new-question dispatches. |
 | `--request-timeout` | 180 seconds | Non-streaming HTTP read idle timeout; connection timeout is 20 seconds. |
 | `--answer-timeout` | 900 seconds | Streaming read idle timeout and answer-duration limit checked as chunks arrive. |
-| `--retries` | 3 | Additional attempts per collection step after transient HTTP failures; 0 disables retries. |
+| `--retries` | 3 | Additional attempts per collection step after transient HTTP failures or missing/mismatching persisted answers; 0 disables retries. |
 | `--retry-delay` | 5 seconds | Initial retry delay, doubling up to 60 seconds. |
 | `--accept-login-terms` | Off | Explicitly accept the site's login policies. |
 | `--dry-run` | Off | Validate files and report pending work without network access. |
@@ -269,7 +276,7 @@ idempotent; a different answer for an existing sample is rejected.
 | `ConnectionError`, read timeout, or interrupted stream | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun; completed pairs remain saved. Increase `--answer-timeout` if generation needs longer silent intervals. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
 | `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. The log shows the safe numeric API code immediately, while other active calls finish. The code alone may require service support to distinguish account quotas, concurrency limits, and other rejections; the collector does not log server messages or response bodies. |
-| Stream and persisted answer differ | Inspect the service response/interface before retrying; the uncertain pair was not published. |
+| Stream and persisted answer differ | The collector refetches with the same stream/conversation up to `--retries` times. If the difference persists, the uncertain pair is not published; rerun to retry missing IDs. Counts and the differing offset in the log help diagnose it. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |
 
