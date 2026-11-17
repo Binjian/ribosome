@@ -95,6 +95,19 @@ Rerun the same command after an interruption. Completed local pairs are skipped.
 Only a fully checked answer is published; an interrupted remote question can be
 asked again because an incomplete request is not marked complete locally.
 
+During collection, transient connection errors, timeouts, interrupted streams,
+and HTTP 408/429/500/502/503/504 responses get up to three additional attempts.
+Retries wait 5, 10, then 20 seconds by default; the configurable delay doubles
+up to 60 seconds. A generation retry discards the partial stream and starts a
+fresh conversation and question UUID. The previous remote request may still
+finish. Once a stream is complete, failures in the answer check or saved-answer
+fetch retry only that step, retaining the original stream and identifiers.
+
+Use `--retries 0` to disable retries, or adjust `--retries` and `--retry-delay`.
+Authentication/API rejections and answer validation failures stop immediately.
+Exhausting retries or cancelling preserves completed local pairs for the next
+run.
+
 For a bounded session or a separate collection:
 
 ```sh
@@ -137,8 +150,10 @@ the process exits or crashes.
 | `--batch-size` | 20 | Maximum pairs per file. |
 | `--max-questions` | All pending in the range | Limit newly collected pairs this run. |
 | `--delay` | 2 seconds | Pause between questions. |
-| `--request-timeout` | 180 seconds | HTTP connection/read handling; connection timeout is 20 seconds. |
-| `--answer-timeout` | 900 seconds | Maximum streamed-answer duration. |
+| `--request-timeout` | 180 seconds | Non-streaming HTTP read idle timeout; connection timeout is 20 seconds. |
+| `--answer-timeout` | 900 seconds | Streaming read idle timeout and answer-duration limit checked as chunks arrive. |
+| `--retries` | 3 | Additional attempts per collection step after transient HTTP failures; 0 disables retries. |
+| `--retry-delay` | 5 seconds | Initial retry delay, doubling up to 60 seconds. |
 | `--accept-login-terms` | Off | Explicitly accept the site's login policies. |
 | `--dry-run` | Off | Validate files and report pending work without network access. |
 
@@ -179,6 +194,7 @@ idempotent; a different answer for an existing sample is rejected.
 | --- | --- |
 | Login fails | Check the account and CAPTCHA, then rerun for a fresh challenge. |
 | HTTP 463 at `/api-b/program_assistant/api/sign` | Update the collector and rerun. Main-site service requests need the frontend's `/api` proxy prefix: `/api/api-b/program_assistant/api/sign`. Completed pairs are reused. |
+| `ConnectionError`, read timeout, or interrupted stream | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun; completed pairs remain saved. Increase `--answer-timeout` if generation needs longer silent intervals. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
 | Stream and persisted answer differ | Inspect the service response/interface before retrying; the uncertain pair was not published. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |

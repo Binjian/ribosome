@@ -2,12 +2,12 @@
 
 import builtins
 import hashlib
-import sys
 from collections import deque
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
+import requests
+from urllib3.exceptions import ReadTimeoutError
 from utils.krl import collect_krl_qa as collector
 
 
@@ -54,7 +54,10 @@ class Session:
     def request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
         assert self.responses, f"Unexpected network request: {method} {url}"
-        return self.responses.popleft()
+        response = self.responses.popleft()
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
     def __enter__(self):
         return self
@@ -73,10 +76,11 @@ FORM = '<form id="fm1"><input type="hidden" name="execution" value="flow&amp;tok
 LOGIN_URL = "https://sso.kukacenter.com/cas/login?service=example"
 
 
-def answer_session(*, answer=ANSWER, saved=None, check=True, chunks=None):
+def answer_session(*, answer=ANSWER, saved=None, check=True, chunks=None,
+                   session_id="session-19"):
     if chunks is None:
         chunks = [answer.encode("utf-8")]
-    responses = [api({"sessionId": "session-19"}), Response(chunks=chunks), api({"status": check})]
+    responses = [api({"sessionId": session_id}), Response(chunks=chunks), api({"status": check})]
     if check:
         responses.append(api({"answerContent": answer if saved is None else saved,
                               "id": "answer-19", "time": "server-time"}))
@@ -146,10 +150,130 @@ def test_interrupted_stream_never_checks_or_fetches_a_partial_answer():
     assert len(session.calls) == 2
 
 
+def test_generation_uses_answer_timeout_instead_of_api_idle_timeout():
+    session = answer_session()
+    collector.KukaClient(session, request_timeout=13, answer_timeout=53).ask(QUESTION)
+    assert session.calls[1][2]["timeout"] == (20, 53)
+    assert all(call[2]["timeout"] == (20, 13)
+               for index, call in enumerate(session.calls) if index != 1)
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 502, 503, 504])
+def test_transient_http_failure_retries_generation(status):
+    failed = Response(status=status)
+    session = answer_session()
+    session.responses.appendleft(failed)
+    answer, _ = collector.KukaClient(session, retries=1, retry_delay=0).ask(QUESTION)
+    assert answer == ANSWER
+    assert failed.closed
+    assert len(session.calls) == 5
+    assert session.calls[0][1] == session.calls[1][1]
+    assert not session.responses
+
+
+@pytest.mark.parametrize("error", [
+    requests.ConnectionError("private-token"),
+    requests.Timeout("private-token"),
+    requests.exceptions.ChunkedEncodingError("private-token"),
+])
+def test_transient_stream_failure_restarts_with_fresh_conversation(error):
+    failed_stream = Response(chunks=[b"incomplete answer", error])
+    session = answer_session(session_id="retry-session")
+    session.responses.extendleft(reversed([
+        api({"sessionId": "failed-session"}), failed_stream,
+    ]))
+    answer, metadata = collector.KukaClient(session, retries=1, retry_delay=0).ask(QUESTION)
+    assert answer == ANSWER
+    assert metadata["session_id"] == "retry-session"
+    assert failed_stream.closed
+    assert len(session.calls) == 6
+    first, retry = session.calls[1][2]["json"], session.calls[3][2]["json"]
+    assert first["sessionId"] == "failed-session"
+    assert retry["sessionId"] == "retry-session"
+    assert first["uuid"] != retry["uuid"]
+    assert session.calls[4][2]["json"] == {"content": ANSWER, "uuid": retry["uuid"]}
+    assert not session.responses
+
+
+@pytest.mark.parametrize("stage", ["check", "persisted"])
+@pytest.mark.parametrize("failure", [requests.ConnectionError("private-token"), Response(status=503)])
+def test_answer_verification_retry_reuses_complete_stream_and_identifiers(stage, failure):
+    session = answer_session()
+    responses = list(session.responses)
+    responses.insert(2 if stage == "check" else 3, failure)
+    session.responses = deque(responses)
+    answer, metadata = collector.KukaClient(session, retries=1, retry_delay=0).ask(QUESTION)
+    assert answer == ANSWER
+    assert metadata["session_id"] == "session-19"
+    assert len(session.calls) == 5
+    assert sum(call[1].endswith("/api/session/saveOrUpdate") for call in session.calls) == 1
+    assert sum(call[1].endswith("/api/efs/stream") for call in session.calls) == 1
+    retry_index = 2 if stage == "check" else 3
+    assert session.calls[retry_index] == session.calls[retry_index + 1]
+    assert not session.responses
+
+
+def test_check_and_persisted_fetch_each_have_their_own_retry_budget():
+    session = Session([
+        api({"sessionId": "session-19"}), Response(chunks=[ANSWER.encode("utf-8")]),
+        requests.Timeout("check failed"), api({"status": True}),
+        requests.ConnectionError("fetch failed"), api({"answerContent": ANSWER}),
+    ])
+    answer, _ = collector.KukaClient(session, retries=1, retry_delay=0).ask(QUESTION)
+    assert answer == ANSWER
+    assert len(session.calls) == 6
+    assert session.calls[2] == session.calls[3]
+    assert session.calls[4] == session.calls[5]
+    assert not session.responses
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 463])
+def test_permanent_http_error_does_not_retry(status):
+    failed = Response(status=status)
+    session = Session([failed])
+    with pytest.raises(collector.CollectionError, match=f"HTTP {status}"):
+        collector.KukaClient(session, retries=3, retry_delay=0).ask(QUESTION)
+    assert len(session.calls) == 1
+    assert failed.closed
+
+
+def test_ssl_error_does_not_retry_generation():
+    session = Session([requests.exceptions.SSLError("private-token")])
+    with pytest.raises(collector.CollectionError):
+        collector.KukaClient(session, retries=3, retry_delay=0).ask(QUESTION)
+    assert len(session.calls) == 1
+
+
+def test_api_rejection_does_not_retry_generation():
+    session = Session([api(None, code="error")])
+    with pytest.raises(collector.CollectionError, match="API rejected"):
+        collector.KukaClient(session, retries=3, retry_delay=0).ask(QUESTION)
+    assert len(session.calls) == 1
+
+
+def test_invalid_utf8_stream_does_not_retry_generation():
+    session = answer_session(chunks=[b"\xe7"])
+    with pytest.raises(UnicodeDecodeError):
+        collector.KukaClient(session, retries=3, retry_delay=0).ask(QUESTION)
+    assert len(session.calls) == 2
+
+
+def test_nested_stream_read_timeout_is_identified_without_exposing_exception_text():
+    timeout = ReadTimeoutError(None, "/api/login?signature=private-token", "private-password")
+    response = Response(chunks=[b"partial", requests.ConnectionError(timeout)])
+    with pytest.raises(collector.CollectionError) as error:
+        collector.read_stream(response, 10)
+    message = str(error.value).lower()
+    assert "timeout" in message or "timed out" in message
+    assert "private-token" not in message
+    assert "private-password" not in message
+
+
 def test_saved_answer_mismatch_prevents_publishing():
     session = answer_session(saved="truncated")
     with pytest.raises(collector.CollectionError, match="differ"):
         collector.KukaClient(session).ask(QUESTION)
+    assert len(session.calls) == 4
 
 
 def test_saved_answer_comparison_keeps_significant_first_line_indentation():
@@ -306,7 +430,7 @@ def test_cli_stops_on_second_question_failure_and_resumes_completed_pair(tmp_pat
     questions.write_text("## 0019 真空搬运\n\n完整问题\n\n## 0020 夹取\n\n第二问题\n", encoding="utf-8")
     output = tmp_path / "qa.md"
     session = Session([])
-    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=lambda: session))
+    monkeypatch.setattr(requests, "Session", lambda: session)
     monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
     monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
     calls = []
@@ -338,7 +462,7 @@ def test_cli_sign_http_463_preserves_existing_completed_output(tmp_path, monkeyp
     saved = output.read_bytes()
     failed_sign = Response(status=463)
     session = Session([Response(), failed_sign])
-    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=lambda: session))
+    monkeypatch.setattr(requests, "Session", lambda: session)
     monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
 
     assert collector.main(["--questions", str(questions), "--output", str(output)]) == 1
@@ -353,20 +477,125 @@ def test_cli_response_read_connection_error_never_logs_signed_url(tmp_path, monk
     questions = tmp_path / "questions.md"
     questions.write_text("## 0019 真空搬运\n\n完整问题\n", encoding="utf-8")
     output = tmp_path / "qa.md"
-    connection_error = type("ConnectionError", (OSError,), {"__module__": "requests.exceptions"})
     session = answer_session(chunks=[
         b"partial answer",
-        connection_error("read failed for /api/login?signature=private-token; password=private-password"),
+        requests.ConnectionError("read failed for /api/login?signature=private-token; password=private-password"),
     ])
-    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=lambda: session))
+    monkeypatch.setattr(requests, "Session", lambda: session)
     monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
     monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
-    assert collector.main(["--questions", str(questions), "--output", str(output)]) == 1
+    assert collector.main(["--questions", str(questions), "--output", str(output), "--retries", "0"]) == 1
     assert not output.exists()
-    assert "ConnectionError during HTTP response" in caplog.text
+    assert "ConnectionError" in caplog.text
     assert "private-token" not in caplog.text
     assert "private-password" not in caplog.text
     assert len(session.calls) == 2
+
+
+def test_cli_retries_partial_answer_then_saves_once_and_continues(tmp_path, monkeypatch, caplog):
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 真空搬运\n\n完整问题\n\n## 0020 夹取\n\n第二问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    failed_stream = Response(chunks=[b"discarded partial answer", requests.ConnectionError("private-token")])
+    session = Session([
+        api({"sessionId": "failed-session"}), failed_stream,
+        *answer_session(session_id="retry-session").responses,
+        *answer_session(session_id="next-question").responses,
+    ])
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+    arguments = ["--questions", str(questions), "--output", str(output),
+                 "--delay", "0", "--retry-delay", "0", "--retries", "1"]
+    assert collector.main(arguments) == 0
+    saved = output.read_text(encoding="utf-8")
+    assert saved.count("## 样本0019：") == saved.count("## 样本0020：") == 1
+    assert "discarded partial answer" not in saved
+    store = collector.CollectionStore(output, collector.parse_questions(questions))
+    assert store.completed_ids == {19, 20}
+    assert failed_stream.closed
+    assert "retry" in caplog.text.lower()
+    assert "private-token" not in caplog.text
+    assert not session.responses
+
+
+def test_cli_retry_exhaustion_preserves_previous_bytes_and_rerun_resumes_failed_question(tmp_path, monkeypatch):
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 真空搬运\n\n完整问题\n\n## 0020 夹取\n\n第二问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    parsed = collector.parse_questions(questions)
+    collector.CollectionStore(output, parsed).save(parsed[0], ANSWER)
+    previous = output.read_bytes()
+    failed_streams = [
+        Response(chunks=[b"first partial", requests.ConnectionError("connection lost")]),
+        Response(chunks=[b"second partial", requests.exceptions.ChunkedEncodingError("truncated")]),
+    ]
+    failed = Session([
+        api({"sessionId": "first-attempt"}), failed_streams[0],
+        api({"sessionId": "second-attempt"}), failed_streams[1],
+    ])
+    monkeypatch.setattr(requests, "Session", lambda: failed)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+    arguments = ["--questions", str(questions), "--output", str(output),
+                 "--delay", "0", "--retry-delay", "0", "--retries", "1"]
+    assert collector.main(arguments) == 1
+    assert output.read_bytes() == previous
+    assert len(failed.calls) == 4
+    assert all(response.closed for response in failed_streams)
+    assert not failed.responses
+    resumed = answer_session(session_id="resumed-session")
+    monkeypatch.setattr(requests, "Session", lambda: resumed)
+    assert collector.main(arguments) == 0
+    assert output.read_bytes().startswith(previous)
+    assert resumed.calls[1][2]["json"]["question"] == parsed[1].prompt
+    assert len(resumed.calls) == 4
+    assert collector.CollectionStore(output, parsed).completed_ids == {19, 20}
+
+
+def test_cli_cancel_during_retry_backoff_preserves_completed_output(tmp_path, monkeypatch):
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 真空搬运\n\n完整问题\n\n## 0020 夹取\n\n第二问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    parsed = collector.parse_questions(questions)
+    collector.CollectionStore(output, parsed).save(parsed[0], ANSWER)
+    previous = output.read_bytes()
+    failed = Response(chunks=[b"partial", requests.ConnectionError("connection lost")])
+    session = Session([api({"sessionId": "failed-session"}), failed])
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+
+    def cancel(seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(collector.time, "sleep", cancel)
+    assert collector.main(["--questions", str(questions), "--output", str(output)]) == 130
+    assert output.read_bytes() == previous
+    assert len(session.calls) == 2
+    assert failed.closed
+
+
+def test_retry_delay_grows_exponentially_and_is_capped(monkeypatch):
+    responses = [Response(status=503) for _ in range(5)]
+    session = Session([*responses, *answer_session().responses])
+    sleeps = []
+    monkeypatch.setattr(collector.time, "sleep", sleeps.append)
+    answer, _ = collector.KukaClient(session, retries=5, retry_delay=5).ask(QUESTION)
+    assert answer == ANSWER
+    assert sleeps == [5, 10, 20, 40, 60]
+    assert all(response.closed for response in responses)
+
+
+@pytest.mark.parametrize("option,value", [
+    ("--retries", "-1"), ("--retry-delay", "-1"),
+    ("--retry-delay", "nan"), ("--retry-delay", "inf"),
+    ("--request-timeout", "inf"), ("--answer-timeout", "nan"),
+])
+def test_cli_rejects_invalid_retry_and_timeout_settings_before_network(option, value):
+    with pytest.raises(SystemExit) as error:
+        collector.main([option, value, "--dry-run"])
+    assert error.value.code == 2
 
 
 def test_credentials_use_local_dotenv_from_another_directory(tmp_path, monkeypatch):
@@ -432,7 +661,7 @@ def test_cli_passes_dotenv_credentials_to_login_without_logging_secrets(tmp_path
     questions = tmp_path / "questions.md"
     questions.write_text("## 0019 真空搬运\n\n完整问题\n", encoding="utf-8")
     session = Session([])
-    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=lambda: session))
+    monkeypatch.setattr(requests, "Session", lambda: session)
     logins = []
     monkeypatch.setattr(collector.KukaClient, "login",
                         lambda client, username, password, **kwargs: logins.append((username, password)))

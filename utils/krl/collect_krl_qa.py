@@ -17,6 +17,7 @@ import codecs
 import getpass
 import hashlib
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -50,6 +51,48 @@ LOG = logging.getLogger("collect_krl_qa")
 
 class CollectionError(RuntimeError):
     """A failure for which the current answer must not be published."""
+
+
+class RetryableCollectionError(CollectionError):
+    """A transient HTTP failure; retry only the affected collection stage."""
+
+
+def http_failure(exc: Exception, context: str) -> CollectionError | None:
+    """Classify requests errors without exposing URLs, credentials, or bodies."""
+    from requests.exceptions import (
+        ChunkedEncodingError,
+        ConnectionError,
+        RequestException,
+        SSLError,
+        Timeout,
+    )
+
+    if not isinstance(exc, RequestException):
+        return None
+    # iter_content wraps urllib3's read idle timeout in requests.ConnectionError.
+    # Inspect exception types, never their potentially sensitive message text.
+    causes = [exc]
+    seen = set()
+    timed_out = False
+    while causes:
+        cause = causes.pop()
+        if id(cause) in seen:
+            continue
+        seen.add(id(cause))
+        if isinstance(cause, Timeout) or type(cause).__name__ == "ReadTimeoutError":
+            timed_out = True
+        causes.extend(arg for arg in cause.args if isinstance(arg, BaseException))
+        causes.extend(
+            nested
+            for nested in (cause.__cause__, cause.__context__)
+            if nested is not None
+        )
+    retryable = isinstance(
+        exc, (ConnectionError, Timeout, ChunkedEncodingError)
+    ) and not isinstance(exc, SSLError)
+    error_type = RetryableCollectionError if retryable else CollectionError
+    reason = "HTTP read/connect timeout" if timed_out else type(exc).__name__
+    return error_type(f"{context}: {reason}")
 
 
 def load_credentials(username=None):
@@ -142,11 +185,19 @@ def read_stream(response, timeout: float) -> str:
     decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
     parts = []
     deadline = time.monotonic() + timeout
-    for chunk in response.iter_content(chunk_size=4096):
-        if time.monotonic() > deadline:
-            raise CollectionError("Answer exceeded --answer-timeout; nothing saved")
-        if chunk:
-            parts.append(decoder.decode(chunk))
+    try:
+        for chunk in response.iter_content(chunk_size=4096):
+            if time.monotonic() > deadline:
+                raise CollectionError("Answer exceeded --answer-timeout; nothing saved")
+            if chunk:
+                parts.append(decoder.decode(chunk))
+    except Exception as exc:
+        failure = http_failure(
+            exc, "Answer stream interrupted; incomplete answer discarded"
+        )
+        if failure is None:
+            raise
+        raise failure from exc
     parts.append(decoder.decode(b"", final=True))
     answer = "".join(parts)
     if not answer.strip():
@@ -155,14 +206,36 @@ def read_stream(response, timeout: float) -> str:
 
 
 class KukaClient:
-    def __init__(self, session, request_timeout=60.0, answer_timeout=900.0):
+    def __init__(
+        self, session, request_timeout=180.0, answer_timeout=900.0,
+        retries=3, retry_delay=5.0,
+    ):
         self.session = session
         self.request_timeout = request_timeout
         self.answer_timeout = answer_timeout
+        self.retries = retries
+        self.retry_delay = retry_delay
+
+    def retry(self, operation, action):
+        """Bound retries at stage boundaries, with a sanitized reason and backoff."""
+        delay = min(self.retry_delay, 60.0)
+        for attempt in range(self.retries + 1):
+            try:
+                return action()
+            except RetryableCollectionError as exc:
+                if attempt == self.retries:
+                    raise CollectionError(
+                        f"{operation} failed after {attempt + 1} attempt(s): {exc}"
+                    ) from exc
+                LOG.warning(
+                    "%s failed (attempt %d/%d): %s; retrying in %g seconds",
+                    operation, attempt + 1, self.retries + 1, exc, delay,
+                )
+                time.sleep(delay)
+                delay = min(delay * 2, 60.0)
 
     def request(self, method, url, **kwargs):
-        # requests does not automatically retry POSTs. In particular, never
-        # retry an ambiguous generation and silently spend another request.
+        # No blanket POST retries: callers choose stage boundaries explicitly.
         kwargs.setdefault("timeout", (20, self.request_timeout))
         if urlsplit(url).hostname == "chat.kukacenter.com":
             kwargs.setdefault(
@@ -171,13 +244,21 @@ class KukaClient:
         try:
             response = self.session.request(method, url, **kwargs)
         except Exception as exc:
+            failure = http_failure(exc, f"{method} {urlsplit(url).path}")
+            if failure is not None:
+                raise failure from exc
             raise CollectionError(
                 f"{method} {urlsplit(url).path}: {type(exc).__name__}; request failed"
             ) from exc
         if not 200 <= response.status_code < 300:
             response.close()
-            raise CollectionError(
-                f"{method} {urlsplit(url).path}: HTTP {response.status_code}; stopping"
+            error_type = (
+                RetryableCollectionError
+                if response.status_code in (408, 429, 500, 502, 503, 504)
+                else CollectionError
+            )
+            raise error_type(
+                f"{method} {urlsplit(url).path}: HTTP {response.status_code}"
             )
         return response
 
@@ -319,7 +400,8 @@ class KukaClient:
             },
         )
 
-    def ask(self, question: Question) -> tuple[str, dict]:
+    def generate(self, question: Question) -> tuple[str, dict]:
+        """Start a fresh conversation; a failed stream is never reused."""
         session = self.api("/api/session/saveOrUpdate", {"sessionTitle": "新建对话"})
         if not isinstance(session, dict) or not session.get("sessionId"):
             raise CollectionError("Chat did not create a session")
@@ -342,10 +424,25 @@ class KukaClient:
             CHAT_URL + "/api/efs/stream",
             json=payload,
             stream=True,
-            timeout=(20, min(self.request_timeout, self.answer_timeout)),
+            # Reasoning can be silent longer than ordinary API calls. Do not
+            # cut off a 900-second answer at the 180-second API idle timeout.
+            timeout=(20, self.answer_timeout),
         ) as response:
             streamed = read_stream(response, self.answer_timeout)
-        checked = self.api("/api/check", {"content": streamed, "uuid": question_uuid})
+        return streamed, identifiers
+
+    def ask(self, question: Question) -> tuple[str, dict]:
+        streamed, identifiers = self.retry(
+            f"Question {question.id:04d} generation (new conversation each attempt; "
+            "the previous request may still complete remotely)",
+            lambda: self.generate(question),
+        )
+        checked = self.retry(
+            f"Question {question.id:04d} answer check",
+            lambda: self.api(
+                "/api/check", {"content": streamed, "uuid": identifiers["uuid"]}
+            ),
+        )
         if not isinstance(checked, dict) or not isinstance(checked.get("status"), bool):
             raise CollectionError(
                 "Chat answer check returned no boolean status; nothing saved"
@@ -355,16 +452,19 @@ class KukaClient:
             "mode": "KRL编程",
             "robot_model": MODEL,
             "collected_at": datetime.now(timezone.utc).isoformat(),
-            "session_id": session_id,
-            "question_uuid": question_uuid,
+            "session_id": identifiers["sessionId"],
+            "question_uuid": identifiers["uuid"],
             "answer_check_passed": checked["status"],
         }
         if not checked["status"]:
             # Exactly the replacement displayed by the frontend's answer check.
             return REFUSAL, metadata
-        saved = self.api(
-            "/api/krl/selectQuestionInfo",
-            dict(identifiers, question=question.prompt, content=question.prompt),
+        saved = self.retry(
+            f"Question {question.id:04d} saved answer fetch",
+            lambda: self.api(
+                "/api/krl/selectQuestionInfo",
+                dict(identifiers, question=question.prompt, content=question.prompt),
+            ),
         )
         if not isinstance(saved, dict) or not isinstance(
             saved.get("answerContent"), str
@@ -415,13 +515,21 @@ def build_parser():
         "--request-timeout",
         type=float,
         default=180.0,
-        help="HTTP/read idle timeout in seconds",
+        help="Non-streaming HTTP read idle timeout in seconds (default: 180)",
     )
     parser.add_argument(
         "--answer-timeout",
         type=float,
         default=900.0,
-        help="Maximum streamed answer duration",
+        help="Stream read idle timeout and answer duration limit (default: 900 seconds)",
+    )
+    parser.add_argument(
+        "--retries", type=int, default=3,
+        help="Additional attempts per stage after transient HTTP errors (default: 3)",
+    )
+    parser.add_argument(
+        "--retry-delay", type=float, default=5.0,
+        help="Initial retry delay in seconds; doubles up to 60 seconds (default: 5)",
     )
     parser.add_argument(
         "--accept-login-terms",
@@ -445,8 +553,14 @@ def main(argv=None):
         args.max_questions is not None and args.max_questions < 1
     ):
         parser.error("--batch-size and --max-questions must be positive")
+    if not all(math.isfinite(value) for value in (
+        args.delay, args.request_timeout, args.answer_timeout, args.retry_delay
+    )):
+        parser.error("timeouts and delays must be finite")
     if args.delay < 0 or min(args.request_timeout, args.answer_timeout) <= 0:
         parser.error("timeouts must be positive and --delay must be nonnegative")
+    if args.retries < 0 or args.retry_delay < 0:
+        parser.error("--retries and --retry-delay must be nonnegative")
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
@@ -499,7 +613,10 @@ def main(argv=None):
                         "Referer": MAIN_URL + "/chat",
                     }
                 )
-                client = KukaClient(session, args.request_timeout, args.answer_timeout)
+                client = KukaClient(
+                    session, args.request_timeout, args.answer_timeout,
+                    retries=args.retries, retry_delay=args.retry_delay,
+                )
                 client.login(
                     username,
                     password,
