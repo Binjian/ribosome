@@ -1,9 +1,16 @@
 """Offline KUKA frontend protocol tests; no live login or model requests."""
 
+import asyncio
 import builtins
 import hashlib
+import subprocess
+import sys
+import textwrap
+import threading
+import time
 from collections import deque
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -674,3 +681,386 @@ def test_cli_passes_dotenv_credentials_to_login_without_logging_secrets(tmp_path
 def test_default_credentials_file_is_beside_collector():
     assert collector.ENV_FILE == Path(collector.__file__).resolve().with_name(".env")
     assert collector.ENV_FILE == collector.ROOT / "utils/krl/.env"
+
+
+@pytest.fixture
+def concurrent_cli(tmp_path, monkeypatch):
+    questions = tmp_path / "questions.md"
+    questions.write_text("\n".join(
+        f"## {number:04d} 工艺{number}\n\n问题{number}\n"
+        for number in range(19, 25)
+    ), encoding="utf-8")
+    state = SimpleNamespace(
+        questions=collector.parse_questions(questions), output=tmp_path / "qa.md",
+        sessions=[], logins=[], saved=[], draining=threading.Event(),
+        saved_events={number: threading.Event() for number in range(19, 25)},
+    )
+    state.arguments = [
+        "--questions", str(questions), "--output", str(state.output),
+        "--concurrency", "2", "--delay", "0",
+    ]
+
+    class TrackedSession(requests.Session):
+        def __init__(self):
+            super().__init__()
+            self.closed = False
+            state.sessions.append(self)
+
+        def request(self, *args, **kwargs):
+            raise AssertionError("Unexpected network request in offline test")
+
+        def close(self):
+            self.closed = True
+            super().close()
+
+    def login(client, username, password, **kwargs):
+        state.logins.append(client.session)
+        client.session.cookies.set(
+            "auth", "main-cookie", domain="www.kukacenter.com", path="/chat",
+        )
+        client.session.cookies.set_cookie(requests.cookies.create_cookie(
+            "auth", "chat-cookie", domain="chat.kukacenter.com", path="/api",
+            secure=True, rest={"HttpOnly": True},
+        ))
+
+    owner = threading.get_ident()
+    state.original_save = collector.CollectionStore.save
+
+    def save(store, question, answer, metadata=None):
+        assert threading.get_ident() == owner, "Only the coordinator may write"
+        path = state.original_save(store, question, answer, metadata)
+        state.saved.append(question.id)
+        state.saved_events[question.id].set()
+        return path
+
+    original_error = collector.LOG.error
+
+    def error(message, *args, **kwargs):
+        original_error(message, *args, **kwargs)
+        if "draining" in message:
+            state.draining.set()
+
+    monkeypatch.setattr(requests, "Session", TrackedSession)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+    monkeypatch.setattr(collector.KukaClient, "login", login)
+    monkeypatch.setattr(collector.CollectionStore, "save", save)
+    monkeypatch.setattr(collector.LOG, "error", error)
+    return state
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5"])
+def test_cli_rejects_invalid_concurrency_before_network(value):
+    with pytest.raises(SystemExit) as error:
+        collector.main(["--concurrency", value, "--dry-run"])
+    assert error.value.code == 2
+
+
+def test_dry_run_reports_concurrency_without_network_or_writes(concurrent_cli, capsys):
+    state = concurrent_cli
+    assert collector.main([*state.arguments, "--dry-run"]) == 0
+    assert "Concurrency: 2" in capsys.readouterr().out
+    assert not state.sessions
+    assert not state.output.exists()
+    assert not state.output.with_name(".qa.lock").exists()
+
+
+def test_concurrent_calls_overlap_with_isolated_authenticated_sessions(concurrent_cli, monkeypatch):
+    state = concurrent_cli
+    barrier = threading.Barrier(2)
+    mutex = threading.Lock()
+    active = set()
+    peak = 0
+
+    def ask(client, question):
+        nonlocal peak
+        session = client.session
+        assert not session.closed
+        assert session is not state.logins[0]
+        assert session.headers == state.logins[0].headers
+        assert session.cookies.get("auth", domain="www.kukacenter.com", path="/chat") == "main-cookie"
+        assert session.cookies.get("auth", domain="chat.kukacenter.com", path="/api") == "chat-cookie"
+        chat_cookie = next(cookie for cookie in session.cookies if cookie.domain == "chat.kukacenter.com")
+        assert chat_cookie.secure and chat_cookie.has_nonstandard_attr("HttpOnly")
+        assert client.request_timeout == 17 and client.answer_timeout == 31
+        assert client.retries == 2 and client.retry_delay == 0
+        with mutex:
+            assert session not in active, "A worker session was shared concurrently"
+            active.add(session)
+            peak = max(peak, len(active))
+        try:
+            barrier.wait(timeout=5)
+            return ANSWER, {"mode": "KRL编程"}
+        finally:
+            with mutex:
+                active.remove(session)
+
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    assert collector.main([
+        *state.arguments, "--request-timeout", "17", "--answer-timeout", "31",
+        "--retries", "2", "--retry-delay", "0",
+    ]) == 0
+    assert peak == 2 and len(state.logins) == 1 and len(state.sessions) == 3
+    assert set(state.saved) == set(range(19, 25))
+    assert all(session.closed for session in state.sessions)
+    assert len({id(session.cookies) for session in state.sessions}) == 3
+    for adapter in ("https://", "http://"):
+        assert len({id(session.adapters[adapter]) for session in state.sessions}) == 3
+    state.sessions[1].cookies.set("local-change", "worker-one")
+    assert all("local-change" not in session.cookies for session in (state.sessions[0], state.sessions[2]))
+
+
+def test_concurrent_completion_order_batches_and_resume(concurrent_cli, monkeypatch):
+    state = concurrent_cli
+    calls = []
+
+    def ask(client, question):
+        calls.append(question.id)
+        if question.id == 19:
+            assert state.saved_events[22].wait(5)
+        return ANSWER, {"mode": "KRL编程"}
+
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    arguments = [*state.arguments, "--max-questions", "4", "--batch-size", "2"]
+    assert collector.main(arguments) == 0
+    assert sorted(calls) == [19, 20, 21, 22]
+    assert state.saved == [20, 21, 22, 19]
+    first = state.output.read_bytes()
+    second_path = state.output.with_name("qa_002.md")
+    second = second_path.read_bytes()
+    assert first.index("样本0020".encode()) < first.index("样本0021".encode())
+    assert second.index("样本0022".encode()) < second.index("样本0019".encode())
+    store = collector.CollectionStore(state.output, state.questions, batch_size=2)
+    assert store.completed_ids == {19, 20, 21, 22}
+    calls.clear()
+    assert collector.main(arguments) == 0
+    assert sorted(calls) == [23, 24]
+    assert state.output.read_bytes() == first and second_path.read_bytes() == second
+    assert collector.CollectionStore(state.output, state.questions, batch_size=2).completed_ids == set(range(19, 25))
+
+
+def test_global_delay_spaces_concurrent_starts_without_waiting_for_answers(concurrent_cli, monkeypatch):
+    state = concurrent_cli
+    starts = []
+
+    def ask(client, question):
+        starts.append(time.monotonic())
+        if question.id == 19:
+            assert state.saved_events[20].wait(5)
+        return ANSWER, {}
+
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    assert collector.main([
+        *state.arguments, "--max-questions", "3", "--delay", "0.04",
+    ]) == 0
+    assert len(starts) == 3
+    assert all(later - earlier >= 0.035 for earlier, later in zip(starts, starts[1:]))
+
+
+@pytest.mark.parametrize("delay", ["0", "10"])
+def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_cli, monkeypatch, delay):
+    state = concurrent_cli
+    second_started = threading.Event()
+    calls = []
+
+    def ask(client, question):
+        calls.append(question.id)
+        if question.id == 19:
+            # With delay=10, fail before the second question is dispatched.
+            if delay == "0":
+                assert second_started.wait(5)
+            raise collector.CollectionError("terminal failure")
+        second_started.set()
+        assert state.draining.wait(5)
+        assert not client.session.closed
+        return ANSWER, {}
+
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    assert collector.main([*state.arguments, "--delay", delay]) == 1
+    assert sorted(calls) == ([19, 20] if delay == "0" else [19])
+    completed = collector.CollectionStore(state.output, state.questions).completed_ids
+    assert completed == ({20} if delay == "0" else set())
+    assert all(session.closed for session in state.sessions)
+    calls.clear()
+
+    def resumed_ask(client, question):
+        calls.append(question.id)
+        return ANSWER, {}
+
+    monkeypatch.setattr(collector.KukaClient, "ask", resumed_ask)
+    assert collector.main(state.arguments) == 0
+    assert set(calls) == set(range(19, 25)) - completed
+
+
+def test_write_failure_preserves_output_stops_publication_and_drains(concurrent_cli, monkeypatch):
+    state = concurrent_cli
+    state.original_save(collector.CollectionStore(state.output, state.questions), state.questions[0], ANSWER)
+    before = state.output.read_bytes()
+    second_started = threading.Event()
+    calls = []
+    save_attempts = []
+
+    def ask(client, question):
+        calls.append(question.id)
+        if question.id == 20:
+            assert second_started.wait(5)
+        else:
+            second_started.set()
+            assert state.draining.wait(5)
+            assert not client.session.closed
+        return ANSWER, {}
+
+    def fail_save(store, question, answer, metadata=None):
+        save_attempts.append(question.id)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    monkeypatch.setattr(collector.CollectionStore, "save", fail_save)
+    assert collector.main(state.arguments) == 1
+    assert sorted(calls) == [20, 21] and save_attempts == [20]
+    assert state.output.read_bytes() == before
+    assert all(session.closed for session in state.sessions)
+
+
+def test_concurrent_stage_retries_preserve_generation_and_verification_boundaries(concurrent_cli, monkeypatch):
+    state = concurrent_cli
+    attempts = {}
+    mutex = threading.Lock()
+
+    def attempt(client, stage):
+        with mutex:
+            counts = attempts.setdefault(client, {"generation": 0, "check": 0, "fetch": 0})
+            counts[stage] += 1
+            if counts[stage] == 1:
+                raise collector.RetryableCollectionError("transient failure")
+
+    def generate(client, question):
+        attempt(client, "generation")
+        return ANSWER, {"sessionId": f"session-{question.id}", "requestId": f"session-{question.id}", "uuid": f"uuid-{question.id}"}
+
+    def api_call(client, path, payload):
+        stage = "check" if path == "/api/check" else "fetch"
+        attempt(client, stage)
+        return {"status": True} if stage == "check" else {"answerContent": ANSWER}
+
+    # Force both worker clients to participate even though fake stages are fast.
+    barrier = threading.Barrier(2)
+    original_ask = collector.KukaClient.ask
+
+    def ask(client, question):
+        barrier.wait(timeout=5)
+        return original_ask(client, question)
+
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    monkeypatch.setattr(collector.KukaClient, "generate", generate)
+    monkeypatch.setattr(collector.KukaClient, "api", api_call)
+    assert collector.main([
+        *state.arguments, "--max-questions", "2", "--retries", "1", "--retry-delay", "0",
+    ]) == 0
+    assert len(attempts) == 2
+    assert all(counts == {"generation": 2, "check": 2, "fetch": 2} for counts in attempts.values())
+    saved = state.output.read_text(encoding="utf-8")
+    assert '"session_id": "session-19"' in saved and '"session_id": "session-20"' in saved
+
+
+def test_coordinator_cancellation_drains_workers_before_raising_interrupt(concurrent_cli, monkeypatch):
+    state = concurrent_cli
+    both_started = threading.Barrier(2)
+    release = threading.Event()
+    calls = []
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        coordinator = asyncio.current_task()
+
+        def ask(client, question):
+            calls.append(question.id)
+            both_started.wait(timeout=5)
+            if question.id == 19:
+                loop.call_soon_threadsafe(coordinator.cancel)
+                loop.call_soon_threadsafe(release.set)
+            assert release.wait(5)
+            return ANSWER, {}
+
+        monkeypatch.setattr(collector.KukaClient, "ask", ask)
+        clients = [collector.KukaClient(object()), collector.KukaClient(object())]
+        store = collector.CollectionStore(state.output, state.questions)
+        await collector._collect_concurrently(clients, state.questions, store, 0)
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(run())
+    assert sorted(calls) == [19, 20] and set(state.saved) == {19, 20}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Uses POSIX SIGINT delivery")
+def test_real_sigint_drains_saves_and_closes_sessions_before_releasing_output_lock(tmp_path):
+    script = textwrap.dedent('''
+        import os
+        import signal
+        import sys
+        import threading
+        from pathlib import Path
+        import requests
+        from utils.krl import collect_krl_qa as collector
+
+        root = Path(sys.argv[1])
+        questions = root / "questions.md"
+        questions.write_text("".join(f"## {i:04d} Q{i}\\n\\nprompt{i}\\n\\n" for i in range(19, 23)))
+        output = root / "qa.md"
+        sessions = []
+        barrier = threading.Barrier(3)
+        release = threading.Event()
+        calls = []
+
+        class Session(requests.Session):
+            def __init__(self):
+                super().__init__()
+                self.closed = False
+                sessions.append(self)
+
+            def close(self):
+                self.closed = True
+                super().close()
+
+        def ask(client, question):
+            calls.append(question.id)
+            barrier.wait(timeout=5)
+            assert release.wait(5)
+            assert not client.session.closed
+            return "complete answer", {}
+
+        def interrupt():
+            barrier.wait(timeout=5)
+            os.kill(os.getpid(), signal.SIGINT)
+            release.set()
+
+        requests.Session = Session
+        collector.load_credentials = lambda username=None: ("user", "password")
+        collector.KukaClient.login = lambda *args, **kwargs: None
+        collector.KukaClient.ask = ask
+        original_save = collector.CollectionStore.save
+
+        def save(store, *args, **kwargs):
+            try:
+                with collector.output_lock(output):
+                    raise AssertionError("Output lock released before save")
+            except collector.CollectionError:
+                pass
+            return original_save(store, *args, **kwargs)
+
+        collector.CollectionStore.save = save
+        sender = threading.Thread(target=interrupt)
+        sender.start()
+        status = collector.main(["--questions", str(questions), "--output", str(output), "--concurrency", "2", "--delay", "0"])
+        sender.join(timeout=5)
+        assert status == 130, status
+        assert sorted(calls) == [19, 20], calls
+        assert all(session.closed for session in sessions)
+        assert collector.CollectionStore(output, collector.parse_questions(questions)).completed_ids == {19, 20}
+        with collector.output_lock(output):
+            pass
+    ''')
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        cwd=collector.ROOT, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

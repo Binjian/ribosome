@@ -108,6 +108,31 @@ Authentication/API rejections and answer validation failures stop immediately.
 Exhausting retries or cancelling preserves completed local pairs for the next
 run.
 
+### 4. Collect concurrently
+
+Start with two concurrent questions and a small run:
+
+```sh
+.venv/bin/python utils/krl/collect_krl_qa.py --concurrency 2 --max-questions 4
+```
+
+The default `--concurrency 1` retains sequential collection. With a higher
+value, `--delay` is the minimum global spacing between dispatches of new
+questions, allowing their streamed answers to overlap. Stage retries keep their
+existing backoff and are not subject to this spacing.
+
+Login and CAPTCHA happen once. Workers have independent HTTP sessions with
+copied authentication cookies, but still use the same account. KUKA Center's
+account concurrency limits are unverified; measure a small run before increasing
+concurrency. More workers do not guarantee faster service-side generation.
+
+After a terminal question failure or the first Ctrl+C, the collector stops
+starting questions, finishes active questions with their configured retries,
+saves validated answers, and exits with status 1 or 130 respectively. Graceful
+shutdown can wait through HTTP timeouts and retry backoff. Keep the process
+running until it exits to retain these answers. An output-write failure stops
+all further publication while active HTTP calls drain.
+
 For a bounded session or a separate collection:
 
 ```sh
@@ -119,12 +144,18 @@ For a bounded session or a separate collection:
 
 ## Output and resume rules
 
-The existing 18 pairs stay in `assets/KRL/krl_qa_collected.md`. Samples 0019 and
+With sequential collection, the existing 18 pairs stay in
+`assets/KRL/krl_qa_collected.md`. Samples 0019 and
 0020 fill that file; samples 0021–0040 go into `krl_qa_collected_002.md`, then
 0041–0060 into `_003.md`, and so on. A new collection beginning at 0019 instead
 holds 0019–0038 in its first file. The final batch can contain fewer than 20
 pairs. Existing introductory text, including historical manual counts, is
 preserved; the dry-run report reflects the actual saved records.
+
+Concurrent collection saves in completion order, so a batch can contain
+nonconsecutive sample IDs. Each batch still holds at most `--batch-size` pairs.
+Resume checks completed IDs across all batches and requests only missing
+questions; existing answers are never reordered or replaced.
 
 New records include source and exact-answer hashes, answer length, completion
 markers, and collection metadata. Existing prompts must still match the input.
@@ -149,7 +180,8 @@ the process exits or crashes.
 | `--start` / `--end` | 19 / last source ID | Inclusive sample range. |
 | `--batch-size` | 20 | Maximum pairs per file. |
 | `--max-questions` | All pending in the range | Limit newly collected pairs this run. |
-| `--delay` | 2 seconds | Pause between questions. |
+| `--concurrency` | 1 | Maximum simultaneous questions; 1 keeps sequential collection. |
+| `--delay` | 2 seconds | Sequential pause; with concurrency > 1, global spacing between new-question dispatches. |
 | `--request-timeout` | 180 seconds | Non-streaming HTTP read idle timeout; connection timeout is 20 seconds. |
 | `--answer-timeout` | 900 seconds | Streaming read idle timeout and answer-duration limit checked as chunks arrive. |
 | `--retries` | 3 | Additional attempts per collection step after transient HTTP failures; 0 disables retries. |
@@ -213,3 +245,27 @@ initial account/CAPTCHA check.
 
 These tests use fake HTTP responses and temporary files; they do not log in or
 submit chatbot questions.
+
+## Concurrent collection implementation plan
+
+The implemented design follows these decisions:
+
+1. Add a positive `--concurrency` option, defaulting to 1, and show it in dry-run
+   output. Keep the synchronous path for sequential runs and add no dependencies.
+2. Authenticate once, then allocate at most `min(concurrency, pending_count)`
+   independent worker sessions with copied headers and complete cookie jars.
+   Run whole `KukaClient.ask()` calls with `asyncio.to_thread()`, retaining the
+   existing generation/check/fetch retry boundaries and settings.
+3. Filter completed questions and apply `--max-questions` before scheduling.
+   Bound active calls and globally space new-question dispatches with `--delay`.
+   Process available failures before starting replacement work.
+4. Keep one coordinator as the only writer under the existing process lock.
+   Publish validated answers atomically in completion order, preserving
+   integrity checks, existing answers, and ID-based resume.
+5. On terminal failure or Ctrl+C, stop dispatching and drain active calls before
+   closing sessions or releasing the output lock. Save validated successes and
+   exit 1 or 130. On a write failure, stop further publishing while draining.
+6. Verify offline: CLI validation, unchanged sequential behavior, one login and
+   isolated sessions, bounded overlap, global spacing, single-writer saves,
+   completion-order resume, retry preservation, and graceful failure/Ctrl+C.
+   Live service concurrency and performance require a separate small trial.

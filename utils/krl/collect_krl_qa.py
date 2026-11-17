@@ -13,6 +13,7 @@ endpoints as the site's chat frontend. No CAPTCHA solving or browser dependency.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import codecs
 import getpass
 import hashlib
@@ -23,7 +24,9 @@ import sys
 import tempfile
 import time
 import uuid
-from contextlib import contextmanager
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -481,6 +484,131 @@ class KukaClient:
         return answer, metadata
 
 
+def _save_answer(store, question, answer, metadata):
+    path = store.save(question, answer, metadata)
+    LOG.info("Saved %04d (%d characters) -> %s", question.id, len(answer), path)
+
+
+def _ask_worker(client, question):
+    # Transport KeyboardInterrupt/SystemExit as outcomes too: raising them in an
+    # asyncio task would interrupt the loop before other threads can be drained.
+    try:
+        answer, metadata = client.ask(question)
+        return answer, metadata, None
+    except BaseException as exc:
+        return None, None, exc
+
+
+async def _collect_concurrently(clients, pending, store, delay):
+    """Bound whole ask calls; only this coordinator publishes completed answers."""
+    idle = deque(clients)
+    active = {}
+    completed = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(
+        max_workers=len(clients), thread_name_prefix="krl",
+    ))
+    next_start = loop.time()
+    index = 0
+    failure = None
+    interrupted = False
+    publishing = True
+
+    async def run_question(client, question):
+        try:
+            outcome = await asyncio.to_thread(_ask_worker, client, question)
+        except Exception as exc:
+            outcome = None, None, exc
+        # Queue before completing the task, preserving observed completion order.
+        completed.put_nowait((client, question, outcome))
+
+    while active or (index < len(pending) and failure is None and not interrupted):
+        try:
+            # Consume every available result before deciding to dispatch more.
+            while not completed.empty():
+                client, question, (answer, metadata, error) = completed.get_nowait()
+                active.pop(client)
+                idle.append(client)
+                if error is not None:
+                    if isinstance(error, (KeyboardInterrupt, EOFError)):
+                        interrupted = True
+                    if failure is None:
+                        failure = error
+                    LOG.error(
+                        "Question %04d failed; stopping new questions and draining %d active calls",
+                        question.id, len(active),
+                    )
+                elif publishing:
+                    try:
+                        _save_answer(store, question, answer, metadata)
+                    except Exception as exc:
+                        publishing = False
+                        failure = exc
+                        LOG.error(
+                            "Output write failed; stopping publication and draining %d active calls",
+                            len(active),
+                        )
+
+            if failure is not None or interrupted:
+                if active:
+                    await asyncio.wait(active.values(), return_when=asyncio.FIRST_COMPLETED)
+                continue
+
+            remaining = max(0.0, next_start - loop.time())
+            if idle and index < len(pending) and remaining == 0:
+                client = idle.popleft()
+                question = pending[index]
+                index += 1
+                LOG.info(
+                    "[%d/%d] Asking %04d %s (KRL编程)",
+                    index, len(pending), question.id, question.title,
+                )
+                active[client] = asyncio.create_task(run_question(client, question))
+                next_start = loop.time() + delay
+                # Let the dispatched call start and expose any immediate failure.
+                await asyncio.sleep(0)
+            elif active:
+                timeout = remaining if idle and index < len(pending) else None
+                await asyncio.wait(
+                    active.values(), timeout=timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            elif index < len(pending):
+                await asyncio.sleep(remaining)
+        except asyncio.CancelledError:
+            # asyncio.run translates the first Ctrl+C into coordinator
+            # cancellation. wait() leaves child tasks running; never cancel
+            # to_thread tasks or close their HTTP sessions before they finish.
+            interrupted = True
+            LOG.warning(
+                "Stopped starting questions; finishing %d active calls, including configured retries",
+                len(active),
+            )
+
+    if interrupted:
+        raise KeyboardInterrupt
+    if failure is not None:
+        raise failure
+
+
+def _collect_with_workers(client, pending, store, concurrency, delay):
+    import requests
+
+    with ExitStack() as sessions:
+        clients = []
+        for _ in range(min(concurrency, len(pending))):
+            session = sessions.enter_context(requests.Session())
+            session.headers.update(client.session.headers)
+            # Copy the complete jar, including cookie domains/paths/flags. Each
+            # worker has its own cookies, adapters, and connection pools.
+            session.cookies = client.session.cookies.copy()
+            clients.append(KukaClient(
+                session, client.request_timeout, client.answer_timeout,
+                retries=client.retries, retry_delay=client.retry_delay,
+            ))
+        asyncio.run(_collect_concurrently(clients, pending, store, delay))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -506,10 +634,14 @@ def build_parser():
         "--max-questions", type=int, help="Limit newly collected answers for this run"
     )
     parser.add_argument(
+        "--concurrency", type=int, default=1,
+        help="Maximum simultaneous questions; 1 keeps sequential collection (default: 1)",
+    )
+    parser.add_argument(
         "--delay",
         type=float,
         default=2.0,
-        help="Seconds between questions (default: 2)",
+        help="Seconds between questions; global start spacing with concurrency > 1 (default: 2)",
     )
     parser.add_argument(
         "--request-timeout",
@@ -553,6 +685,8 @@ def main(argv=None):
         args.max_questions is not None and args.max_questions < 1
     ):
         parser.error("--batch-size and --max-questions must be positive")
+    if args.concurrency < 1:
+        parser.error("--concurrency must be positive")
     if not all(math.isfinite(value) for value in (
         args.delay, args.request_timeout, args.answer_timeout, args.retry_delay
     )):
@@ -583,6 +717,7 @@ def main(argv=None):
                     f"Next: {pending[0].id:04d} {pending[0].title}; last: {pending[-1].id:04d}"
                 )
             print(f"Batch size: {args.batch_size}; output: {args.output}")
+            print(f"Concurrency: {args.concurrency}")
             return 0
         # Lazy import keeps --help and offline planning dependency-free.
         try:
@@ -622,24 +757,23 @@ def main(argv=None):
                     password,
                     accept_terms=args.accept_login_terms,
                 )
-                for index, question in enumerate(pending):
-                    LOG.info(
-                        "[%d/%d] Asking %04d %s (KRL编程)",
-                        index + 1,
-                        len(pending),
-                        question.id,
-                        question.title,
+                if args.concurrency > 1:
+                    _collect_with_workers(
+                        client, pending, store, args.concurrency, args.delay,
                     )
-                    answer, metadata = client.ask(question)
-                    path = store.save(question, answer, metadata)
-                    LOG.info(
-                        "Saved %04d (%d characters) -> %s",
-                        question.id,
-                        len(answer),
-                        path,
-                    )
-                    if index + 1 < len(pending):
-                        time.sleep(args.delay)
+                else:
+                    for index, question in enumerate(pending):
+                        LOG.info(
+                            "[%d/%d] Asking %04d %s (KRL编程)",
+                            index + 1,
+                            len(pending),
+                            question.id,
+                            question.title,
+                        )
+                        answer, metadata = client.ask(question)
+                        _save_answer(store, question, answer, metadata)
+                        if index + 1 < len(pending):
+                            time.sleep(args.delay)
             LOG.info(
                 "Finished: %d Q&A pairs saved across output batches",
                 len(store.completed_ids),
