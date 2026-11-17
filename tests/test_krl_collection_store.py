@@ -346,3 +346,149 @@ def test_order_follows_source_sequence_instead_of_completion_or_numeric_order(tm
     for question in reversed(source):
         store.save(question, f"答案{question.id}")
     assert batch_ids(store) == [[3, 1], [2]]
+
+
+def _record_metadata(path):
+    text = path.read_bytes().decode("utf-8-sig")
+    return [json.loads(line[len("<!-- krl-qa-record "):-4])
+            for line in text.splitlines() if line.startswith("<!-- krl-qa-record ")]
+
+
+def _original_marked_record(question, answer, *, with_length):
+    """Create a pre-heading-normalization record, independent of current save()."""
+    hashed = answer if with_length else answer.replace("\r\n", "\n").replace("\r", "\n").strip()
+    metadata = {
+        "id": question.id,
+        "question_sha256": question.sha256,
+        "answer_sha256": hashlib.sha256(hashed.encode("utf-8")).hexdigest(),
+        "session_id": "original-session",
+        "custom": {"retain": [1, "原始元数据"]},
+    }
+    if with_length:
+        metadata["answer_length"] = len(answer)
+    marker = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+    return (f"## 样本{question.id:04d}：{question.title}\n"
+            f"<!-- krl-qa-record {marker} -->\n\n"
+            f"### 问题\n\n{question.prompt}\n\n"
+            f"### 小库原始回答\n\n{answer}\n\n"
+            f"<!-- krl-qa-complete {question.id:04d} -->\n"), metadata
+
+
+@pytest.mark.parametrize("root_level", [2, 3])
+def test_answer_headings_nest_under_answer_label_and_roundtrip_exactly(tmp_path, root_level):
+    source = questions(1)
+    path = tmp_path / "collected.md"
+    root = "#" * root_level
+    child = "#" * (root_level + 1)
+    answer = (f"\n  {root} 一级 ##  \r\n\r\n"
+              "正文尾部空格  \r\n"
+              f"{child}\t二级\r\n"
+              "```markdown\r\n## 代码中的标题\r\n~~~\r\n```\r\n"
+              "~~~~markdown\r\n# 另一段代码中的标题\r\n```\r\n~~~~\r\n"
+              "    ## 缩进代码\r\n"
+              "##没有分隔空格\r\n正文中的 # 字符\r\n\n")
+    rendered = answer.replace(f"  {root} 一级", "  #### 一级").replace(
+        f"{child}\t二级", "#####\t二级")
+
+    store = CollectionStore(path, source)
+    store.save(source[0], answer)
+    assert ("### 小库原始回答\n\n" + rendered + "\n\n<!-- krl-qa-complete").encode("utf-8") in path.read_bytes()
+    metadata = _record_metadata(path)[0]
+    assert metadata["answer_heading_levels"] == [root_level, root_level + 1]
+    assert metadata["answer_sha256"] == hashlib.sha256(answer.encode("utf-8")).hexdigest()
+    assert metadata["answer_length"] == len(answer)
+    assert store_module._saved_records(path)[0].answer == answer
+    before = path.read_bytes()
+    CollectionStore(path, source).save(source[0], answer)
+    assert path.read_bytes() == before
+
+
+def test_heading_depth_clamps_at_six_without_losing_original_levels(tmp_path):
+    source = questions(1)
+    path = tmp_path / "collected.md"
+    answer = "# 主节\n\n## 次节\n\n##### 深节\n\n###### 最深节\n"
+    rendered = "#### 主节\n\n##### 次节\n\n###### 深节\n\n###### 最深节\n"
+    store = CollectionStore(path, source)
+    store.save(source[0], answer)
+    assert rendered.encode("utf-8") in path.read_bytes()
+    assert _record_metadata(path)[0]["answer_heading_levels"] == [1, 2, 5, 6]
+    assert store_module._saved_records(path)[0].answer == answer
+    CollectionStore(path, source).save(source[0], answer)
+
+
+@pytest.mark.parametrize("before,after", [("#### 一级", "### 一级"), ("##### 二级", "#### 二级")])
+def test_modified_visible_heading_fails_integrity_validation(tmp_path, before, after):
+    source = questions(1)
+    path = tmp_path / "collected.md"
+    CollectionStore(path, source).save(source[0], "## 一级\n\n### 二级\n正文")
+    original = path.read_bytes()
+    assert before.encode("utf-8") in original
+    path.write_bytes(original.replace(before.encode("utf-8"), after.encode("utf-8")))
+    with pytest.raises(ValueError):
+        CollectionStore(path, source)
+
+
+@pytest.mark.parametrize("with_length", [False, True])
+def test_migrate_legacy_and_old_marked_headings_preserves_answers_and_metadata(tmp_path, with_length):
+    source = questions(2)
+    path = tmp_path / "collected.md"
+    prefix = codecs.BOM_UTF8 + "# 历史说明\r\n\r\n".encode("utf-8")
+    legacy_answer = "### 旧一级\n\n正文  \n\n#### 旧二级\n内容"
+    marked_answer = "## 原始一级\r\n\r\n### 原始二级\r\n原始正文  \r\n结尾"
+    marked, metadata = _original_marked_record(source[1], marked_answer, with_length=with_length)
+    original = prefix + (legacy_record(source[0], legacy_answer) + "\n\n" + marked).encode("utf-8")
+    path.write_bytes(original)
+
+    store = CollectionStore(path, source)
+    # Opening an old collection remains read-only, including during dry runs.
+    assert path.read_bytes() == original
+    store.ensure_heading_hierarchy()
+    migrated = path.read_bytes()
+    assert migrated.startswith(prefix)
+    assert "#### 旧一级\n\n正文  \n\n##### 旧二级".encode("utf-8") in migrated
+    assert "#### 原始一级\r\n\r\n##### 原始二级".encode("utf-8") in migrated
+    assert [record.answer for record in store_module._saved_records(path)] == [legacy_answer, marked_answer]
+    migrated_metadata = {value["id"]: value for value in _record_metadata(path)}
+    assert all(migrated_metadata[2][key] == value for key, value in metadata.items())
+    if not with_length:
+        assert "answer_length" not in migrated_metadata[2]
+    assert store.completed_ids == {1, 2}
+    assert store.pending(start=1) == []
+    CollectionStore(path, source).ensure_heading_hierarchy()
+    assert path.read_bytes() == migrated
+    assert not CollectionStore._journal_path(path).exists()
+
+
+@pytest.mark.parametrize("failure", [OSError("migration write failed"), KeyboardInterrupt()])
+def test_heading_migration_rolls_back_all_batches_on_failure(tmp_path, monkeypatch, failure):
+    source = questions(2)
+    first = tmp_path / "collected.md"
+    second = tmp_path / "collected_002.md"
+    answers = ["## 一级\n\n### 二级\n第一个正文", "### 主节\n第二个正文"]
+    for path, question, answer in zip((first, second), source, answers):
+        path.write_text("# 批次说明\n\n" + legacy_record(question, answer), encoding="utf-8")
+    before = {path: path.read_bytes() for path in (first, second)}
+    original_atomic = store_module._atomic_bytes
+    failed = False
+
+    def fail_second_batch(path, content):
+        nonlocal failed
+        if path == second and not failed:
+            failed = True
+            assert first.read_bytes() != before[first]
+            raise failure
+        original_atomic(path, content)
+
+    monkeypatch.setattr(store_module, "_atomic_bytes", fail_second_batch)
+    store = CollectionStore(first, source, batch_size=1)
+    with pytest.raises(type(failure)):
+        store.ensure_heading_hierarchy()
+    assert failed
+    assert all(path.read_bytes() == content for path, content in before.items())
+    assert not CollectionStore._journal_path(first).exists()
+    resumed = CollectionStore(first, source, batch_size=1)
+    assert [resumed._saved[question.id].answer for question in source] == answers
+    resumed.ensure_heading_hierarchy()
+    assert all(path.read_bytes() != content for path, content in before.items())
+    assert [record.answer for path in (first, second)
+            for record in store_module._saved_records(path)] == answers

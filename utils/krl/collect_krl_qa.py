@@ -706,6 +706,11 @@ def build_parser():
         help="Explicitly accept the site's login policies without an interactive prompt",
     )
     parser.add_argument(
+        "--repair-headings",
+        action="store_true",
+        help="Repair saved answer heading levels offline, then exit without login/collection",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate files and show pending work without network/login",
@@ -716,9 +721,11 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.dry_run and args.repair_headings:
+        parser.error("--repair-headings cannot be combined with --dry-run")
     if args.concurrency is None:
         try:
-            args.concurrency = load_concurrency()
+            args.concurrency = 1 if args.repair_headings else load_concurrency()
         except (CollectionError, OSError) as exc:
             parser.error(str(exc))
     if args.start < 1 or (args.end is not None and args.end < args.start):
@@ -744,7 +751,7 @@ def main(argv=None):
         args.questions = args.questions.resolve()
         args.output = args.output.resolve()
         questions = parse_questions(args.questions)
-        if args.start not in {question.id for question in questions}:
+        if not args.repair_headings and args.start not in {question.id for question in questions}:
             raise CollectionError(f"Starting question {args.start:04d} does not exist")
         if args.questions.resolve() == args.output.resolve():
             raise CollectionError("Question source and output must be different files")
@@ -761,7 +768,14 @@ def main(argv=None):
             print(f"Batch size: {args.batch_size}; output: {args.output}")
             print(f"Concurrency: {args.concurrency}")
             return 0
-        # HTTP dependencies are unnecessary for --help and --dry-run.
+        if args.repair_headings:
+            with output_lock(args.output):
+                CollectionStore.recover(args.output)
+                store = CollectionStore(args.output, questions, args.batch_size)
+                store.ensure_heading_hierarchy()
+            LOG.info("Repaired heading hierarchy for %d saved Q&A pairs", len(store.completed_ids))
+            return 0
+        # HTTP dependencies are unnecessary for --help, --dry-run and --repair-headings.
         try:
             import requests
         except ImportError as exc:
@@ -771,6 +785,7 @@ def main(argv=None):
         with output_lock(args.output):
             CollectionStore.recover(args.output)
             store = CollectionStore(args.output, questions, args.batch_size)
+            store.ensure_heading_hierarchy()
             store.ensure_order()
             pending = store.pending(args.start, args.end)
             if args.max_questions:

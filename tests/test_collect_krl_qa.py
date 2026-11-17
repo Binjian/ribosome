@@ -1192,3 +1192,95 @@ def test_real_sigint_drains_saves_and_closes_sessions_before_releasing_output_lo
         cwd=collector.ROOT, capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _legacy_heading_collection(tmp_path, first_id=19):
+    questions = tmp_path / "questions.md"
+    questions.write_text(f"## {first_id:04d} 工艺\n\n完整问题\n\n"
+                         f"## {first_id + 1:04d} 后续工艺\n\n后续问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    answer = "## 主节\n\n### 子节\n原始正文  \n\n```krl\n# 代码内容保持原样\nEND\n```"
+    output.write_text(f"# 历史集合\n\n## 样本{first_id:04d}：工艺\n\n"
+                      "### 问题\n\n完整问题\n\n### 小库原始回答\n\n" + answer, encoding="utf-8")
+    return questions, output, answer
+
+
+@pytest.mark.parametrize("first_id", [1, 19])
+def test_repair_headings_is_offline_and_independent_of_local_settings(tmp_path, monkeypatch, first_id):
+    questions, output, answer = _legacy_heading_collection(tmp_path, first_id)
+    source_before = questions.read_bytes()
+    original_import = builtins.__import__
+
+    def offline_import(name, *args, **kwargs):
+        if name == "requests" or name.startswith("requests."):
+            raise ModuleNotFoundError("requests intentionally unavailable")
+        assert name != "dotenv", "Heading repair must not import dotenv"
+        return original_import(name, *args, **kwargs)
+
+    def fail_live_setup(*args, **kwargs):
+        raise AssertionError("Offline repair must not read settings, credentials, or log in")
+
+    monkeypatch.setattr(builtins, "__import__", offline_import)
+    monkeypatch.delenv("COLLECT_CONCURRENCY")
+    monkeypatch.setattr(collector, "_load_local_settings", fail_live_setup)
+    monkeypatch.setattr(collector, "load_credentials", fail_live_setup)
+    monkeypatch.setattr(collector.KukaClient, "login", fail_live_setup)
+    monkeypatch.setattr(collector.KukaClient, "ask", fail_live_setup)
+    arguments = ["--questions", str(questions), "--output", str(output), "--repair-headings"]
+
+    # The unsaved question must remain pending: repair never starts collection.
+    assert collector.main(arguments) == 0
+    repaired = output.read_bytes()
+    assert "#### 主节\n\n##### 子节".encode("utf-8") in repaired
+    records = _saved_records(output)
+    assert [record.question.id for record in records] == [first_id]
+    assert records[0].answer == answer
+    assert questions.read_bytes() == source_before
+    assert collector.main(arguments) == 0
+    assert output.read_bytes() == repaired
+
+
+def test_repair_headings_cannot_be_combined_with_dry_run(tmp_path, capsys):
+    questions, output, _ = _legacy_heading_collection(tmp_path)
+    before = {path: path.read_bytes() for path in tmp_path.iterdir()}
+    with pytest.raises(SystemExit) as error:
+        collector.main(["--questions", str(questions), "--output", str(output),
+                        "--repair-headings", "--dry-run"])
+    assert error.value.code == 2
+    assert "cannot be combined" in capsys.readouterr().err
+    assert {path: path.read_bytes() for path in tmp_path.iterdir()} == before
+
+
+def test_regular_cli_repairs_legacy_headings_before_no_pending_exit(tmp_path, monkeypatch):
+    questions, output, answer = _legacy_heading_collection(tmp_path)
+
+    def fail_network(*args, **kwargs):
+        raise AssertionError("Already saved questions must not load credentials or log in")
+
+    monkeypatch.setattr(collector, "load_credentials", fail_network)
+    monkeypatch.setattr(requests, "Session", fail_network)
+    monkeypatch.setattr(collector.KukaClient, "login", fail_network)
+    arguments = ["--questions", str(questions), "--output", str(output), "--end", "19"]
+    assert collector.main(arguments) == 0
+    repaired = output.read_bytes()
+    assert "#### 主节\n\n##### 子节".encode("utf-8") in repaired
+    records = _saved_records(output)
+    assert [(record.question.id, record.answer) for record in records] == [(19, answer)]
+    assert collector.main(arguments) == 0
+    assert output.read_bytes() == repaired
+
+
+def test_dry_run_leaves_legacy_heading_hierarchy_and_files_untouched(tmp_path, monkeypatch, capsys):
+    questions, output, answer = _legacy_heading_collection(tmp_path)
+    before = {path: path.read_bytes() for path in tmp_path.iterdir()}
+
+    def fail_repair(*args, **kwargs):
+        raise AssertionError("Dry runs must not repair files or begin collection")
+
+    monkeypatch.setattr(collector.CollectionStore, "ensure_heading_hierarchy", fail_repair)
+    monkeypatch.setattr(collector, "load_credentials", fail_repair)
+    monkeypatch.setattr(requests, "Session", fail_repair)
+    assert collector.main(["--questions", str(questions), "--output", str(output), "--dry-run"]) == 0
+    assert {path: path.read_bytes() for path in tmp_path.iterdir()} == before
+    assert "saved: 1; pending: 1" in capsys.readouterr().out
+    assert _saved_records(output)[0].answer == answer

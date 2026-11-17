@@ -172,17 +172,36 @@ move existing records between batches, preserving their prompts, exact answer
 text, and metadata. Existing introductory text stays with its original file.
 
 Live runs also repair batches produced by the older completion-order behavior,
-before login or collection. Dry runs inspect existing files without rewriting
-them. A multi-file reorder uses a rollback journal: failure or cancellation
+and nest saved answer headings beneath their `### 小库原始回答` label, before
+login or collection. Dry runs inspect existing files without rewriting
+them. A multi-file rewrite uses a rollback journal: failure or cancellation
 restores the previous batch contents, and a later live run recovers an update
 interrupted by a process crash under the output lock.
+
+The heading hierarchy is H1 collection → H2 sample → H3 question/answer labels
+→ H4 answer sections → H5 subsections. Each answer's shallowest ATX heading
+becomes H4; relative levels are retained up to Markdown's H6 limit. Fenced code,
+indented code, and non-heading text are preserved. Original heading levels are
+stored in record metadata so the exact original response, answer hash, and
+length remain available to the storage library and resume checks.
+
+Repair an existing collection without logging in or requesting answers:
+
+```sh
+python utils/krl/collect_krl_qa.py --repair-headings
+```
+
+This command uses only the standard library, holds the output lock, preserves
+existing collection metadata, and exits after repairing saved records. Repeating
+it makes no further changes. It cannot be combined with `--dry-run`.
 
 New records include source and exact-answer hashes, answer length, completion
 markers, and collection metadata. Existing prompts must still match the input.
 Edited answers in new integrity-marked records, duplicate IDs, malformed batches,
 numbering gaps, or changed prompts stop collection rather than silently replacing
 records. Legacy manually collected answers have no answer hashes, so their
-contents cannot be checked for edits. Continue an existing series with the same
+contents cannot be checked for edits until a heading repair adds integrity
+markers for their currently saved text. Continue an existing series with the same
 batch size; choose a new output path for a different batching scheme.
 
 Each completed pair is written through a temporary file and atomic replacement.
@@ -208,6 +227,7 @@ the process exits or crashes.
 | `--retry-delay` | 5 seconds | Initial retry delay, doubling up to 60 seconds. |
 | `--accept-login-terms` | Off | Explicitly accept the site's login policies. |
 | `--dry-run` | Off | Validate files and report pending work without network access. |
+| `--repair-headings` | Off | Repair saved answer headings offline and exit without login or new questions. |
 
 Default source/output paths resolve from the script's repository location;
 custom relative paths resolve from your current working directory. The module

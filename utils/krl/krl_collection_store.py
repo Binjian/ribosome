@@ -1,8 +1,9 @@
 """Parse KRL prompts and save completed answers in source-ordered Markdown batches.
 
-Legacy records retain their Markdown format when moved between batches. New
-records carry integrity markers so interrupted or edited answers cannot be
-silently treated as completed on a subsequent run.
+Records carry integrity markers so interrupted or edited answers cannot be
+silently treated as completed on a subsequent run. Displayed headings nest
+under each answer label; the original response remains exactly reconstructable.
+Legacy layouts can be upgraded without new requests.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from typing import Iterable
 _SOURCE_HEADING = re.compile(r"^## +(\d{4}) +(.+?)\s*$")
 _SAVED_HEADING = re.compile(r"^## +样本(\d{4})[：:]\s*(.+?)\s*$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_ANSWER_HEADING = re.compile(r"^ {0,3}(#{1,6})(?=[ \t]|$)")
 _META_PREFIX = "<!-- krl-qa-record "
 _END_PREFIX = "<!-- krl-qa-complete "
 
@@ -42,6 +44,7 @@ class _Saved:
     answer: str
     path: Path
     raw: bytes
+    metadata: dict | None = None
 
 
 def _canonical(text: str) -> str:
@@ -72,6 +75,53 @@ def _outside_lines(text: str):
         else:
             yield offset, line.rstrip("\r\n")
         offset += len(line)
+
+
+def _answer_headings(answer: str) -> list[tuple[int, int]]:
+    """Locate ATX markers without changing fenced or indented code."""
+    return [(offset + match.start(1), len(match.group(1)))
+            for offset, line in _outside_lines(answer)
+            if (match := _ANSWER_HEADING.match(line))]
+
+
+def _nested_levels(levels: list[int]) -> list[int]:
+    # H1 is the collection, H2 a sample, and H3 the question/answer labels.
+    # Markdown supports only six levels; retain deeper source levels in metadata.
+    base = min(levels) if levels else 4
+    return [min(6, level - base + 4) for level in levels]
+
+
+def _replace_heading_levels(answer: str, levels: list[int]) -> str:
+    headings = _answer_headings(answer)
+    if len(headings) != len(levels):
+        raise ValueError("Saved answer heading integrity check failed")
+    for (offset, length), level in reversed(list(zip(headings, levels))):
+        answer = answer[:offset] + "#" * level + answer[offset + length:]
+    return answer
+
+
+def _render_record(question: Question, answer: str, metadata: dict | None = None,
+                   *, preserve_legacy_hash: bool = False) -> bytes:
+    """Nest displayed headings while hashing and retaining the exact response."""
+    levels = [level for _, level in _answer_headings(answer)]
+    rendered = _replace_heading_levels(answer, _nested_levels(levels))
+    record_metadata = dict(metadata or {})
+    record_metadata.pop("answer_heading_levels", None)
+    record_metadata.update(id=question.id, question_sha256=question.sha256,
+                           answer_sha256=_answer_digest(answer), answer_length=len(answer))
+    if preserve_legacy_hash:
+        # Older marked records hash canonical whitespace. Keep that provenance
+        # and format when nesting their headings rather than rehashing them.
+        record_metadata.pop("answer_length")
+        record_metadata["answer_sha256"] = metadata["answer_sha256"]
+    if levels:
+        record_metadata["answer_heading_levels"] = levels
+    marker = json.dumps(record_metadata, ensure_ascii=False, sort_keys=True)
+    return (f"## 样本{question.id:04d}：{question.title}\n"
+            f"{_META_PREFIX}{marker} -->\n\n"
+            f"### 问题\n\n{question.prompt}\n\n"
+            f"### 小库原始回答\n\n{rendered}\n\n"
+            f"{_END_PREFIX}{question.id:04d} -->\n").encode("utf-8")
 
 
 def parse_questions(path: str | Path) -> list[Question]:
@@ -151,28 +201,39 @@ def _read_batch(path: Path) -> tuple[bytes, list[_Saved]]:
             end_marker = f"{_END_PREFIX}{question.id:04d} -->"
             if not isinstance(metadata, dict):
                 raise ValueError(f"Invalid record metadata in {path}")
+            levels = metadata.get("answer_heading_levels")
+            if "answer_heading_levels" in metadata:
+                if (not isinstance(levels, list) or not levels
+                        or any(type(level) is not int or not 1 <= level <= 6
+                               for level in levels)):
+                    raise ValueError(f"Invalid answer heading levels for {question.id:04d} in {path}")
             answer_length = metadata.get("answer_length")
             if "answer_length" in metadata:
                 if (type(answer_length) is not int or answer_length < 0
                         or not answer_block.startswith("\n\n")):
                     raise ValueError(f"Invalid answer length for {question.id:04d} in {path}")
+                if levels is not None:
+                    answer_length += sum(_nested_levels(levels)) - sum(levels)
                 answer = answer_block[2:2 + answer_length]
                 if answer_block[2 + answer_length:] != "\n\n" + end_marker:
                     raise ValueError(f"Incomplete saved answer {question.id:04d} in {path}")
-                answer_hash = _answer_digest(answer)
             elif answer.endswith(end_marker):
                 # Accept records written before exact whitespace preservation.
                 answer = answer[:-len(end_marker)].strip()
-                answer_hash = _digest(answer)
             else:
                 raise ValueError(f"Incomplete saved answer {question.id:04d} in {path}")
+            if levels is not None:
+                if [level for _, level in _answer_headings(answer)] != _nested_levels(levels):
+                    raise ValueError(f"Saved answer heading integrity check failed for {question.id:04d} in {path}")
+                answer = _replace_heading_levels(answer, levels)
+            answer_hash = _answer_digest(answer) if "answer_length" in metadata else _digest(answer)
             if (metadata.get("id") != question.id
                     or metadata.get("question_sha256") != question.sha256
                     or metadata.get("answer_sha256") != answer_hash):
                 raise ValueError(f"Saved Q&A integrity check failed for {question.id:04d} in {path}")
         if not prompt or not answer.strip():
             raise ValueError(f"Empty saved question/answer {question.id:04d} in {path}")
-        records.append(_Saved(question, answer, path, text[offset:end].encode("utf-8")))
+        records.append(_Saved(question, answer, path, text[offset:end].encode("utf-8"), metadata))
     prefix = text[:headings[0][0]].encode("utf-8") if headings else text.encode("utf-8")
     if original.startswith(codecs.BOM_UTF8):
         prefix = codecs.BOM_UTF8 + prefix
@@ -321,6 +382,26 @@ class CollectionStore:
             self._publish_sorted(list(self._saved.values()))
             self._reload()
 
+    def ensure_heading_hierarchy(self) -> None:
+        """Upgrade saved heading layouts without requesting or changing answers."""
+        self._reload()
+        records = []
+        changed = False
+        for record in self._saved.values():
+            levels = [level for _, level in _answer_headings(record.answer)]
+            if levels and "answer_heading_levels" not in (record.metadata or {}):
+                raw = _render_record(
+                    record.question, record.answer, record.metadata,
+                    preserve_legacy_hash=record.metadata is not None
+                    and "answer_length" not in record.metadata,
+                )
+                record = _Saved(record.question, record.answer, record.path, raw)
+                changed = True
+            records.append(record)
+        if changed:
+            self._publish_sorted(records)
+            self._reload()
+
     def _reload(self) -> None:
         if self._journal_path(self.output_path).exists():
             raise ValueError("Interrupted ordering update; rerun the collector to recover under the output lock")
@@ -370,27 +451,19 @@ class CollectionStore:
             path = self._batches[-1][0]
         else:
             path = self._batch_path(len(self._batches) + 1)
-        record_metadata = dict(metadata or {})
-        record_metadata.update(id=question.id, question_sha256=question.sha256,
-                               answer_sha256=_answer_digest(answer), answer_length=len(answer))
-        marker = json.dumps(record_metadata, ensure_ascii=False, sort_keys=True)
-        block = (f"## 样本{question.id:04d}：{question.title}\n"
-                 f"{_META_PREFIX}{marker} -->\n\n"
-                 f"### 问题\n\n{question.prompt}\n\n"
-                 f"### 小库原始回答\n\n{answer}\n\n"
-                 f"{_END_PREFIX}{question.id:04d} -->\n")
+        block = _render_record(question, answer, metadata)
         path.parent.mkdir(parents=True, exist_ok=True)
         ordered_ids = sorted(self._saved, key=self._order.__getitem__)
         if (list(self._saved) != ordered_ids
                 or (ordered_ids and self._order[question.id] < self._order[ordered_ids[-1]])):
             self._publish_sorted([
-                *self._saved.values(), _Saved(question, answer, path, block.encode("utf-8")),
+                *self._saved.values(), _Saved(question, answer, path, block),
             ])
             self._reload()
             return self._saved[question.id].path
         previous = path.read_bytes() if path.exists() else (
             "# KRL工艺参数问答采集\n\n"
             "来源：https://www.kukacenter.com/chat 的 KRL编程模式。\n".encode("utf-8"))
-        _atomic_bytes(path, previous + b"\n\n" + block.encode("utf-8"))
+        _atomic_bytes(path, previous + b"\n\n" + block)
         self._reload()
         return path
