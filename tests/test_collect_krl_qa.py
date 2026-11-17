@@ -187,6 +187,38 @@ def test_http_failure_closes_response_and_hides_signed_url():
     assert "private-token" not in str(error.value)
 
 
+def test_main_site_sign_api_uses_gateway_prefix_and_get_nonce():
+    signature = {"uuid": "account-uuid", "timestamp": 123, "nonceStr": "nonce", "sign": "signature"}
+    session = Session([api(signature)])
+    result = collector.KukaClient(session).api(
+        "/api-b/program_assistant/api/sign", {"nonceStr": "nonce"}, main_site=True,
+    )
+    assert result == signature
+    assert len(session.calls) == 1
+    method, url, options = session.calls[0]
+    assert method == "GET"
+    assert url == collector.MAIN_URL + "/api/api-b/program_assistant/api/sign"
+    assert options["params"] == {"nonceStr": "nonce"}
+    assert "json" not in options
+    assert not session.responses
+
+
+def test_sign_http_463_stops_before_chat_login_and_redacts_response():
+    failed_sign = Response(
+        status=463, text="private-body-token", url=collector.MAIN_URL + "/api/api-b/program_assistant/api/sign?nonceStr=private-query-token",
+    )
+    session = Session([Response(), failed_sign])
+    with pytest.raises(collector.CollectionError, match="HTTP 463") as error:
+        collector.KukaClient(session).login("test-user", "private-password")
+    assert failed_sign.closed
+    assert len(session.calls) == 2
+    assert session.calls[-1][1] == collector.MAIN_URL + "/api/api-b/program_assistant/api/sign"
+    assert "private-body-token" not in str(error.value)
+    assert "private-query-token" not in str(error.value)
+    assert "private-password" not in str(error.value)
+    assert not session.responses
+
+
 def test_request_failure_redacts_signed_url_and_credentials(monkeypatch):
     session = Session([])
 
@@ -224,7 +256,7 @@ def test_login_posts_md5_captcha_and_signed_chat_credentials(monkeypatch, capsys
     assert fields["uuid"] == session.calls[1][2]["params"]["uuid"]
     assert fields["loginType"] == "0"
     assert session.calls[3][0] == "GET"
-    assert session.calls[3][1].endswith("/api-b/program_assistant/api/sign")
+    assert session.calls[3][1] == collector.MAIN_URL + "/api/api-b/program_assistant/api/sign"
     assert session.calls[4][2]["json"] == {
         "uuid": "account-uuid", "timestamp": "123", "nonceStr": "nonce", "signature": "signature",
     }
@@ -295,6 +327,26 @@ def test_cli_stops_on_second_question_failure_and_resumes_completed_pair(tmp_pat
     assert collector.main(arguments) == 1
     assert calls == [20]
     assert output.read_bytes() == saved
+
+
+def test_cli_sign_http_463_preserves_existing_completed_output(tmp_path, monkeypatch):
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 真空搬运\n\n完整问题\n\n## 0020 夹取\n\n第二问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    parsed = collector.parse_questions(questions)
+    collector.CollectionStore(output, parsed, batch_size=20).save(parsed[0], ANSWER)
+    saved = output.read_bytes()
+    failed_sign = Response(status=463)
+    session = Session([Response(), failed_sign])
+    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=lambda: session))
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+
+    assert collector.main(["--questions", str(questions), "--output", str(output)]) == 1
+    assert output.read_bytes() == saved
+    assert failed_sign.closed
+    assert len(session.calls) == 2
+    assert session.calls[-1][1] == collector.MAIN_URL + "/api/api-b/program_assistant/api/sign"
+    assert not session.responses
 
 
 def test_cli_response_read_connection_error_never_logs_signed_url(tmp_path, monkeypatch, caplog):

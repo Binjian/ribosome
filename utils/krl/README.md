@@ -178,6 +178,7 @@ idempotent; a different answer for an existing sample is rejected.
 | Symptom | Next step |
 | --- | --- |
 | Login fails | Check the account and CAPTCHA, then rerun for a fresh challenge. |
+| HTTP 463 at `/api-b/program_assistant/api/sign` | Update the collector and rerun. Main-site service requests need the frontend's `/api` proxy prefix: `/api/api-b/program_assistant/api/sign`. Completed pairs are reused. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
 | Stream and persisted answer differ | Inspect the service response/interface before retrying; the uncertain pair was not published. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |

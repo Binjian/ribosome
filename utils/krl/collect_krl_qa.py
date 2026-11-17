@@ -182,7 +182,10 @@ class KukaClient:
         return response
 
     def api(self, path, payload=None, *, main_site=False):
-        host = MAIN_URL if main_site else CHAT_URL
+        # The main frontend's HTTP wrapper prefixes service paths such as
+        # /api-b/... with /api. The unprefixed sign URL returns HTTP 463.
+        # Chat has its own /api/... routes and does not use that proxy prefix.
+        host = MAIN_URL + "/api" if main_site else CHAT_URL
         if main_site:
             response = self.request("GET", host + path, params=payload)
         else:
