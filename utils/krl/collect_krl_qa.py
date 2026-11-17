@@ -30,6 +30,7 @@ import uuid
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -46,6 +47,33 @@ ENV_FILE = Path(__file__).resolve().with_name(".env")
 MAIN_URL = "https://www.kukacenter.com"
 CHAT_URL = "https://chat.kukacenter.com"
 MODEL = "krl_question_robot"  # The frontend's KRL编程 tab.
+
+
+@dataclass(frozen=True)
+class CollectionProfile:
+    """Frontend mode and local defaults shared by the KRL and KQA collectors."""
+
+    key: str
+    mode: str
+    robot_model: str
+    questions: Path
+    output: Path
+    start: int
+    title: str
+    answer_path: str
+
+
+KRL_PROFILE = CollectionProfile(
+    key="krl",
+    mode="KRL编程",
+    robot_model=MODEL,
+    questions=ROOT / "assets/KRL/krl_questions_1000.md",
+    output=ROOT / "assets/KRL/krl_qa_collected.md",
+    start=19,
+    title="KRL工艺参数问答采集",
+    answer_path="/api/krl/selectQuestionInfo",
+)
+
 REFUSAL = "**输出答案** 非常抱歉！由于回答中可能涉及敏感词，无法提供答案。请重新输入问答，感谢您的理解和支持！"
 TERMS = (
     f"{MAIN_URL}/policy/kuka_center_legal_statement.html",
@@ -244,13 +272,14 @@ def read_stream(response, timeout: float) -> str:
 class KukaClient:
     def __init__(
         self, session, request_timeout=180.0, answer_timeout=900.0,
-        retries=3, retry_delay=5.0,
+        retries=3, retry_delay=5.0, *, profile=KRL_PROFILE,
     ):
         self.session = session
         self.request_timeout = request_timeout
         self.answer_timeout = answer_timeout
         self.retries = retries
         self.retry_delay = retry_delay
+        self.profile = profile
 
     def retry(self, operation, action):
         """Bound transport/persistence retries with a sanitized reason and backoff."""
@@ -359,7 +388,7 @@ class KukaClient:
             if not password:
                 raise CollectionError("A password is required")
             captcha_uuid = str(uuid.uuid4())
-            with tempfile.TemporaryDirectory(prefix="krl-login-") as temporary:
+            with tempfile.TemporaryDirectory(prefix=f"{self.profile.key}-login-") as temporary:
                 captcha_path = Path(temporary) / "captcha.png"
                 with self.request(
                     "GET",
@@ -454,7 +483,7 @@ class KukaClient:
         payload = dict(
             identifiers,
             question=question.prompt,
-            robotModel=MODEL,
+            robotModel=self.profile.robot_model,
             repeatFlag=False,
             networkSearchFlag=False,
         )
@@ -473,7 +502,7 @@ class KukaClient:
     def _fetch_verified_answer(self, question, streamed, identifiers):
         """Refetch uncertain persistence without repeating generation or moderation."""
         saved = self.api(
-            "/api/krl/selectQuestionInfo",
+            self.profile.answer_path,
             dict(identifiers, question=question.prompt, content=question.prompt),
         )
         # A completed stream need not be visible in persisted storage yet. Keep
@@ -529,8 +558,8 @@ class KukaClient:
             )
         metadata = {
             "source": MAIN_URL + "/chat",
-            "mode": "KRL编程",
-            "robot_model": MODEL,
+            "mode": self.profile.mode,
+            "robot_model": self.profile.robot_model,
             "collected_at": datetime.now(timezone.utc).isoformat(),
             "session_id": identifiers["sessionId"],
             "question_uuid": identifiers["uuid"],
@@ -630,8 +659,8 @@ async def _collect_concurrently(clients, pending, store, delay):
                 question = pending[index]
                 index += 1
                 LOG.info(
-                    "[%d/%d] Asking %04d %s (KRL编程)",
-                    index, len(pending), question.id, question.title,
+                    "[%d/%d] Asking %04d %s (%s)",
+                    index, len(pending), question.id, question.title, client.profile.mode,
                 )
                 active[client] = asyncio.create_task(run_question(client, question))
                 next_start = loop.time() + delay
@@ -675,26 +704,32 @@ def _collect_with_workers(client, pending, store, concurrency, delay):
             clients.append(KukaClient(
                 session, client.request_timeout, client.answer_timeout,
                 retries=client.retries, retry_delay=client.retry_delay,
+                profile=client.profile,
             ))
         asyncio.run(_collect_concurrently(clients, pending, store, delay))
 
 
-def build_parser():
+def build_parser(*, profile=KRL_PROFILE):
     parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=(__doc__ if profile == KRL_PROFILE else
+                     f"Collect original KUKA Center {profile.mode} answers into resumable Markdown batches.\n"
+                     "Login settings: utils/krl/.env; interactive CAPTCHA required.\n"
+                     "Start with --dry-run to inspect pending questions offline."),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--questions", type=Path, default=ROOT / "assets/KRL/krl_questions_1000.md"
+        "--questions", type=Path, default=profile.questions
     )
     parser.add_argument(
-        "--output", type=Path, default=ROOT / "assets/KRL/krl_qa_collected.md"
+        "--output", type=Path, default=profile.output
     )
     parser.add_argument(
         "--username",
         help="Override KUKACENTER_ACCOUT from the environment or utils/krl/.env",
     )
     parser.add_argument(
-        "--start", type=int, default=19, help="First sample ID, inclusive (default: 19)"
+        "--start", type=int, default=profile.start,
+        help=f"First sample ID, inclusive (default: {profile.start})",
     )
     parser.add_argument(
         "--end", type=int, help="Last sample ID, inclusive (default: all)"
@@ -751,8 +786,8 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
-    parser = build_parser()
+def main(argv=None, *, profile=KRL_PROFILE):
+    parser = build_parser(profile=profile)
     args = parser.parse_args(argv)
     if args.dry_run and args.repair_headings:
         parser.error("--repair-headings cannot be combined with --dry-run")
@@ -789,7 +824,10 @@ def main(argv=None):
         if args.questions.resolve() == args.output.resolve():
             raise CollectionError("Question source and output must be different files")
         if args.dry_run:
-            store = CollectionStore(args.output, questions, args.batch_size)
+            store = CollectionStore(
+                args.output, questions, args.batch_size,
+                title=profile.title, mode=profile.mode,
+            )
             pending = store.pending(args.start, args.end)
             print(
                 f"Source: {len(questions)} questions; saved: {len(store.completed_ids)}; pending: {len(pending)}"
@@ -800,11 +838,15 @@ def main(argv=None):
                 )
             print(f"Batch size: {args.batch_size}; output: {args.output}")
             print(f"Concurrency: {args.concurrency}")
+            print(f"Mode: {profile.mode}; model: {profile.robot_model}")
             return 0
         if args.repair_headings:
             with output_lock(args.output):
                 CollectionStore.recover(args.output)
-                store = CollectionStore(args.output, questions, args.batch_size)
+                store = CollectionStore(
+                    args.output, questions, args.batch_size,
+                    title=profile.title, mode=profile.mode,
+                )
                 store.ensure_heading_hierarchy()
             LOG.info("Repaired heading hierarchy for %d saved Q&A pairs", len(store.completed_ids))
             return 0
@@ -817,7 +859,10 @@ def main(argv=None):
             ) from exc
         with output_lock(args.output):
             CollectionStore.recover(args.output)
-            store = CollectionStore(args.output, questions, args.batch_size)
+            store = CollectionStore(
+                args.output, questions, args.batch_size,
+                title=profile.title, mode=profile.mode,
+            )
             store.ensure_heading_hierarchy()
             store.ensure_order()
             pending = store.pending(args.start, args.end)
@@ -836,13 +881,14 @@ def main(argv=None):
             with requests.Session() as session:
                 session.headers.update(
                     {
-                        "User-Agent": "ribosome-krl-collector/1.0",
+                        "User-Agent": f"ribosome-{profile.key}-collector/1.0",
                         "Referer": MAIN_URL + "/chat",
                     }
                 )
                 client = KukaClient(
                     session, args.request_timeout, args.answer_timeout,
                     retries=args.retries, retry_delay=args.retry_delay,
+                    profile=profile,
                 )
                 client.login(
                     username,
@@ -856,11 +902,12 @@ def main(argv=None):
                 else:
                     for index, question in enumerate(pending):
                         LOG.info(
-                            "[%d/%d] Asking %04d %s (KRL编程)",
+                            "[%d/%d] Asking %04d %s (%s)",
                             index + 1,
                             len(pending),
                             question.id,
                             question.title,
+                            profile.mode,
                         )
                         answer, metadata = client.ask(question)
                         _save_answer(store, question, answer, metadata)

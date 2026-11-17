@@ -1,4 +1,4 @@
-"""Parse KRL prompts and save completed answers in source-ordered Markdown batches.
+"""Parse chatbot prompts and save completed answers in source-ordered Markdown batches.
 
 Records carry integrity markers so interrupted or edited answers cannot be
 silently treated as completed on a subsequent run. Displayed headings nest
@@ -277,8 +277,13 @@ class CollectionStore:
     """
 
     def __init__(self, output_path: str | Path, questions: Iterable[Question],
-                 batch_size: int = 20):
+                 batch_size: int = 20, *, title: str = "KRL工艺参数问答采集",
+                 mode: str = "KRL编程"):
         self.output_path = Path(output_path)
+        self._default_prefix = (
+            f"# {title}\n\n"
+            f"来源：https://www.kukacenter.com/chat 的 {mode}模式。\n"
+        ).encode("utf-8")
         if batch_size < 1:
             raise ValueError("batch_size must be positive")
         self.batch_size = batch_size
@@ -344,10 +349,7 @@ class CollectionStore:
         updates = []
         for offset in range(0, len(records), self.batch_size):
             path = self._batch_path(offset // self.batch_size + 1)
-            content = self._prefixes.get(path, (
-                "# KRL工艺参数问答采集\n\n"
-                "来源：https://www.kukacenter.com/chat 的 KRL编程模式。\n\n\n"
-            ).encode("utf-8"))
+            content = self._prefixes.get(path, self._default_prefix + b"\n\n")
             for record in records[offset:offset + self.batch_size]:
                 if content and not content.endswith((b"\n\n", b"\r\n\r\n")):
                     content += b"\n\n"
@@ -461,9 +463,7 @@ class CollectionStore:
             ])
             self._reload()
             return self._saved[question.id].path
-        previous = path.read_bytes() if path.exists() else (
-            "# KRL工艺参数问答采集\n\n"
-            "来源：https://www.kukacenter.com/chat 的 KRL编程模式。\n".encode("utf-8"))
+        previous = path.read_bytes() if path.exists() else self._default_prefix
         _atomic_bytes(path, previous + b"\n\n" + block)
         self._reload()
         return path

@@ -1,9 +1,9 @@
-# KRL chatbot collection
+# KUKA chatbot collection (KRL and KQA)
 
 [All utility groups](../README.md)
 
 Collect original answers from [KUKA Center](https://www.kukacenter.com/chat) in
-**KRL编程** mode, keeping the complete question and answer as Markdown. Completed
+**KRL编程** or **智能问答** mode, keeping the complete question and answer as Markdown. Completed
 pairs are reused across runs, and each output file holds up to 20 pairs.
 
 ## Utilities
@@ -11,7 +11,42 @@ pairs are reused across runs, and each output file holds up to 20 pairs.
 | Module | Interface | Purpose |
 | --- | --- | --- |
 | [collect_krl_qa.py](collect_krl_qa.py) | CLI; `KukaClient` | Authenticate, submit prompts to the KRL model, consume streamed answers, check them, and publish completed pairs. |
+| [collect_kqa_qa.py](collect_kqa_qa.py) | CLI | Collect 智能问答 answers using the shared client and storage, with separate KQA defaults. |
 | [krl_collection_store.py](krl_collection_store.py) | Python library | Parse numbered prompts, validate existing output, identify pending questions, and append completed answers atomically. |
+
+## KQA: collect 智能问答 pairs
+
+The [KQA question bank](../../assets/KQA/kqa_questions_1000.md) contains 1,000
+Chinese questions about KUKA robots: selection, installation, safety, operation,
+commissioning, maintenance, troubleshooting, communication, and application
+integration. It is a prompt inventory; answers are collected from the chatbot.
+
+```sh
+.venv/bin/python utils/krl/collect_kqa_qa.py --dry-run
+.venv/bin/python utils/krl/collect_kqa_qa.py --max-questions 1
+.venv/bin/python utils/krl/collect_kqa_qa.py
+```
+
+KQA starts at **0001** and reads `assets/KQA/kqa_questions_1000.md`. New answers
+go into `assets/KQA/kqa_qa_collected.md`, then `kqa_qa_collected_002.md`, and so
+on, with 20 pairs per file by default. Rerunning skips completed IDs across all
+batches. KRL keeps its existing defaults, including starting at 0019.
+
+Both collectors use `utils/krl/.env`, the same account/CAPTCHA login, CLI
+options, retry policy, source-order batching, heading repair, and atomic resume
+rules documented below. KQA also supports `--concurrency 2 --max-questions 4`
+and the module entry point `python -m utils.krl.collect_kqa_qa --dry-run`.
+Dry runs report the selected mode/model and do not make network requests or
+create output files. Use a separate output series for each mode.
+
+The [public chat frontend](https://chat.kukacenter.com/) identifies 智能问答
+as `intelligent_customer_service_robot`; KRL编程 uses `krl_question_robot`.
+Both tabs use `/api/efs/stream`, `/api/check`, and
+`/api/krl/selectQuestionInfo` (including the `krl` path for 智能问答).
+New KQA batches have a KQA title and 智能问答 provenance; record metadata includes
+the selected mode and model. Both collectors retain the existing storage
+format's `krl-qa-record` / `krl-qa-complete` integrity markers so parsing,
+heading repair, and recovery use the same implementation.
 
 ## Requirements
 
@@ -288,7 +323,8 @@ initial account/CAPTCHA check.
 
 ```sh
 .venv/bin/python -m pytest --confcutdir=tests -q \
-  tests/test_collect_krl_qa.py tests/test_krl_collection_store.py
+  tests/test_collect_krl_qa.py tests/test_collect_kqa_qa.py \
+  tests/test_krl_collection_store.py
 ```
 
 These tests use fake HTTP responses and temporary files; they do not log in or
