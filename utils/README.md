@@ -10,7 +10,7 @@ prerequisites, tutorials, configuration notes, and troubleshooting guide.
 | [Corpus files](corpus/README.md) | Compare Markdown collections, move the remaining documents with their images, and copy matching source PDFs. | Preview a corpus difference or PDF copy before writing files. |
 | [Deployment](deployment/README.md) | Install and manage the Baidu Unlimited OCR 2 inference service on a Linux NVIDIA host. | Preview deployment, install the service, and connect a notebook client. |
 | [Embedding](embedding/README.md) | Pool Ollama embedding requests and display notebook indexing progress. | Check configured servers, embed a batch, then run the application notebook. |
-| [KUKA chatbot collection](krl/README.md) | Collect KRL编程 or 智能问答 (KQA) answers into resumable Markdown batches. | Inspect pending questions offline, collect one answer, then resume. |
+| [KUKA chatbot collection](krl/README.md) | Collect KRL编程, 智能问答 (KQA), or KRL程序理解 (KRLU) answers into resumable Markdown batches. | Inspect pending questions offline, collect one answer, then resume. |
 | [Notebook tools](notebooks/README.md) | Locate notebook cells, filter outputs for Git, or apply a specific historical source migration. | Inspect cells and question banks without running service workflows. |
 | [RAG evaluation](rag/README.md) | Build/audit question samples and run, review, and publish object/task retrieval evaluations. | Prepare query embeddings, run an evaluation, review answers, and publish results. |
 | [Summarization](summary/README.md) | Run async summarization with checkpoints, server pools, progress, and scheduling benchmarks. | Resume existing object summaries or compare schedulers with a mock benchmark. |
@@ -39,7 +39,7 @@ uv run ribosome-prepare --profile standalone
 
 The project requires Python 3.12 or newer. The standalone OCR host installer has
 its own Python and system requirements described in the deployment guide.
-Some smaller tools use only the standard library; the KRL and KQA collectors need
+Some smaller tools use only the standard library; the KUKA chatbot collectors need
 `requests` and `python-dotenv` for live collection, and notebook output filtering
 needs the `nbstripout` executable. Each group lists its own requirements.
 
@@ -53,7 +53,7 @@ installed `ribosome` distribution.
 Commands that use `assets/`, `db/`, local indexes, `.env`, or model services need
 those resources in your checkout. They are not created merely by importing a
 utility or exporting notebook code. Check the relevant tutorial before starting
-a workflow. KRL and KQA login settings belong in `utils/krl/.env`; other workflows use
+a workflow. KUKA chatbot login settings belong in `utils/krl/.env`; other workflows use
 the configuration locations described in their group guides.
 
 ## Run tools and import helpers

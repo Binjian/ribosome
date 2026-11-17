@@ -1,9 +1,9 @@
-# KUKA chatbot collection (KRL and KQA)
+# KUKA chatbot collection (KRL, KQA, and KRLU)
 
 [All utility groups](../README.md)
 
 Collect original answers from [KUKA Center](https://www.kukacenter.com/chat) in
-**KRL编程** or **智能问答** mode, keeping the complete question and answer as Markdown. Completed
+**KRL编程**, **智能问答**, or **KRL程序理解** mode, keeping the complete question and answer as Markdown. Completed
 pairs are reused across runs, and each output file holds up to 20 pairs.
 
 ## Utilities
@@ -12,7 +12,66 @@ pairs are reused across runs, and each output file holds up to 20 pairs.
 | --- | --- | --- |
 | [collect_krl_qa.py](collect_krl_qa.py) | CLI; `KukaClient` | Authenticate, submit prompts to the KRL model, consume streamed answers, check them, and publish completed pairs. |
 | [collect_kqa_qa.py](collect_kqa_qa.py) | CLI | Collect 智能问答 answers using the shared client and storage, with separate KQA defaults. |
+| [collect_krlu_qa.py](collect_krlu_qa.py) | CLI | Upload generated KRL samples, wait for training, and collect KRL程序理解 answers with separate KRLU defaults. |
+| [generate_krlu_questions.py](generate_krlu_questions.py) | CLI | Reproduce the 1,000-question KRLU bank from program templates and comprehension scenarios. |
 | [krl_collection_store.py](krl_collection_store.py) | Python library | Parse numbered prompts, validate existing output, identify pending questions, and append completed answers atomically. |
+
+## KRLU: collect KRL程序理解 pairs
+
+The [KRLU question bank](../../assets/KRLU/krlu_questions_1000.md) contains
+1,000 Chinese program comprehension questions. Every question includes an original
+generated KRL sample, its assumptions, and targeted questions about its behavior.
+The bank covers data, control flow, subprograms, motion, coordinate transforms,
+I/O, timers, interrupts, and application sequences. These are source prompts;
+chatbot answers are collected separately.
+
+```sh
+.venv/bin/python utils/krl/collect_krlu_qa.py --dry-run
+.venv/bin/python utils/krl/collect_krlu_qa.py --max-questions 1
+.venv/bin/python utils/krl/collect_krlu_qa.py
+```
+
+KRLU starts at **0001** and reads `assets/KRLU/krlu_questions_1000.md`.
+Answers go to `assets/KRLU/krlu_qa_collected.md`, then
+`krlu_qa_collected_002.md`, and so on, with 20 pairs per file by default.
+The collector shares the account settings in `utils/krl/.env`, interactive CAPTCHA,
+retries, concurrency, integrity checks, atomic publication, and ID-based resume
+described below. The module entry point is
+`python -m utils.krl.collect_krlu_qa --dry-run`.
+
+KRL程序理解 has a separate workflow in the
+[public frontend](https://chat.kukacenter.com/): each new conversation receives
+the sample's `.src` and optional `.dat` files through `/api/uploadFiles`, followed
+by `/api/krl/train` and bounded `/api/krl/queryStatus` polling. Collection waits
+for successful training before submitting the complete prompt to
+`/api/krl/stream`. This endpoint does not receive `robotModel` or
+`networkSearchFlag`. The answer check and persisted-answer verification use
+the same endpoints as the other modes. No files are uploaded during a dry run.
+
+Custom KRLU sources must retain one complete program file per fenced `krl`
+block, beginning with a filename comment such as `; FILE: KRLU_0001.src`.
+Companion data modules use their matching `.dat` filenames. The filename
+marker and the entire code block remain in the saved question. Invalid or
+missing source files are rejected before login. Each question has its own
+conversation and training context, including when collecting concurrently.
+`--answer-timeout` bounds project preparation and then separately bounds answer
+generation; training status and file readiness are polled every two seconds.
+
+The source bank can be reproduced or checked offline:
+
+```sh
+.venv/bin/python utils/krl/generate_krlu_questions.py --check
+.venv/bin/python utils/krl/generate_krlu_questions.py --output /tmp/krlu_questions_1000.md
+```
+
+Regenerating the default source after changing templates can change prompt
+hashes. Review those changes before resuming an existing collection.
+
+Start with one live question to check the site's current upload/training
+behavior before a longer collection. Failed training, interrupted streams,
+or a mismatching persisted answer do not publish a completed QA pair;
+rerunning requests only missing IDs. Existing KRL and KQA output series are
+independent of KRLU.
 
 ## KQA: collect 智能问答 pairs
 
@@ -32,7 +91,7 @@ go into `assets/KQA/kqa_qa_collected.md`, then `kqa_qa_collected_002.md`, and so
 on, with 20 pairs per file by default. Rerunning skips completed IDs across all
 batches. KRL keeps its existing defaults, including starting at 0019.
 
-Both collectors use `utils/krl/.env`, the same account/CAPTCHA login, CLI
+All collectors use `utils/krl/.env`, the same account/CAPTCHA login, CLI
 options, retry policy, source-order batching, heading repair, and atomic resume
 rules documented below. KQA also supports `--concurrency 2 --max-questions 4`
 and the module entry point `python -m utils.krl.collect_kqa_qa --dry-run`.
@@ -44,7 +103,7 @@ as `intelligent_customer_service_robot`; KRL编程 uses `krl_question_robot`.
 Both tabs use `/api/efs/stream`, `/api/check`, and
 `/api/krl/selectQuestionInfo` (including the `krl` path for 智能问答).
 New KQA batches have a KQA title and 智能问答 provenance; record metadata includes
-the selected mode and model. Both collectors retain the existing storage
+the selected mode and model. All collectors retain the existing storage
 format's `krl-qa-record` / `krl-qa-complete` integrity markers so parsing,
 heading repair, and recovery use the same implementation.
 
@@ -198,7 +257,7 @@ For a bounded session or a separate collection:
 
 ## Output and resume rules
 
-With either sequential or concurrent collection, the existing 18 pairs stay in
+For KRL, with either sequential or concurrent collection, the existing 18 pairs stay in
 `assets/KRL/krl_qa_collected.md`. Samples 0019 and
 0020 fill that file; samples 0021–0040 go into `krl_qa_collected_002.md`, then
 0041–0060 into `_003.md`, and so on. A new collection beginning at 0019 instead
@@ -206,7 +265,7 @@ holds 0019–0038 in its first file. The final batch can contain fewer than 20
 pairs. Existing introductory text, including historical manual counts, is
 preserved; the dry-run report reflects the actual saved records.
 
-Both modes store completed QAs in the order of the source question list. Each
+All modes store completed QAs in the order of the source question list. Each
 batch holds at most `--batch-size` pairs; gaps can remain when a question fails
 or a selected range skips questions. Resume checks completed IDs across all
 batches and requests only missing questions. Inserting an earlier answer can
@@ -323,7 +382,7 @@ initial account/CAPTCHA check.
 
 ```sh
 .venv/bin/python -m pytest --confcutdir=tests -q \
-  tests/test_collect_krl_qa.py tests/test_collect_kqa_qa.py \
+  tests/test_collect_krl_qa.py tests/test_collect_kqa_qa.py tests/test_collect_krlu_qa.py \
   tests/test_krl_collection_store.py
 ```
 

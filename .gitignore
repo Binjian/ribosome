@@ -202,7 +202,10 @@ cython_debug/
 /.python-version
 /log/
 /ollama_logs.text
-/assets/
+/assets/*
+!/assets/KRLU/
+/assets/KRLU/*
+!/assets/KRLU/krlu_questions_1000.md
 /.vscode/
 /_proc/
 /chroma/

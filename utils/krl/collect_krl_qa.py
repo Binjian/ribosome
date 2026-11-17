@@ -51,16 +51,17 @@ MODEL = "krl_question_robot"  # The frontend's KRL编程 tab.
 
 @dataclass(frozen=True)
 class CollectionProfile:
-    """Frontend mode and local defaults shared by the KRL and KQA collectors."""
+    """Frontend mode and local defaults shared by the chatbot collectors."""
 
     key: str
     mode: str
-    robot_model: str
+    robot_model: str | None
     questions: Path
     output: Path
     start: int
     title: str
     answer_path: str
+    stream_path: str = "/api/efs/stream"
 
 
 KRL_PROFILE = CollectionProfile(
@@ -327,15 +328,19 @@ class KukaClient:
             )
         return response
 
-    def api(self, path, payload=None, *, main_site=False):
+    def api(self, path, payload=None, *, main_site=False, files=None, timeout=None):
         # The main frontend's HTTP wrapper prefixes service paths such as
         # /api-b/... with /api. The unprefixed sign URL returns HTTP 463.
         # Chat has its own /api/... routes and does not use that proxy prefix.
         host = MAIN_URL + "/api" if main_site else CHAT_URL
+        options = {} if timeout is None else {"timeout": timeout}
         if main_site:
-            response = self.request("GET", host + path, params=payload)
+            response = self.request("GET", host + path, params=payload, **options)
+        elif files is not None:
+            # requests supplies the multipart boundary and Content-Type.
+            response = self.request("POST", host + path, files=files, **options)
         else:
-            response = self.request("POST", host + path, json=payload or {})
+            response = self.request("POST", host + path, json=payload or {}, **options)
         with response:
             try:
                 data = response.json()
@@ -468,6 +473,13 @@ class KukaClient:
             },
         )
 
+    @staticmethod
+    def validate_question(question: Question) -> None:
+        """Check mode-specific input offline, before authentication or writes."""
+
+    def prepare_question(self, question: Question, identifiers: dict) -> None:
+        """Prepare conversation context, when required by a frontend mode."""
+
     def generate(self, question: Question) -> tuple[str, dict]:
         """Start a fresh conversation; a failed stream is never reused."""
         session = self.api("/api/session/saveOrUpdate", {"sessionTitle": "新建对话"})
@@ -480,16 +492,17 @@ class KukaClient:
             "uuid": question_uuid,
             "requestId": session_id,
         }
+        self.prepare_question(question, identifiers)
         payload = dict(
             identifiers,
             question=question.prompt,
-            robotModel=self.profile.robot_model,
             repeatFlag=False,
-            networkSearchFlag=False,
         )
+        if self.profile.robot_model is not None:
+            payload.update(robotModel=self.profile.robot_model, networkSearchFlag=False)
         with self.request(
             "POST",
-            CHAT_URL + "/api/efs/stream",
+            CHAT_URL + self.profile.stream_path,
             json=payload,
             stream=True,
             # Reasoning can be silent longer than ordinary API calls. Do not
@@ -560,6 +573,7 @@ class KukaClient:
             "source": MAIN_URL + "/chat",
             "mode": self.profile.mode,
             "robot_model": self.profile.robot_model,
+            "stream_path": self.profile.stream_path,
             "collected_at": datetime.now(timezone.utc).isoformat(),
             "session_id": identifiers["sessionId"],
             "question_uuid": identifiers["uuid"],
@@ -701,7 +715,7 @@ def _collect_with_workers(client, pending, store, concurrency, delay):
             # Copy the complete jar, including cookie domains/paths/flags. Each
             # worker has its own cookies, adapters, and connection pools.
             session.cookies = client.session.cookies.copy()
-            clients.append(KukaClient(
+            clients.append(type(client)(
                 session, client.request_timeout, client.answer_timeout,
                 retries=client.retries, retry_delay=client.retry_delay,
                 profile=client.profile,
@@ -758,7 +772,9 @@ def build_parser(*, profile=KRL_PROFILE):
         "--answer-timeout",
         type=float,
         default=900.0,
-        help="Stream read idle timeout and answer duration limit (default: 900 seconds)",
+        help=("Stream read idle timeout and answer duration limit (default: 900 seconds)"
+              + ("; also separately bounds each project's upload/training preparation"
+                 if profile.key == "krlu" else "")),
     )
     parser.add_argument(
         "--retries", type=int, default=3,
@@ -786,7 +802,8 @@ def build_parser(*, profile=KRL_PROFILE):
     return parser
 
 
-def main(argv=None, *, profile=KRL_PROFILE):
+def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
+    client_factory = KukaClient if client_factory is None else client_factory
     parser = build_parser(profile=profile)
     args = parser.parse_args(argv)
     if args.dry_run and args.repair_headings:
@@ -819,6 +836,8 @@ def main(argv=None, *, profile=KRL_PROFILE):
         args.questions = args.questions.resolve()
         args.output = args.output.resolve()
         questions = parse_questions(args.questions)
+        for question in questions:
+            client_factory.validate_question(question)
         if not args.repair_headings and args.start not in {question.id for question in questions}:
             raise CollectionError(f"Starting question {args.start:04d} does not exist")
         if args.questions.resolve() == args.output.resolve():
@@ -838,7 +857,8 @@ def main(argv=None, *, profile=KRL_PROFILE):
                 )
             print(f"Batch size: {args.batch_size}; output: {args.output}")
             print(f"Concurrency: {args.concurrency}")
-            print(f"Mode: {profile.mode}; model: {profile.robot_model}")
+            model = profile.robot_model or "not sent (project endpoint)"
+            print(f"Mode: {profile.mode}; model: {model}; stream: {profile.stream_path}")
             return 0
         if args.repair_headings:
             with output_lock(args.output):
@@ -885,7 +905,7 @@ def main(argv=None, *, profile=KRL_PROFILE):
                         "Referer": MAIN_URL + "/chat",
                     }
                 )
-                client = KukaClient(
+                client = client_factory(
                     session, args.request_timeout, args.answer_timeout,
                     retries=args.retries, retry_delay=args.retry_delay,
                     profile=profile,
