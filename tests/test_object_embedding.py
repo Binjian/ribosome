@@ -473,7 +473,7 @@ def test_corpus_cancellation_propagates(index, tmp_path):
 
 def test_parallel_preparation_uses_both_servers_and_preserves_reuse_counts(tmp_path, monkeypatch):
     from ollama import AsyncClient
-    from utils.embedding_ollama_pool import OllamaEmbeddingPool
+    from utils.embedding.embedding_ollama_pool import OllamaEmbeddingPool
 
     async def scenario():
         seen = set()

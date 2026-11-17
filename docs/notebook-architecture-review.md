@@ -96,7 +96,7 @@ A temporary catalog probe found zero mapped documents with the task suffix; afte
 
 ### F04. Completed checkpoints need a whole-document completeness audit
 
-The completed-document branch of [utils/summary_object_asyncio.py](../utils/summary_object_asyncio.py), `process_document` around lines 527–562, calls `_prepare_incremental_tree`, which plans work through object nodes. If no object work or structural changes are found, the function returns the saved completed result. It does not check missing ordinary prose `s`, section `s`, or the document `summary` before that return. The later document-summary validation is bypassed.
+The completed-document branch of [utils/summary/summary_object_asyncio.py](../utils/summary/summary_object_asyncio.py), `process_document` around lines 527–562, calls `_prepare_incremental_tree`, which plans work through object nodes. If no object work or structural changes are found, the function returns the saved completed result. It does not check missing ordinary prose `s`, section `s`, or the document `summary` before that return. The later document-summary validation is bypassed.
 
 This means a *signature-compatible* saved artifact with a non-object summary gap can be reported complete, and an object upgrade does not itself repair these other gaps. This is narrower than saying resume is broken: existing object descendant repair and partial-resume traversal are useful and should remain.
 
@@ -137,7 +137,7 @@ This creates a spurious data-row object in the derived table for downstream extr
 
 ### F09–F10. Summary compatibility and fidelity need explicit input contracts
 
-`SummaryCheckpoint.signature` in [utils/summary_asyncio.py](../utils/summary_asyncio.py) hashes Markdown and adjacent AST/semantics artifacts, but not the bytes of ordinary image assets referenced by the Markdown. The ignored-image reference set has its own compatibility signature; that does not cover the actual diagrams being summarized. Replacing `diagram.png` without changing its path or the Markdown can leave the saved visual summary eligible for reuse. A temporary-file probe changed the image bytes and observed an identical checkpoint signature.
+`SummaryCheckpoint.signature` in [utils/summary/summary_asyncio.py](../utils/summary/summary_asyncio.py) hashes Markdown and adjacent AST/semantics artifacts, but not the bytes of ordinary image assets referenced by the Markdown. The ignored-image reference set has its own compatibility signature; that does not cover the actual diagrams being summarized. Replacing `diagram.png` without changing its path or the Markdown can leave the saved visual summary eligible for reuse. A temporary-file probe changed the image bytes and observed an identical checkpoint signature.
 
 **Improvement:** include referenced asset fingerprints in the source manifest, with explicit unavailable/remote asset states. Preserve the current Markdown/output/model/settings checks. Treat changed image content as changed input, while retaining the no-rebuild rule for code/schema-only changes. For old checkpoints lacking asset hashes, record provenance as unknown and adopt a deliberate compatibility transition; do not silently assume historical asset identity or reset every completed document.
 

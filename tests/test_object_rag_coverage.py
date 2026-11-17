@@ -14,10 +14,8 @@ import zipfile
 
 import nbformat
 import pytest
-import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'utils'))
-from notebook_cells import find_cell
+from utils.notebooks.notebook_cells import find_cell
 
 NOTEBOOK = Path('nbs/05.application.rag.object.ipynb')
 

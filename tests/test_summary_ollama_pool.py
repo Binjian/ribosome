@@ -10,8 +10,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from utils.summary_asyncio import _document_id
-from utils.summary_ollama_pool import OllamaSummaryPool
+from utils.summary.summary_asyncio import _document_id
+from utils.summary.summary_ollama_pool import OllamaSummaryPool
 
 
 HOSTS = ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
@@ -231,7 +231,7 @@ def test_invalid_pool_configuration(options):
 def test_pool_integrates_with_object_batch_metrics_and_checkpoint(tmp_path, monkeypatch):
     from tqdm.auto import tqdm
     from ribosome.core.dom.summary import object as dom_summary
-    from utils.summary_object_asyncio import summarize_object_documents
+    from utils.summary.summary_object_asyncio import summarize_object_documents
 
     files = [tmp_path / f'manual{i}.md' for i in range(2)]
     for file in files:

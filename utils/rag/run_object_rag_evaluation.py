@@ -13,11 +13,12 @@ from pathlib import Path
 import re
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 import nbformat
-from notebook_cells import defined_names, find_cell, load_question_banks
-from object_rag_evaluation import (
+from utils.notebooks.notebook_cells import defined_names, find_cell, load_question_banks
+from utils.rag.object_rag_evaluation import (
     EvaluationRun, QueryEmbeddingCache, answer_blocks, atomic_json, atomic_text, case_metrics, csv_rows, digest, grouped_metrics,
     plain, read_json, sample_units, source_key, compatible_review, cache_readonly_snapshots,
 )
@@ -53,7 +54,7 @@ LOAD_QUESTIONS = [
 
 def offline_author():
     """Create locally authored, source-specific questions without data transfer."""
-    from object_rag_evaluation import source_units
+    from utils.rag.object_rag_evaluation import source_units
     for row in csv_rows(ROOT):
         path = ROOT/row['path']
         seed, population, units = sample_units(path, row['path'])

@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from utils import deploy_unlimited_ocr_v2 as deploy
+from utils.deployment import deploy_unlimited_ocr_v2 as deploy
 
 
 def args(root, *options):

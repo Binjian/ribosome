@@ -214,7 +214,7 @@ def located_answer_blocks(case, state, project_root, *, display_directory=None):
 
 class CategoryEvaluationRun(EvaluationRun):
     """Render provenance for existing and new results without changing retrieval."""
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
 
     def for_top_k(self, top_k):
         if top_k == self.top_k:

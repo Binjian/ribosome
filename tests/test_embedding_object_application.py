@@ -358,7 +358,7 @@ def test_modes_create_separate_collections_and_catalogs_and_resume(tmp_path):
 
 def test_notebook_preflight_and_indexing_send_summaries_to_both_servers(tmp_path, monkeypatch):
     from ollama import AsyncClient
-    from utils.embedding_ollama_pool import HEALTH_CHECK_TEXT
+    from utils.embedding.embedding_ollama_pool import HEALTH_CHECK_TEXT
 
     (tmp_path / 'pyproject.toml').write_text('')
     semantics(tmp_path / 'assets/md.json.semantics.remaining', 'a')

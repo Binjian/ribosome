@@ -6,8 +6,8 @@ import json
 import pytest
 
 from ribosome.core.dom.summary import object as sut
-from utils import summary_asyncio as shared
-from utils import summary_object_asyncio as app
+from utils.summary import summary_asyncio as shared
+from utils.summary import summary_object_asyncio as app
 
 
 class Progress:

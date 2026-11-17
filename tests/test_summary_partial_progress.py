@@ -1,8 +1,8 @@
 """Durable unpublished progress and its compatibility checks."""
 from types import SimpleNamespace
 
-from utils.summary_asyncio import SummaryCheckpoint
-from utils.summary_object_asyncio import _load_partial, _save_partial, _complete_object
+from utils.summary.summary_asyncio import SummaryCheckpoint
+from utils.summary.summary_object_asyncio import _load_partial, _save_partial, _complete_object
 
 
 def test_partial_is_atomic_separate_and_compatible(tmp_path):
@@ -44,7 +44,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
     import asyncio
     import copy
     from ribosome.core.dom.summary import object as dom
-    from utils import summary_object_asyncio as app
+    from utils.summary import summary_object_asyncio as app
 
     file = tmp_path / 'manual.md'
     file.write_text('source')
@@ -140,7 +140,7 @@ def test_interrupted_document_reuses_objects_and_restores_count(tmp_path, monkey
 
 
 def test_section_count_includes_nested_sections_but_not_object_source():
-    from utils.summary_object_asyncio import _section_count
+    from utils.summary.summary_object_asyncio import _section_count
     tree = {'blocks': [{'t': 'Section', 'c': [{'t': 'Header', 'c': []}],
                         'subnodes': [{'t': 'Section', 'c': []},
                                      {'t': 'Div', 'object': {},
@@ -152,7 +152,7 @@ def test_resuming_partial_prose_requests_only_missing_summaries(tmp_path, monkey
     import asyncio
     import json
     from ribosome.core.dom.summary import object as dom
-    from utils import summary_object_asyncio as app
+    from utils.summary import summary_object_asyncio as app
     from tqdm.auto import tqdm
 
     file = tmp_path / 'manual.md'
@@ -268,7 +268,7 @@ def test_partial_read_reports_bytes_and_compatibility_stages(tmp_path):
 def test_resume_worker_keeps_loop_live_and_awaits_cancelled_thread():
     import asyncio
     import threading
-    from utils.summary_object_asyncio import _run_resume_work
+    from utils.summary.summary_object_asyncio import _run_resume_work
 
     async def scenario():
         release, stopped = threading.Event(), threading.Event()

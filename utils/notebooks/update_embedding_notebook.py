@@ -6,7 +6,7 @@ cell IDs and metadata; export separately with nbdev-export afterwards.
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 HELPERS = '''# | export
 def _canonical_json(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ';'))

@@ -7,8 +7,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from utils.object_rag_evaluation import atomic_json, digest, read_json
-from utils import task_rag_questions as questions
+from utils.rag.object_rag_evaluation import atomic_json, digest, read_json
+from utils.rag import task_rag_questions as questions
 
 
 @pytest.fixture
@@ -228,7 +228,7 @@ def test_atomic_replacement_failure_preserves_previous_complete_bank(corpus, mon
     root, _, cases, docs = selected(corpus)
     destination = root/'bank.json'
     atomic_json(destination, {'previous_complete': True})
-    import utils.object_rag_evaluation as persistence
+    import utils.rag.object_rag_evaluation as persistence
     replace = persistence.os.replace
     def failing_replace(source, target):
         if Path(target) == destination:

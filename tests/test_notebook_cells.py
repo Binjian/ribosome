@@ -1,12 +1,9 @@
 """Notebook readers survive ID cleanup without running service/batch cells."""
-from pathlib import Path
-import sys
 
 import nbformat
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'utils'))
-from notebook_cells import defined_names, find_cell, load_question_banks
+from utils.notebooks.notebook_cells import defined_names, find_cell, load_question_banks
 
 
 def test_declarations_ignore_quoted_text_and_function_locals():
@@ -51,7 +48,7 @@ def test_question_bank_loading_excludes_service_and_generation_cells():
 
 @pytest.mark.parametrize('id_format', ['{index}', 'arbitrary-{index}'])
 def test_evaluation_namespace_loads_all_cases_without_opening_services(id_format):
-    from run_object_rag_evaluation import NOTEBOOK, namespace
+    from utils.rag.run_object_rag_evaluation import NOTEBOOK, namespace
 
     notebook = nbformat.read(NOTEBOOK, as_version=4)
     services = find_cell(notebook, defines=('app', 'collection', 'generation_client'))

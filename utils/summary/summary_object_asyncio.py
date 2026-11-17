@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from tqdm.auto import tqdm
 
-from utils.summary_asyncio import SummaryAsyncClient, SummaryCheckpoint, _document_id
+from utils.summary.summary_asyncio import SummaryAsyncClient, SummaryCheckpoint, _document_id
 
 
 _batch_active = False

@@ -12,8 +12,8 @@ from ollama import AsyncClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ribosome.core.dom.embedding.object import IndexingResult
-from utils.embedding_ollama_pool import OllamaEmbeddingPool
-from utils.embedding_progress import EmbeddingProgressDisplay
+from utils.embedding.embedding_ollama_pool import OllamaEmbeddingPool
+from utils.embedding.embedding_progress import EmbeddingProgressDisplay
 
 
 HOSTS = ['http://172.27.74.49:11434', 'http://172.27.74.16:11434']
@@ -24,7 +24,7 @@ def test_status_snapshot_reports_eight_running_one_queued_and_cleans_up(monkeypa
         entered = 0
         filled = asyncio.Event()
         tick = [10.0]
-        monkeypatch.setattr('utils.embedding_ollama_pool.perf_counter', lambda: tick[0])
+        monkeypatch.setattr('utils.embedding.embedding_ollama_pool.perf_counter', lambda: tick[0])
         async def embed(self, **kwargs):
             nonlocal entered
             entered += 1

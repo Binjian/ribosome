@@ -237,7 +237,7 @@ def test_singleton_depth_does_not_starve_independent_requests(monkeypatch, reque
 
 def test_acceleration_preserves_pipeline_calls_and_outputs(monkeypatch):
     from collections import Counter
-    from utils.benchmark_summary_asyncio import _legacy_ordered_summary_map
+    from utils.summary.benchmark_summary_asyncio import _legacy_ordered_summary_map
 
     async def scenario():
         calls = []

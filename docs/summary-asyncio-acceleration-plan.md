@@ -34,7 +34,7 @@ identical request counts. Actual Ollama gains need benchmarking.
   timing. Keep the shared client and existing document failure isolation.
 
 No public summarization API or output schema changes are required. Application
-helpers may be extracted into `utils/summary_asyncio.py` for offline testing and
+helpers may be extracted into `utils/summary/summary_asyncio.py` for offline testing and
 reuse by the benchmark.
 
 ## Ollama server tuning
@@ -79,11 +79,11 @@ artifacts during benchmarking.
 - Implemented the inline-singleton scheduler in the source notebook and exported
   module. Existing prompt content, thresholds, request stages, ordering, and empty
   `s` behavior remain intact.
-- Cell 7 now calls the tested runner in `utils/summary_asyncio.py`. Defaults are
+- Cell 7 now calls the tested runner in `utils/summary/summary_asyncio.py`. Defaults are
   4 document workers, 8 shared request slots, and 32 traversal tasks per document.
   Setup runs in background threads; cancellation waits for their completion.
   Progress renders every 250ms, and request metrics appear in the results cell.
-- The benchmark is `utils/benchmark_summary_asyncio.py`. It saves a fixed sample
+- The benchmark is `utils/summary/benchmark_summary_asyncio.py`. It saves a fixed sample
   manifest, summary outputs, and `report.json` in a temporary directory. Live
   samples include text above the summarization threshold, accessible images, and
   nested containers with independent image leaves. Warmups are excluded from
@@ -106,7 +106,7 @@ multisets against the frozen original scheduler.
 Reproduce with:
 
 ```sh
-.venv/bin/python utils/benchmark_summary_asyncio.py
+.venv/bin/python utils/summary/benchmark_summary_asyncio.py
 .venv/bin/python -m pytest tests/test_summary_concurrency.py tests/test_summary_subnodes.py tests/test_summary_asyncio.py tests/test_textualize_lifecycle.py tests/test_dom_behavior.py tests/test_reorg.py -q
 ```
 
@@ -138,8 +138,8 @@ capacity for this model and administrative access to restart the service. Then
 rerun the fixed-sample benchmark with unchanged prompts and generation options:
 
 ```sh
-.venv/bin/python utils/benchmark_summary_asyncio.py --live --request-limit 4 --server-parallel 4
-.venv/bin/python utils/benchmark_summary_asyncio.py --live --request-limit 8 --server-parallel 4
+.venv/bin/python utils/summary/benchmark_summary_asyncio.py --live --request-limit 4 --server-parallel 4
+.venv/bin/python utils/summary/benchmark_summary_asyncio.py --live --request-limit 8 --server-parallel 4
 ```
 
 Restart the notebook kernel and run its cells in order to pick up the new module

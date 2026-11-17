@@ -8,11 +8,15 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ollama import AsyncClient
-from run_object_rag_evaluation import ROOT, namespace
+from utils.rag.run_object_rag_evaluation import ROOT, namespace
 from ribosome.ollama_config import OLLAMA_RAG_HOST, OLLAMA_TRUST_ENV
-from object_rag_evaluation import atomic_json, digest, read_json, review_input
+from utils.rag.object_rag_evaluation import atomic_json, digest, read_json, review_input
 
 PROMPT = '''Review this robot-manual RAG answer against the question, exact source
 references, expected facts, and evidence actually supplied to generation. Evidence

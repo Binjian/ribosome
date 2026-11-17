@@ -1,7 +1,7 @@
 """Idempotently migrate embedding regression fakes and metadata assertions."""
 import json
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 FAKE = '''class FakeCollection:
     def __init__(self):
         self.rows = {}

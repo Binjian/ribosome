@@ -10,8 +10,8 @@ import nbformat
 import pytest
 
 from ribosome.rag.object import ObjectRAG, canonical
-from utils.object_rag_evaluation import digest
-from utils.task_rag import (TaskRAG, TaskEvaluationRun, TASK_FIELDS, rerank_tasks,
+from utils.rag.object_rag_evaluation import digest
+from utils.rag.task_rag import (TaskRAG, TaskEvaluationRun, TASK_FIELDS, rerank_tasks,
                             task_case_metrics, task_index_coverage, require_task_coverage)
 
 

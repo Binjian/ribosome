@@ -8,7 +8,7 @@ import sys
 import unittest
 
 
-FILTER = Path(__file__).resolve().parents[1] / 'utils' / 'nbstripout_filter.py'
+FILTER = Path(__file__).resolve().parents[1] / 'utils' / 'notebooks' / 'nbstripout_filter.py'
 
 
 class NotebookFilterTests(unittest.TestCase):

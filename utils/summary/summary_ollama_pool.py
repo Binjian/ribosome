@@ -9,7 +9,7 @@ from ollama import AsyncClient
 from httpx import TimeoutException as HTTPTimeoutError
 from ribosome.ollama_config import OLLAMA_TRUST_ENV
 
-from utils.summary_asyncio import RequestMetrics, SummaryAsyncClient, _document_id
+from utils.summary.summary_asyncio import RequestMetrics, SummaryAsyncClient, _document_id
 
 
 logger = logging.getLogger(__name__)

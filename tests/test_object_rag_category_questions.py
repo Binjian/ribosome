@@ -3,16 +3,14 @@ import ast
 import asyncio
 from pathlib import Path
 import re
-import sys
 
 import nbformat
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'utils'))
-from object_rag_category_questions import (
+from utils.rag.object_rag_category_questions import (
     CATEGORY_SYSTEM_PROMPT, CategoryPromptGenerator, category_question,
 )
-from notebook_cells import find_cell, load_question_banks
+from utils.notebooks.notebook_cells import find_cell, load_question_banks
 
 
 def banks(notebook):
@@ -88,7 +86,7 @@ def test_category_prompt_is_per_request_and_does_not_change_original_messages():
 
 def test_locations_and_images_use_actual_hits_not_gold_references(tmp_path):
     from copy import deepcopy
-    from object_rag_category_questions import evidence_locations, located_answer_blocks
+    from utils.rag.object_rag_category_questions import evidence_locations, located_answer_blocks
     root = tmp_path
     source = root / 'assets/manuals/Manual (C-1).md'
     source.parent.mkdir(parents=True)
@@ -117,7 +115,7 @@ def test_locations_and_images_use_actual_hits_not_gold_references(tmp_path):
 
 
 def test_omitted_hits_have_no_fabricated_evidence_label_or_image(tmp_path):
-    from object_rag_category_questions import evidence_locations
+    from utils.rag.object_rag_category_questions import evidence_locations
     source = tmp_path / 'assets/manual.md'
     source.parent.mkdir()
     source.write_text('# Setup\n')
@@ -136,7 +134,7 @@ def test_omitted_hits_have_no_fabricated_evidence_label_or_image(tmp_path):
 
 
 def test_actual_context_labels_survive_budget_omissions(tmp_path):
-    from object_rag_category_questions import evidence_locations
+    from utils.rag.object_rag_category_questions import evidence_locations
     hits = [dict(record=dict(id=i, source_file='assets/manual.md', attributes={},
                              content='', section_headings=['2 Commands']), manual={})
             for i in ['first-omitted', 'second-included']]
@@ -146,7 +144,7 @@ def test_actual_context_labels_survive_budget_omissions(tmp_path):
 
 
 def test_converted_markdown_links_back_to_original_document(tmp_path):
-    from object_rag_category_questions import evidence_locations
+    from utils.rag.object_rag_category_questions import evidence_locations
     source = tmp_path / 'assets/code-docs.5.0/.md/manuals/Manual/Manual.md'
     source.parent.mkdir(parents=True)
     source.write_text('# 3.2 Configuration\n')
@@ -160,7 +158,7 @@ def test_converted_markdown_links_back_to_original_document(tmp_path):
 
 def test_jupyter_links_resolve_from_notebook_directory(tmp_path):
     from urllib.parse import unquote
-    from object_rag_category_questions import evidence_locations
+    from utils.rag.object_rag_category_questions import evidence_locations
     notebook_directory = tmp_path / 'nbs'
     notebook_directory.mkdir()
     source = tmp_path / 'assets/manuals/Manual (A-1).md'

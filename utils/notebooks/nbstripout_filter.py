@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run nbstripout, preserving malformed or unsupported notebooks.
 
-Use as Git's clean filter: python3 utils/nbstripout_filter.py
+Use as Git's clean filter: python3 utils/notebooks/nbstripout_filter.py
 Requires the nbstripout executable on PATH. Malformed input (including merge
 conflicts) and unsupported notebooks pass through unchanged so Git can still
 inspect and save them without a format conversion.

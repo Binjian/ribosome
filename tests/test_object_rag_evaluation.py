@@ -5,18 +5,16 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
-import sys
 from types import SimpleNamespace
 
 import nbformat
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'utils'))
-from object_rag_evaluation import (
+from utils.rag.object_rag_evaluation import (
     EvaluationRun, QueryEmbeddingCache, atomic_json, case_metrics, csv_rows, expected_hit,
     plain, read_json, sample_units, source_key, source_units, compatible_review, review_input, review_text, digest, cache_readonly_snapshots,
 )
-from notebook_cells import find_cell
+from utils.notebooks.notebook_cells import find_cell
 
 
 @pytest.fixture
@@ -117,7 +115,7 @@ def test_atomic_publish_failure_preserves_previous_output(tmp_path, monkeypatch)
     def fail(*args):
         raise OSError('disk failure')
 
-    monkeypatch.setattr('object_rag_evaluation.os.replace', fail)
+    monkeypatch.setattr('utils.rag.object_rag_evaluation.os.replace', fail)
     with pytest.raises(OSError):
         atomic_json(path, {'completed': 2})
     assert read_json(path) == {'completed': 1}
@@ -145,7 +143,7 @@ def test_invalid_generation_is_retryable_without_retrieving_again(experiment):
 
 
 def test_review_validation_requires_real_answer_claims_and_source_quotes():
-    from review_object_rag_evaluation import validate_review
+    from utils.rag.review_object_rag_evaluation import validate_review
     data = dict(answer='The documented parameter is TOOL.', references=['TOOL is documented.'], supplied_evidence='')
     review = dict(assessment='correct', completeness='complete', citation_support='supported',
                   revision_fidelity='faithful', appropriate_abstention=False, unsupported_claims=[],
@@ -203,8 +201,8 @@ def test_review_view_keeps_literal_command_placeholders_and_order():
 
 def test_qualitative_review_spans_every_source_and_preserves_legacy_coverage():
     from collections import Counter
-    from run_object_rag_evaluation import namespace
-    from review_object_rag_evaluation import select_review_cases
+    from utils.rag.run_object_rag_evaluation import namespace
+    from utils.rag.review_object_rag_evaluation import select_review_cases
     _, ns = namespace()
     legacy = ns['GENERAL_OPERATION_CASES'] + ns['ARC_WELDING_CASES']
     cases = legacy + ns['SAMPLED_CASES']
@@ -216,7 +214,7 @@ def test_qualitative_review_spans_every_source_and_preserves_legacy_coverage():
 
 
 def test_legacy_docx_references_match_converted_markdown_directory_layout():
-    from run_object_rag_evaluation import namespace
+    from utils.rag.run_object_rag_evaluation import namespace
     from ribosome.rag.object import canonical
     _, ns = namespace()
     for case in ns['GENERAL_OPERATION_CASES']+ns['ARC_WELDING_CASES']:
@@ -324,7 +322,7 @@ def test_new_notebook_compiles_and_relocation_is_complete():
 
 
 def test_all_760_cases_have_exact_source_references_and_distinct_questions():
-    from run_object_rag_evaluation import namespace
+    from utils.rag.run_object_rag_evaluation import namespace
     _, ns = namespace()
     sampled = ns['SAMPLED_CASES']
     legacy = ns['GENERAL_OPERATION_CASES'] + ns['ARC_WELDING_CASES']
@@ -359,7 +357,7 @@ def test_all_760_cases_have_exact_source_references_and_distinct_questions():
 
 
 def test_rerunning_a_family_bank_does_not_duplicate_cases_or_manifest():
-    from run_object_rag_evaluation import namespace
+    from utils.rag.run_object_rag_evaluation import namespace
     notebook, ns = namespace()
     before_ids = [c['id'] for c in ns['SAMPLED_CASES']]
     before_manifest = deepcopy(ns['SAMPLING_MANIFEST'])

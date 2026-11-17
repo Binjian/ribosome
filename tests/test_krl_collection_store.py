@@ -4,8 +4,8 @@ import hashlib
 import json
 
 import pytest
-from utils import krl_collection_store as store_module
-from utils.krl_collection_store import CollectionStore, Question, parse_questions
+from utils.krl import krl_collection_store as store_module
+from utils.krl.krl_collection_store import CollectionStore, Question, parse_questions
 
 
 def questions(count=5):

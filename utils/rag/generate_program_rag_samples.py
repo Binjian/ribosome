@@ -21,7 +21,7 @@ import unicodedata
 
 VERSION = 1
 BANK_RELATIVE = Path("db/task_rag_tests/question_with_tasks/bank.json")
-PROJECT = Path(__file__).resolve().parents[1]
+PROJECT = Path(__file__).resolve().parents[2]
 CATEGORIES = {
     "palletizing": "码垛", "arc_welding": "弧焊", "laser_welding": "激光焊",
     "material_handling": "搬运", "adhesive_dispensing": "涂胶",
@@ -296,7 +296,7 @@ def generate(source_root, count=1000):
         raise ValueError("Some source tasks lack a distinct sample")
     return dict(schema_version=1, dataset_type="program_rag_samples", sample_count=len(samples),
         source_task_count=len(source_ids), complete=True,
-        provenance=dict(generator="utils/generate_program_rag_samples.py", generator_version=VERSION,
+        provenance=dict(generator="utils/rag/generate_program_rag_samples.py", generator_version=VERSION,
             source_bank=BANK_RELATIVE.as_posix(), source_bank_sha256=sha256(source_path),
             method="Deterministic questions about explicit task rows, parameter values, branch conditions and contiguous instruction sequences.",
             source_validation="All source task JSON hashes checked against the authored bank; all answer facts and anchors occur in full retained task evidence.",

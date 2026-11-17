@@ -27,7 +27,7 @@ def _fresh_function_test_dom(asset_name):
 '''
 
 def main():
-    path=Path(__file__).resolve().parents[1]/'nbs/01.core.dom.model.ipynb'
+    path=Path(__file__).resolve().parents[2]/'nbs/01.core.dom.model.ipynb'
     notebook=json.loads(path.read_text())
     helper=next((c for c in notebook['cells'] if c.get('id')=='fresh-function-test-dom'),None)
     if helper is None:

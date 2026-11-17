@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Collect original KUKA Center KRL answers into resumable Markdown batches.
 
-Run ``python utils/collect_krl_qa.py --dry-run`` first. A normal run prompts for
+Run ``python utils/krl/collect_krl_qa.py --dry-run`` first. A normal run prompts for
 the password, login agreement consent, and the site's image CAPTCHA. Set
 KUKA_PASSWORD to supply the password without putting it in source or argv.
 
@@ -33,7 +33,7 @@ else:
     from krl_collection_store import CollectionStore, Question, parse_questions
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 MAIN_URL = "https://www.kukacenter.com"
 CHAT_URL = "https://chat.kukacenter.com"
 MODEL = "krl_question_robot"  # The frontend's KRL编程 tab.

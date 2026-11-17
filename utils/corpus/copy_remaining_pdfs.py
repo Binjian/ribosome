@@ -2,7 +2,7 @@
 """Copy source PDFs corresponding to the remaining Markdown corpus.
 
 Run from any working directory:
-    python utils/copy_remaining_pdfs.py [--dry-run]
+    python utils/corpus/copy_remaining_pdfs.py [--dry-run]
 
 Match by relative path, removing the Markdown converter's extra document
 directory: category/title/title.md corresponds to category/title.pdf. Also
@@ -20,7 +20,7 @@ import sys
 import tempfile
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def copy_remaining_pdfs(markdown_dir, pdf_dir, output_dir, *, dry_run=False):

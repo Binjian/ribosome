@@ -1,8 +1,8 @@
 """Progress colors reflect current routing, including multi-server documents."""
 from types import SimpleNamespace
 
-from utils.summary_asyncio import RequestMetrics
-from utils.summary_object_asyncio import _server_progress
+from utils.summary.summary_asyncio import RequestMetrics
+from utils.summary.summary_object_asyncio import _server_progress
 
 
 def test_server_colors_follow_active_document_requests():

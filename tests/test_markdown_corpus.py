@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from utils import markdown_corpus as corpus
+from utils.corpus import markdown_corpus as corpus
 
 
 def write(root, relative, content='manual'):

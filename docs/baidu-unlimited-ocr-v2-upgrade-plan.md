@@ -86,15 +86,15 @@ same Python environment.
 
 ### Automated installer
 
-The standalone [host installer](../utils/deploy_unlimited_ocr_v2.py) implements the
+The standalone [host installer](../utils/deployment/deploy_unlimited_ocr_v2.py) implements the
 setup below, including a private uv bootstrap when needed, a Python 3.10 venv,
 checksum validation of the pinned SGLang wheel, model download, and user systemd
 deployment. It needs Python 3.10+ to run and does not import ribosome. Execute it
 **on the GPU host** as the service account, without sudo:
 
 ```bash
-python3 utils/deploy_unlimited_ocr_v2.py deploy --dry-run --client-host 172.27.74.16
-python3 utils/deploy_unlimited_ocr_v2.py deploy \
+python3 utils/deployment/deploy_unlimited_ocr_v2.py deploy --dry-run --client-host 172.27.74.16
+python3 utils/deployment/deploy_unlimited_ocr_v2.py deploy \
   --gpu 0 --bind 0.0.0.0 --port 7870 \
   --client-host 172.27.74.16 --smoke-test
 ```
@@ -103,7 +103,7 @@ If the repository is only on the notebook machine, copy just this script; it has
 no adjacent-file dependencies:
 
 ```bash
-scp utils/deploy_unlimited_ocr_v2.py x@172.27.74.16:/tmp/deploy_unlimited_ocr_v2.py
+scp utils/deployment/deploy_unlimited_ocr_v2.py x@172.27.74.16:/tmp/deploy_unlimited_ocr_v2.py
 ssh x@172.27.74.16 \
   'python3 /tmp/deploy_unlimited_ocr_v2.py deploy --client-host 172.27.74.16 --smoke-test'
 ```
@@ -126,8 +126,8 @@ Stop the service before reinstalling or changing its environment. A running
 managed instance holds a lock to prevent concurrent changes:
 
 ```bash
-python3 utils/deploy_unlimited_ocr_v2.py stop
-python3 utils/deploy_unlimited_ocr_v2.py deploy --client-host 172.27.74.16
+python3 utils/deployment/deploy_unlimited_ocr_v2.py stop
+python3 utils/deployment/deploy_unlimited_ocr_v2.py deploy --client-host 172.27.74.16
 ```
 
 Use `--no-start` to install and write the unit without starting/enabling it. For a

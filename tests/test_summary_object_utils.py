@@ -10,7 +10,7 @@ import pytest
 
 from ribosome.core.dom.summary import object_utils
 from ribosome.core.dom.summary import object as sut
-from utils import summary_object_asyncio as batch
+from utils.summary import summary_object_asyncio as batch
 
 
 def test_utilities_import_without_loading_the_dom_summarizer():

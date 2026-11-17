@@ -32,7 +32,7 @@ From the `vendors/ribosome` project directory:
 
 ```python
 from pathlib import Path
-from utils.rag_evaluation_samples import load_sample_bank, audit_summary
+from utils.rag.rag_evaluation_samples import load_sample_bank, audit_summary
 
 regular = load_sample_bank("evaluation_samples/regular_object_rag_3000.json")
 program = load_sample_bank("evaluation_samples/program_rag_1000.json")
@@ -55,7 +55,7 @@ In `06.test.rag.object.question_with_category.ipynb`, after its imports, app,
 embedding cache, and evaluation setup, run a separate sample evaluation:
 
 ```python
-from rag_evaluation_samples import load_sample_bank  # Notebook adds utils to sys.path.
+from utils.rag.rag_evaluation_samples import load_sample_bank
 
 sample_bank = load_sample_bank(SAMPLE_DIR / "regular_object_rag_3000.json")
 sample_cases = sample_bank["cases"]
@@ -71,7 +71,7 @@ For program evaluation, use `05.application.rag.task.ipynb`. Replace its
 question-loading cell with:
 
 ```python
-from utils.rag_evaluation_samples import load_sample_bank
+from utils.rag.rag_evaluation_samples import load_sample_bank
 
 bank = load_sample_bank(SAMPLE_DIR / "program_rag_1000.json")
 cases = select_cases(bank["cases"], SELECTED_CASE_IDS)
@@ -97,7 +97,7 @@ regular-question excerpts against their exact Markdown line ranges, and matches
 program task IDs and complete task contents against the saved task JSON:
 
 ```sh
-python vendors/ribosome/utils/rag_evaluation_samples.py \
+python vendors/ribosome/utils/rag/rag_evaluation_samples.py \
   vendors/ribosome/evaluation_samples/regular_object_rag_3000.json \
   vendors/ribosome/evaluation_samples/program_rag_1000.json \
   --source-root .
@@ -106,10 +106,10 @@ python vendors/ribosome/utils/rag_evaluation_samples.py \
 The source corpus must be available to regenerate these files:
 
 ```sh
-.venv/bin/python vendors/ribosome/utils/generate_regular_object_samples.py \
+.venv/bin/python vendors/ribosome/utils/rag/generate_regular_object_samples.py \
   --source-root . --count 3000 \
   --output vendors/ribosome/evaluation_samples/regular_object_rag_3000.json
-.venv/bin/python vendors/ribosome/utils/generate_program_rag_samples.py \
+.venv/bin/python vendors/ribosome/utils/rag/generate_program_rag_samples.py \
   --source-root . --count 1000 \
   --output vendors/ribosome/evaluation_samples/program_rag_1000.json
 ```

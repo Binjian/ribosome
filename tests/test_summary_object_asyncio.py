@@ -13,8 +13,8 @@ from ollama import AsyncClient
 import pytest
 
 from ribosome.core.dom.summary import object as dom_summary
-from utils import summary_asyncio as shared
-from utils import summary_object_asyncio as app
+from utils.summary import summary_asyncio as shared
+from utils.summary import summary_object_asyncio as app
 
 
 class Progress:
@@ -343,7 +343,7 @@ def test_notebook_validates_compiles_and_uses_both_corpora():
             # Saved execution counts and outputs are valid after using the notebook.
             compile(cell.source, '<object-batch-notebook>', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
     config = notebook.cells[2].source
-    assert config.index('configure_summary_limits(summary_module="object")') < config.index('from utils.summary_object_asyncio')
+    assert config.index('configure_summary_limits(summary_module="object")') < config.index('from utils.summary.summary_object_asyncio')
     assert 'code-docs.4.0' in config and 'code-docs.5.0' in config
     assert '.object-summary-checkpoint.json' in config
     assert any(
@@ -365,7 +365,7 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
     def limits(**kwargs):
         assert kwargs == {'summary_module': 'object'}
         return {'RIBOSOME_DOCUMENT_CONCURRENCY': 4, 'RIBOSOME_SUMMARY_CONCURRENCY': 8}
-    from utils import summary_ollama_pool
+    from utils.summary import summary_ollama_pool
     monkeypatch.setattr(summary_ollama_pool, 'OllamaSummaryPool', client)
     monkeypatch.setattr(shared, 'configure_summary_limits', limits)
     # Keep load_dotenv's environment changes inside this test.
@@ -403,7 +403,7 @@ def test_notebook_configuration_uses_project_env_and_api_key(tmp_path, monkeypat
 
 def test_notebook_remaining_collection_moves_difference_and_preserves_saved_outputs(tmp_path):
     import pandas as pd
-    from utils.markdown_corpus import move_markdown_difference
+    from utils.corpus.markdown_corpus import move_markdown_difference
 
     source = tmp_path / 'assets' / 'md.json.semantics.summary'
     destination = tmp_path / 'assets' / 'md.json.semantics.remaining'

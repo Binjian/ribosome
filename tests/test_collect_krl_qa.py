@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from utils import collect_krl_qa as collector
+from utils.krl import collect_krl_qa as collector
 
 
 class Response:

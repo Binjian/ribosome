@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from utils.summary_asyncio import SummaryCheckpoint
+from utils.summary.summary_asyncio import SummaryCheckpoint
 
 
 @pytest.mark.parametrize('host', [

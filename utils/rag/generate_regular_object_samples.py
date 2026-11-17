@@ -13,9 +13,13 @@ from html import unescape
 import json
 from pathlib import Path
 import re
+import sys
 import unicodedata
 
-from rag_evaluation_samples import plain, load_sample_bank
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from utils.rag.rag_evaluation_samples import plain, load_sample_bank
 
 VERSION = 1
 CATEGORY_BY_MANUAL = {
@@ -398,7 +402,7 @@ def discover_root():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-root', type=Path)
-    parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parents[1] /
+    parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parents[2] /
                         'evaluation_samples/regular_object_rag_3000.json')
     parser.add_argument('--count', type=int, default=3000)
     args = parser.parse_args()
@@ -411,7 +415,7 @@ def main():
     print('Candidate kinds:', dict(sorted(Counter(c['kind'] for c in candidates).items())))
     cases = select(candidates, args.count)
     bank = dict(schema_version=1, dataset_type='regular_object_rag_samples', sample_count=len(cases),
-                generation=dict(generator='utils/generate_regular_object_samples.py', version=VERSION,
+                generation=dict(generator='utils/rag/generate_regular_object_samples.py', version=VERSION,
                     method='deterministic_source_extractive_templates', source_profiles=['4.0', '5.0'],
                     reference_notebook='nbs/06.test.rag.object.question_with_category.ipynb',
                     question_language='zh', unique_questions=True, seed='sha256-v1',

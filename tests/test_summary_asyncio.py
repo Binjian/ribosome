@@ -14,7 +14,7 @@ import pytest
 
 from ribosome.core.dom import model as dom_model
 from ribosome.core.dom.summary import natural_text as dom_summary
-from utils import summary_asyncio as app
+from utils.summary import summary_asyncio as app
 
 
 class Progress:
@@ -335,7 +335,7 @@ def test_metrics_release_inflight_counts_on_cancellation(monkeypatch):
 
 
 def test_benchmark_samples_and_outputs_are_isolated(tmp_path):
-    from utils.benchmark_summary_asyncio import cached_samples
+    from utils.summary.benchmark_summary_asyncio import cached_samples
     source = tmp_path / 'document_ast.json'
     image = tmp_path / 'figure.png'
     image.write_bytes(b'fixture')
@@ -356,7 +356,7 @@ def test_benchmark_samples_and_outputs_are_isolated(tmp_path):
 
 
 def test_offline_benchmark_preserves_calls_and_temporary_outputs(tmp_path):
-    from utils.benchmark_summary_asyncio import benchmark
+    from utils.summary.benchmark_summary_asyncio import benchmark
     args = SimpleNamespace(live=False, host=None, model=None, input_dir=tmp_path,
                            output_dir=tmp_path / 'benchmark', mock_latency=0.001,
                            baseline_task_limit=8, task_limit=32, request_limit=8,
@@ -374,7 +374,7 @@ def test_offline_benchmark_preserves_calls_and_temporary_outputs(tmp_path):
 
 
 def test_benchmark_timeout_cleans_up_requests_and_saves_diagnostics(tmp_path):
-    from utils.benchmark_summary_asyncio import benchmark
+    from utils.summary.benchmark_summary_asyncio import benchmark
     args = SimpleNamespace(live=False, host=None, model=None, input_dir=tmp_path,
                            output_dir=tmp_path / 'timeout', mock_latency=1,
                            baseline_task_limit=8, task_limit=32, request_limit=8,
