@@ -19,6 +19,12 @@ from utils.krl import collect_krl_qa as collector
 from utils.krl.krl_collection_store import _saved_records
 
 
+@pytest.fixture(autouse=True)
+def isolate_concurrency_environment(monkeypatch):
+    # Keep protocol tests independent of the developer's local collection size.
+    monkeypatch.setenv("COLLECT_CONCURRENCY", "1")
+
+
 class Response:
     def __init__(self, data=None, *, status=200, url="https://www.kukacenter.com/chat",
                  text="", chunks=(), content_type="text/plain", content=b""):
@@ -682,6 +688,82 @@ def test_cli_passes_dotenv_credentials_to_login_without_logging_secrets(tmp_path
 def test_default_credentials_file_is_beside_collector():
     assert collector.ENV_FILE == Path(collector.__file__).resolve().with_name(".env")
     assert collector.ENV_FILE == collector.ROOT / "utils/krl/.env"
+
+
+def test_concurrency_uses_script_local_dotenv_from_another_directory(tmp_path, monkeypatch, capsys):
+    local_env = tmp_path / "checkout/utils/krl/.env"
+    local_env.parent.mkdir(parents=True)
+    local_env.write_text('COLLECT_CONCURRENCY="3"\nUNRELATED_KRL_SETTING=not-exported\n', encoding="utf-8")
+    (tmp_path / ".env").write_text("COLLECT_CONCURRENCY=9\n", encoding="utf-8")
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 工艺\n\n问题\n", encoding="utf-8")
+    output = tmp_path / "uncreated/qa.md"
+    monkeypatch.setattr(collector, "ENV_FILE", local_env)
+    monkeypatch.delenv("COLLECT_CONCURRENCY")
+    monkeypatch.delenv("UNRELATED_KRL_SETTING", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert collector.main([
+        "--questions", str(questions), "--output", str(output), "--dry-run",
+    ]) == 0
+    assert "Concurrency: 3" in capsys.readouterr().out
+    assert "COLLECT_CONCURRENCY" not in collector.os.environ
+    assert "UNRELATED_KRL_SETTING" not in collector.os.environ
+    assert not output.parent.exists()
+
+
+def test_concurrency_environment_and_cli_precedence(tmp_path, monkeypatch, capsys):
+    local_env = tmp_path / ".env"
+    local_env.write_text("COLLECT_CONCURRENCY=invalid-file-setting\n", encoding="utf-8")
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 工艺\n\n问题\n", encoding="utf-8")
+    arguments = ["--questions", str(questions), "--output", str(tmp_path / "qa.md"), "--dry-run"]
+    monkeypatch.setattr(collector, "ENV_FILE", local_env)
+    monkeypatch.setenv("COLLECT_CONCURRENCY", "4")
+    assert collector.main(arguments) == 0
+    assert "Concurrency: 4" in capsys.readouterr().out
+    monkeypatch.setenv("COLLECT_CONCURRENCY", "invalid-environment-setting")
+    assert collector.main([*arguments, "--concurrency", "2"]) == 0
+    assert "Concurrency: 2" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("contents", [None, "UNRELATED_KRL_SETTING=value\n"])
+def test_unset_concurrency_defaults_to_one(tmp_path, monkeypatch, contents):
+    local_env = tmp_path / ".env"
+    if contents is not None:
+        local_env.write_text(contents, encoding="utf-8")
+    monkeypatch.setattr(collector, "ENV_FILE", local_env)
+    monkeypatch.delenv("COLLECT_CONCURRENCY")
+    assert collector.load_concurrency() == 1
+
+
+@pytest.mark.parametrize("source", ["environment", "dotenv"])
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "", "private-invalid-value"])
+def test_invalid_concurrency_setting_is_rejected_without_echoing_value(tmp_path, monkeypatch, capsys, source, value):
+    local_env = tmp_path / ".env"
+    monkeypatch.setattr(collector, "ENV_FILE", local_env)
+    if source == "environment":
+        monkeypatch.setenv("COLLECT_CONCURRENCY", value)
+    else:
+        monkeypatch.delenv("COLLECT_CONCURRENCY")
+        local_env.write_text(f"COLLECT_CONCURRENCY='{value}'\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as error:
+        collector.main(["--dry-run"])
+    assert error.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "COLLECT_CONCURRENCY must be a positive integer" in stderr
+    assert "private-invalid-value" not in stderr
+
+
+def test_help_does_not_load_dotenv(monkeypatch):
+    def fail_load():
+        raise AssertionError("Help must not load local settings")
+
+    monkeypatch.setattr(collector, "_load_local_settings", fail_load)
+    monkeypatch.delenv("COLLECT_CONCURRENCY")
+    with pytest.raises(SystemExit) as error:
+        collector.main(["--help"])
+    assert error.value.code == 0
 
 
 @pytest.fixture

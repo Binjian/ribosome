@@ -3,8 +3,10 @@
 
 Run ``python utils/krl/collect_krl_qa.py --dry-run`` first. Live runs read the
 KUKACENTER_ACCOUT and KUKACENTER_PASSWORD values from utils/krl/.env beside this
-script. Existing environment values take precedence; --username overrides the
-account. Login also requires agreement consent and the site's image CAPTCHA.
+script. COLLECT_CONCURRENCY in that file sets the default concurrent questions
+(otherwise 1). Existing environment values take precedence; --username and
+--concurrency override their settings. Login also requires agreement consent
+and the site's image CAPTCHA.
 
 Uses the same signed login, KRL model, streaming, answer check, and saved-answer
 endpoints as the site's chat frontend. No CAPTCHA solving or browser dependency.
@@ -98,8 +100,8 @@ def http_failure(exc: Exception, context: str) -> CollectionError | None:
     return error_type(f"{context}: {reason}")
 
 
-def load_credentials(username=None):
-    """Read login settings without exporting unrelated .env values or logging secrets."""
+def _load_local_settings():
+    """Read the script-local .env without interpolation or environment exports."""
     try:
         from dotenv import dotenv_values
     except ImportError as exc:
@@ -107,7 +109,32 @@ def load_credentials(username=None):
             "Install python-dotenv: python -m pip install python-dotenv"
         ) from exc
     # Credentials can contain literal ${...}; do not interpolate password text.
-    settings = dotenv_values(ENV_FILE, interpolate=False)
+    return dotenv_values(ENV_FILE, interpolate=False)
+
+
+def load_concurrency() -> int:
+    """Resolve the default from the process environment, local .env, then 1."""
+    if "COLLECT_CONCURRENCY" in os.environ:
+        value = os.environ["COLLECT_CONCURRENCY"]
+    else:
+        value = (
+            _load_local_settings().get("COLLECT_CONCURRENCY")
+            if ENV_FILE.is_file() else None
+        )
+    if value is None:
+        return 1
+    try:
+        concurrency = int(value)
+    except (TypeError, ValueError):
+        raise CollectionError("COLLECT_CONCURRENCY must be a positive integer") from None
+    if concurrency < 1:
+        raise CollectionError("COLLECT_CONCURRENCY must be a positive integer")
+    return concurrency
+
+
+def load_credentials(username=None):
+    """Read login settings without exporting unrelated .env values or logging secrets."""
+    settings = _load_local_settings()
     account = (
         username
         or os.environ.get("KUKACENTER_ACCOUT")
@@ -635,8 +662,8 @@ def build_parser():
         "--max-questions", type=int, help="Limit newly collected answers for this run"
     )
     parser.add_argument(
-        "--concurrency", type=int, default=1,
-        help="Maximum simultaneous questions; 1 keeps sequential collection (default: 1)",
+        "--concurrency", type=int,
+        help="Maximum simultaneous questions; overrides COLLECT_CONCURRENCY from the environment or utils/krl/.env (fallback: 1)",
     )
     parser.add_argument(
         "--delay",
@@ -680,6 +707,11 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.concurrency is None:
+        try:
+            args.concurrency = load_concurrency()
+        except (CollectionError, OSError) as exc:
+            parser.error(str(exc))
     if args.start < 1 or (args.end is not None and args.end < args.start):
         parser.error("--start must be positive and --end must be >= --start")
     if args.batch_size < 1 or (
@@ -720,7 +752,7 @@ def main(argv=None):
             print(f"Batch size: {args.batch_size}; output: {args.output}")
             print(f"Concurrency: {args.concurrency}")
             return 0
-        # Lazy import keeps --help and offline planning dependency-free.
+        # HTTP dependencies are unnecessary for --help and --dry-run.
         try:
             import requests
         except ImportError as exc:

@@ -16,9 +16,9 @@ pairs are reused across runs, and each output file holds up to 20 pairs.
 ## Requirements
 
 Run the commands below from the repository root, using the project Python
-environment. Live collection uses `requests` for HTTP and `python-dotenv` for
-credentials; `--help`, `--dry-run`, and the storage module use only the standard
-library.
+environment. Live collection uses `requests` for HTTP; reading settings from
+`utils/krl/.env` uses `python-dotenv`, including during `--dry-run`.
+`--help` and the storage module use only the standard library.
 
 ```sh
 uv pip install --python .venv/bin/python requests python-dotenv
@@ -61,6 +61,7 @@ regardless of the current working directory. Use these exact variable names
 ```dotenv
 KUKACENTER_ACCOUT=your-account
 KUKACENTER_PASSWORD='your-password'
+COLLECT_CONCURRENCY=2
 ```
 
 Existing process environment variables override `utils/krl/.env`; `--username`
@@ -116,9 +117,14 @@ Start with two concurrent questions and a small run:
 .venv/bin/python utils/krl/collect_krl_qa.py --concurrency 2 --max-questions 4
 ```
 
-The default `--concurrency 1` retains sequential collection. With a higher
-value, `--delay` is the minimum global spacing between dispatches of new
-questions, allowing their streamed answers to overlap. Stage retries keep their
+Concurrency defaults to `COLLECT_CONCURRENCY` from the process environment, then
+`utils/krl/.env`, then 1 when unset. For example, `COLLECT_CONCURRENCY=2` in that
+file enables two workers without a command-line option. `--concurrency` overrides
+both sources, including invalid defaults; `--concurrency 1` selects sequential
+collection. Configured values must be positive integers.
+
+With concurrency greater than 1, `--delay` is the minimum global spacing between
+dispatches of new questions, allowing their streamed answers to overlap. Stage retries keep their
 existing backoff and are not subject to this spacing.
 
 Answers are stored in question-list order, regardless of which request finishes
@@ -194,7 +200,7 @@ the process exits or crashes.
 | `--start` / `--end` | 19 / last source ID | Inclusive sample range. |
 | `--batch-size` | 20 | Maximum pairs per file. |
 | `--max-questions` | All pending in the range | Limit newly collected pairs this run. |
-| `--concurrency` | 1 | Maximum simultaneous questions; 1 keeps sequential collection. |
+| `--concurrency` | `COLLECT_CONCURRENCY` from the environment / `utils/krl/.env`, or 1 | Maximum simultaneous questions; overrides configured defaults. |
 | `--delay` | 2 seconds | Sequential pause; with concurrency > 1, global spacing between new-question dispatches. |
 | `--request-timeout` | 180 seconds | Non-streaming HTTP read idle timeout; connection timeout is 20 seconds. |
 | `--answer-timeout` | 900 seconds | Streaming read idle timeout and answer-duration limit checked as chunks arrive. |
@@ -264,8 +270,9 @@ submit chatbot questions.
 
 The implemented design follows these decisions:
 
-1. Add a positive `--concurrency` option, defaulting to 1, and show it in dry-run
-   output. Keep the synchronous path for sequential runs and add no dependencies.
+1. Add a positive `--concurrency` option, defaulting to `COLLECT_CONCURRENCY` from
+   the environment / `utils/krl/.env`, then 1, and show it in dry-run output.
+   Keep the synchronous path for sequential runs and add no dependencies.
 2. Authenticate once, then allocate at most `min(concurrency, pending_count)`
    independent worker sessions with copied headers and complete cookie jars.
    Run whole `KukaClient.ask()` calls with `asyncio.to_thread()`, retaining the
