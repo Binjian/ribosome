@@ -259,7 +259,7 @@ def test_dry_run_has_no_network_dependency_or_file_writes(tmp_path, monkeypatch,
     original_import = builtins.__import__
 
     def no_requests(name, *args, **kwargs):
-        assert name != "requests", "Dry run must not load the network client"
+        assert name not in ("requests", "dotenv"), "Dry run must not load live dependencies"
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", no_requests)
@@ -275,6 +275,7 @@ def test_cli_stops_on_second_question_failure_and_resumes_completed_pair(tmp_pat
     output = tmp_path / "qa.md"
     session = Session([])
     monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=lambda: session))
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
     monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
     calls = []
 
@@ -306,6 +307,7 @@ def test_cli_response_read_connection_error_never_logs_signed_url(tmp_path, monk
         connection_error("read failed for /api/login?signature=private-token; password=private-password"),
     ])
     monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=lambda: session))
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
     monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
     assert collector.main(["--questions", str(questions), "--output", str(output)]) == 1
     assert not output.exists()
@@ -313,3 +315,81 @@ def test_cli_response_read_connection_error_never_logs_signed_url(tmp_path, monk
     assert "private-token" not in caplog.text
     assert "private-password" not in caplog.text
     assert len(session.calls) == 2
+
+
+def test_credentials_use_local_dotenv_from_another_directory(tmp_path, monkeypatch):
+    root = tmp_path / "checkout"
+    local_env = root / "utils/krl/.env"
+    local_env.parent.mkdir(parents=True)
+    local_env.write_text(
+        'KUKACENTER_ACCOUT="file-account"\n'
+        'KUKACENTER_PASSWORD=\'literal ${NOT_EXPANDED} #@password\'\n'
+        'UNRELATED_KRL_TEST_VARIABLE="not-exported"\n', encoding="utf-8",
+    )
+    (root / ".env").write_text(
+        "KUKACENTER_ACCOUT=root-account\nKUKACENTER_PASSWORD=root-password\n", encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "KUKACENTER_ACCOUT=cwd-account\nKUKACENTER_PASSWORD=cwd-password\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(collector, "ROOT", root)
+    monkeypatch.setattr(collector, "ENV_FILE", local_env)
+    monkeypatch.delenv("KUKACENTER_ACCOUT", raising=False)
+    monkeypatch.delenv("KUKACENTER_PASSWORD", raising=False)
+    monkeypatch.delenv("UNRELATED_KRL_TEST_VARIABLE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert collector.load_credentials() == (
+        "file-account", "literal ${NOT_EXPANDED} #@password",
+    )
+    assert "KUKACENTER_PASSWORD" not in collector.os.environ
+    assert "UNRELATED_KRL_TEST_VARIABLE" not in collector.os.environ
+
+
+def test_credential_overrides_and_missing_dotenv_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(collector, "ROOT", tmp_path)
+    local_env = tmp_path / "utils/krl/.env"
+    local_env.parent.mkdir(parents=True)
+    monkeypatch.setattr(collector, "ENV_FILE", local_env)
+    (tmp_path / ".env").write_text(
+        "KUKACENTER_ACCOUT=root-account\nKUKACENTER_PASSWORD=root-password\n", encoding="utf-8",
+    )
+    monkeypatch.delenv("KUKACENTER_ACCOUT", raising=False)
+    monkeypatch.delenv("KUKACENTER_PASSWORD", raising=False)
+    assert collector.load_credentials() == ("13918961550", None)
+    local_env.write_text(
+        "KUKACENTER_ACCOUT=file-account\nKUKACENTER_PASSWORD=file-password\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KUKACENTER_ACCOUT", "environment-account")
+    monkeypatch.setenv("KUKACENTER_PASSWORD", "environment-password")
+    assert collector.load_credentials() == ("environment-account", "environment-password")
+    assert collector.load_credentials("cli-account") == ("cli-account", "environment-password")
+
+
+def test_cli_passes_dotenv_credentials_to_login_without_logging_secrets(tmp_path, monkeypatch, caplog, capsys):
+    monkeypatch.setattr(collector, "ROOT", tmp_path)
+    local_env = tmp_path / "utils/krl/.env"
+    local_env.parent.mkdir(parents=True)
+    monkeypatch.setattr(collector, "ENV_FILE", local_env)
+    monkeypatch.delenv("KUKACENTER_ACCOUT", raising=False)
+    monkeypatch.delenv("KUKACENTER_PASSWORD", raising=False)
+    local_env.write_text(
+        "KUKACENTER_ACCOUT=file-account\nKUKACENTER_PASSWORD=file-password\n",
+        encoding="utf-8",
+    )
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 真空搬运\n\n完整问题\n", encoding="utf-8")
+    session = Session([])
+    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(Session=lambda: session))
+    logins = []
+    monkeypatch.setattr(collector.KukaClient, "login",
+                        lambda client, username, password, **kwargs: logins.append((username, password)))
+    monkeypatch.setattr(collector.KukaClient, "ask", lambda *args: (ANSWER, {"mode": "KRL编程"}))
+    assert collector.main(["--questions", str(questions), "--output", str(tmp_path / "qa.md")]) == 0
+    assert logins == [("file-account", "file-password")]
+    assert "file-password" not in caplog.text + capsys.readouterr().out
+
+
+def test_default_credentials_file_is_beside_collector():
+    assert collector.ENV_FILE == Path(collector.__file__).resolve().with_name(".env")
+    assert collector.ENV_FILE == collector.ROOT / "utils/krl/.env"

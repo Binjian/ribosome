@@ -16,16 +16,18 @@ pairs are reused across runs, and each output file holds up to 20 pairs.
 ## Requirements
 
 Run the commands below from the repository root, using the project Python
-environment. The collector's live HTTP dependency is `requests`; `--help`,
-`--dry-run`, and the storage module use only the standard library.
+environment. Live collection uses `requests` for HTTP and `python-dotenv` for
+credentials; `--help`, `--dry-run`, and the storage module use only the standard
+library.
 
 ```sh
-uv pip install --python .venv/bin/python requests
+uv pip install --python .venv/bin/python requests python-dotenv
 .venv/bin/python utils/krl/collect_krl_qa.py --help
 ```
 
-In an environment with pip installed, `python -m pip install requests` is an
-alternative; use that environment's Python for the collector too.
+In an environment with pip installed,
+`python -m pip install requests python-dotenv` is an alternative; use that
+environment's Python for the collector too.
 Live collection requires a KUKA Center account, connectivity to its login/chat
 services, and a person to enter the site's image CAPTCHA.
 
@@ -52,17 +54,29 @@ no login or chatbot requests and creates no output directories or lock files.
 .venv/bin/python utils/krl/collect_krl_qa.py --max-questions 1
 ```
 
-The default username is `13918961550`; use `--username` or `KUKA_USERNAME` for
-another account. The login flow asks you to accept the site's linked policies,
-enter the password at a hidden prompt, and read the four-character CAPTCHA from
-the temporary image path printed in the terminal. Keep the command waiting
-while you open that image and enter its code. The image is removed after the
-login attempt.
+Live runs read credentials from `utils/krl/.env`, beside `collect_krl_qa.py`,
+regardless of the current working directory. Use these exact variable names
+(`ACCOUT` is the expected spelling):
 
-`KUKA_PASSWORD` can supply the password from the environment. The script has no
-password command-line option and keeps passwords and authentication cookies in
-memory. `--accept-login-terms` explicitly accepts the site's policies without
-the consent prompt; it does not automate CAPTCHA entry.
+```dotenv
+KUKACENTER_ACCOUT=your-account
+KUKACENTER_PASSWORD='your-password'
+```
+
+Existing process environment variables override `utils/krl/.env`; `--username`
+overrides the account from either source. If no account is configured, the existing
+`13918961550` default is used. If the password is absent, the collector asks for
+it at a hidden prompt. Credential values are read literally without `${...}`
+interpolation, and unrelated `.env` values are not exported into the process.
+
+The login flow also asks you to accept the site's linked policies and read the
+four-character CAPTCHA from the temporary image path printed in the terminal.
+Keep the command waiting while you open that image and enter its code. The
+image is removed after the login attempt.
+
+The script has no password command-line option and keeps loaded passwords and
+authentication cookies in memory. `--accept-login-terms` explicitly accepts the
+site's policies without the consent prompt; it does not automate CAPTCHA entry.
 
 Each question gets its own conversation with the KRL model. The collector waits
 for the complete UTF-8 stream, applies the site's answer check, and compares the
@@ -118,7 +132,7 @@ the process exits or crashes.
 | --- | --- | --- |
 | `--questions` | `assets/KRL/krl_questions_1000.md` | Source question file. |
 | `--output` | `assets/KRL/krl_qa_collected.md` | First file in the output series. |
-| `--username` | `KUKA_USERNAME` or built-in account | Login account. |
+| `--username` | `KUKACENTER_ACCOUT` from the environment / `utils/krl/.env`, or built-in account | Override the login account. |
 | `--start` / `--end` | 19 / last source ID | Inclusive sample range. |
 | `--batch-size` | 20 | Maximum pairs per file. |
 | `--max-questions` | All pending in the range | Limit newly collected pairs this run. |

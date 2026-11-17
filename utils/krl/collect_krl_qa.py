@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Collect original KUKA Center KRL answers into resumable Markdown batches.
 
-Run ``python utils/krl/collect_krl_qa.py --dry-run`` first. A normal run prompts for
-the password, login agreement consent, and the site's image CAPTCHA. Set
-KUKA_PASSWORD to supply the password without putting it in source or argv.
+Run ``python utils/krl/collect_krl_qa.py --dry-run`` first. Live runs read the
+KUKACENTER_ACCOUT and KUKACENTER_PASSWORD values from utils/krl/.env beside this
+script. Existing environment values take precedence; --username overrides the
+account. Login also requires agreement consent and the site's image CAPTCHA.
 
 Uses the same signed login, KRL model, streaming, answer check, and saved-answer
 endpoints as the site's chat frontend. No CAPTCHA solving or browser dependency.
@@ -34,6 +35,7 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE = Path(__file__).resolve().with_name(".env")
 MAIN_URL = "https://www.kukacenter.com"
 CHAT_URL = "https://chat.kukacenter.com"
 MODEL = "krl_question_robot"  # The frontend's KRL编程 tab.
@@ -48,6 +50,28 @@ LOG = logging.getLogger("collect_krl_qa")
 
 class CollectionError(RuntimeError):
     """A failure for which the current answer must not be published."""
+
+
+def load_credentials(username=None):
+    """Read login settings without exporting unrelated .env values or logging secrets."""
+    try:
+        from dotenv import dotenv_values
+    except ImportError as exc:
+        raise CollectionError(
+            "Install python-dotenv: python -m pip install python-dotenv"
+        ) from exc
+    # Credentials can contain literal ${...}; do not interpolate password text.
+    settings = dotenv_values(ENV_FILE, interpolate=False)
+    account = (
+        username
+        or os.environ.get("KUKACENTER_ACCOUT")
+        or settings.get("KUKACENTER_ACCOUT")
+        or "13918961550"
+    )
+    password = os.environ.get(
+        "KUKACENTER_PASSWORD", settings.get("KUKACENTER_PASSWORD")
+    )
+    return account, password
 
 
 class LoginForm(HTMLParser):
@@ -365,7 +389,8 @@ def build_parser():
         "--output", type=Path, default=ROOT / "assets/KRL/krl_qa_collected.md"
     )
     parser.add_argument(
-        "--username", default=os.environ.get("KUKA_USERNAME", "13918961550")
+        "--username",
+        help="Override KUKACENTER_ACCOUT from the environment or utils/krl/.env",
     )
     parser.add_argument(
         "--start", type=int, default=19, help="First sample ID, inclusive (default: 19)"
@@ -463,6 +488,7 @@ def main(argv=None):
                 len(pending),
                 pending[0].id,
             )
+            username, password = load_credentials(args.username)
             with requests.Session() as session:
                 session.headers.update(
                     {
@@ -472,8 +498,8 @@ def main(argv=None):
                 )
                 client = KukaClient(session, args.request_timeout, args.answer_timeout)
                 client.login(
-                    args.username,
-                    os.environ.get("KUKA_PASSWORD"),
+                    username,
+                    password,
                     accept_terms=args.accept_login_terms,
                 )
                 for index, question in enumerate(pending):

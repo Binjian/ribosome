@@ -40,8 +40,8 @@ uv run ribosome-prepare --profile standalone
 The project requires Python 3.12 or newer. The standalone OCR host installer has
 its own Python and system requirements described in the deployment guide.
 Some smaller tools use only the standard library; the KRL collector needs
-`requests` for live collection, and notebook output filtering needs the
-`nbstripout` executable. Each group lists its own requirements.
+`requests` and `python-dotenv` for live collection, and notebook output filtering
+needs the `nbstripout` executable. Each group lists its own requirements.
 
 Preparation exports code without executing notebook workflows or rebuilding
 corpora. Use `--profile llm-backend` for the narrower backend export set; see
@@ -53,7 +53,8 @@ installed `ribosome` distribution.
 Commands that use `assets/`, `db/`, local indexes, `.env`, or model services need
 those resources in your checkout. They are not created merely by importing a
 utility or exporting notebook code. Check the relevant tutorial before starting
-a workflow.
+a workflow. KRL login settings belong in `utils/krl/.env`; other workflows use
+the configuration locations described in their group guides.
 
 ## Run tools and import helpers
 
