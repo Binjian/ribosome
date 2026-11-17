@@ -19,6 +19,7 @@ import asyncio
 import codecs
 import getpass
 import hashlib
+import json
 import logging
 import math
 import os
@@ -281,7 +282,7 @@ def read_stream(response, timeout: float) -> str:
 class KukaClient:
     def __init__(
         self, session, request_timeout=180.0, answer_timeout=900.0,
-        retries=3, retry_delay=5.0, *, profile=KRL_PROFILE,
+        retries=3, retry_delay=5.0, *, profile=KRL_PROFILE, diagnostics_dir=None,
     ):
         self.session = session
         self.request_timeout = request_timeout
@@ -289,6 +290,8 @@ class KukaClient:
         self.retries = retries
         self.retry_delay = retry_delay
         self.profile = profile
+        self.diagnostics_dir = Path(diagnostics_dir) if diagnostics_dir is not None else None
+        self._diagnosed_generations = set()
 
     def retry(self, operation, action):
         """Bound transport/persistence retries with a sanitized reason and backoff."""
@@ -524,6 +527,50 @@ class KukaClient:
             streamed = read_stream(response, self.answer_timeout)
         return streamed, identifiers
 
+    def _write_mismatch_diagnostic(self, question, streamed, saved, identifiers, first_difference):
+        """Keep one private response snapshot per generation, outside completed output."""
+        generation = identifiers["uuid"]
+        if self.diagnostics_dir is None or generation in self._diagnosed_generations:
+            return
+        self._diagnosed_generations.add(generation)
+        temporary = None
+        try:
+            self.diagnostics_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            diagnostic = {
+                "schema_version": 1,
+                "state": "unverified",
+                "question_id": question.id,
+                "stream_chars": len(streamed),
+                "saved_chars": len(saved),
+                "first_difference": first_difference,
+                "streamed_answer": streamed,
+                "saved_answer": saved,
+            }
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".question-{question.id:04d}-", suffix=".tmp",
+                dir=self.diagnostics_dir,
+            )
+            temporary = Path(temporary_name)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(diagnostic, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            target = self.diagnostics_dir / f"question-{question.id:04d}-{uuid.uuid4().hex}.json"
+            os.replace(temporary, target)
+            LOG.warning("Unverified response diagnostic saved -> %s", target)
+        except OSError as exc:
+            LOG.warning(
+                "Could not save verification diagnostics (%s); retaining the original mismatch",
+                type(exc).__name__,
+            )
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
     def _fetch_verified_answer(self, question, streamed, identifiers):
         """Refetch uncertain persistence without repeating generation or moderation."""
         saved = self.api(
@@ -555,6 +602,7 @@ class KukaClient:
                  if left != right),
                 min(len(expected), len(actual)),
             )
+            self._write_mismatch_diagnostic(question, streamed, answer, identifiers, first_difference)
             # Counts explain persistent mismatches without logging answers,
             # prompts, credentials, or arbitrary server response text.
             raise AnswerMismatchError(
@@ -778,6 +826,7 @@ def _collect_with_workers(client, pending, store, concurrency, delay):
                 session, client.request_timeout, client.answer_timeout,
                 retries=client.retries, retry_delay=client.retry_delay,
                 profile=client.profile,
+                diagnostics_dir=client.diagnostics_dir,
             ))
         asyncio.run(_collect_concurrently(clients, pending, store, delay))
 
@@ -795,6 +844,15 @@ def build_parser(*, profile=KRL_PROFILE):
     )
     parser.add_argument(
         "--output", type=Path, default=profile.output
+    )
+    diagnostics = parser.add_mutually_exclusive_group()
+    diagnostics.add_argument(
+        "--diagnostics-dir", type=Path,
+        help="Private unverified-response snapshots (default: .<output stem>.diagnostics beside output)",
+    )
+    diagnostics.add_argument(
+        "--no-diagnostics", action="store_true",
+        help="Disable local capture of mismatching response texts",
     )
     parser.add_argument(
         "--username",
@@ -968,6 +1026,10 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
                     session, args.request_timeout, args.answer_timeout,
                     retries=args.retries, retry_delay=args.retry_delay,
                     profile=profile,
+                    diagnostics_dir=(
+                        None if args.no_diagnostics else args.diagnostics_dir
+                        or args.output.with_name(f".{args.output.stem}.diagnostics")
+                    ),
                 )
                 client.login(
                     username,
@@ -988,7 +1050,17 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
                             question.title,
                             profile.mode,
                         )
-                        answer, metadata = client.ask(question)
+                        try:
+                            answer, metadata = client.ask(question)
+                        except UnverifiedAnswerError:
+                            if client.retries == 0:
+                                raise
+                            LOG.warning(
+                                "Retrying %04d once in a fresh conversation after failed verification "
+                                "(concurrency 1)", question.id,
+                            )
+                            time.sleep(min(client.retry_delay, 60.0))
+                            answer, metadata = client.ask(question)
                         _save_answer(store, question, answer, metadata)
                         if index + 1 < len(pending):
                             time.sleep(args.delay)

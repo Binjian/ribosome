@@ -202,11 +202,13 @@ fetch retry only that step, retaining the original stream and identifiers.
 Missing, empty, or mismatching persisted answers also retry the fetch, allowing
 a delayed server save to catch up. HTTP failures and verification mismatches
 share the same fetch retry budget; neither generation nor the answer check is
-repeated during those fetch retries. If a concurrent run exhausts the fetch
-budget with a mismatch, it pauses new questions and drains active calls, saving
-their verified answers. It then retries each unverified question once in a fresh
-conversation and continues with one worker for the rest of the run. This gives
-an unusable generation a chance to recover without overlapping new requests.
+repeated during those fetch retries. If verification exhausts that budget with
+a mismatch, both sequential and concurrent CLI runs retry the unverified
+question once in a fresh conversation. Concurrent runs first pause new questions
+and drain active calls, saving their verified answers, then continue with one
+worker for the rest of the run. Sequential runs retry before moving to the next
+question. This gives an unusable generation a chance to recover without
+overlapping new requests.
 The replacement answer must still pass the full check and exact stream/saved
 comparison. A second exhausted mismatch for the same question stops collection;
 other terminal errors retain their existing stop-and-drain behavior.
@@ -215,6 +217,20 @@ other terminal errors retain their existing stop-and-drain behavior.
 A persistent mismatch always prevents publication of that answer. Its log includes
 the stream/saved character counts and the first differing offset after newline
 normalization (starting at zero), without printing answer text.
+
+On the first mismatch in each generation, the CLI also saves a private diagnostic
+JSON file beside the output in `.<output-stem>.diagnostics/`. For KQA, the default
+directory is `assets/KQA/.kqa_qa_collected.diagnostics/`. Each file contains the
+raw `streamed_answer` and `saved_answer`, and is written with permissions `0600`.
+The writer does not add credentials, cookies, request headers, or session request
+payloads. These files remain separate from collected answers and never mark a
+question complete. Use `--diagnostics-dir PATH` to choose another directory, or
+`--no-diagnostics` to disable response capture.
+
+For repeated short responses, inspect those two diagnostic fields before
+assigning a server-side cause. Counts such as 35 and 28 characters do not establish
+a concurrency limit, an authentication problem, or harmless formatting changes.
+The replacement answer still has to pass verification.
 
 Use `--retries 0` to disable retries, or adjust `--retries` and `--retry-delay`.
 Authentication/API rejections and malformed response types stop immediately.
@@ -342,6 +358,8 @@ the process exits or crashes.
 | `--answer-timeout` | 900 seconds | Streaming read idle timeout and answer-duration limit checked as chunks arrive. |
 | `--retries` | 3 | Additional attempts per collection step after transient HTTP failures or missing/mismatching persisted answers; 0 disables retries. |
 | `--retry-delay` | 5 seconds | Initial retry delay, doubling up to 60 seconds. |
+| `--diagnostics-dir` | `.<output-stem>.diagnostics/` beside the output file | Directory for private JSON files containing unverified stream/saved responses. |
+| `--no-diagnostics` | Off | Disable unverified-response diagnostic files. |
 | `--accept-login-terms` | Off | Explicitly accept the site's login policies. |
 | `--dry-run` | Off | Validate files and report pending work without network access. |
 | `--repair-headings` | Off | Repair saved answer headings offline and exit without login or new questions. |
@@ -386,7 +404,7 @@ idempotent; a different answer for an existing sample is rejected.
 | `ConnectionError`, read timeout, or interrupted stream | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun; completed pairs remain saved. Increase `--answer-timeout` if generation needs longer silent intervals. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
 | `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. The log shows the safe numeric API code immediately, while other active calls finish. The code alone may require service support to distinguish account quotas, concurrency limits, and other rejections; the collector does not log server messages or response bodies. |
-| Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Concurrent runs then drain active calls and retry the unverified question once in a fresh conversation, continuing with one worker. A repeated failure stops without publishing the uncertain answer. `--retries 0` disables recovery. Counts and the differing offset help diagnose it; response lengths alone do not establish the server-side cause. |
+| Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Both sequential and concurrent CLI runs then retry the unverified question once in a fresh conversation; concurrent runs first drain active calls and continue with one worker. A repeated failure stops without publishing the uncertain answer. `--retries 0` disables recovery. Inspect `streamed_answer` and `saved_answer` in the private diagnostic JSON for the actual responses; response lengths alone do not establish the server-side cause. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |
 

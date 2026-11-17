@@ -3,12 +3,15 @@
 import asyncio
 import builtins
 import hashlib
+import json
+import os
 import subprocess
 import sys
 import textwrap
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -663,6 +666,9 @@ def test_cli_saved_answer_mismatch_preserves_output_and_resumes_missing_question
     previous = output.read_bytes()
     failed = answer_session(saved="incomplete saved answer", session_id="failed-session")
     failed.responses.append(api({"answerContent": "still incomplete"}))
+    repeated = answer_session(saved="still incomplete", session_id="second-failed-session")
+    repeated.responses.append(api({"answerContent": "still incomplete"}))
+    failed.responses.extend(repeated.responses)
     monkeypatch.setattr(requests, "Session", lambda: failed)
     monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
     monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
@@ -671,7 +677,7 @@ def test_cli_saved_answer_mismatch_preserves_output_and_resumes_missing_question
     assert collector.main(arguments) == 1
     assert output.read_bytes() == previous
     assert collector.CollectionStore(output, parsed).completed_ids == {19}
-    assert len(failed.calls) == 5
+    assert len(failed.calls) == 10
     assert not failed.responses
     resumed = answer_session(session_id="resumed-session")
     monkeypatch.setattr(requests, "Session", lambda: resumed)
@@ -703,6 +709,190 @@ def test_cli_cancel_during_retry_backoff_preserves_completed_output(tmp_path, mo
     assert output.read_bytes() == previous
     assert len(session.calls) == 2
     assert failed.closed
+
+
+@pytest.mark.parametrize("outcome", ["success", "persistent", "disabled"])
+def test_sequential_cli_restarts_unverified_generation_once_and_preserves_records(
+    tmp_path, monkeypatch, outcome,
+):
+    source = tmp_path / "questions.md"
+    source.write_text(
+        "## 0019 已完成\n\n原有问题\n\n## 0020 待完成\n\n新问题\n\n"
+        "## 0021 后续问题\n\n后续问题正文\n", encoding="utf-8",
+    )
+    output = tmp_path / "qa.md"
+    questions = collector.parse_questions(source)
+    collector.CollectionStore(output, questions).save(
+        questions[0], ANSWER, {"session_id": "preserved-session"},
+    )
+    original, = _saved_records(output)
+    before = output.read_bytes()
+    streamed, saved = "Stream-notice-" + "x" * 21, "saved-notice-" + "y" * 15
+    assert (len(streamed), len(saved)) == (35, 28)
+    fetch_attempts = 1 if outcome == "disabled" else 4
+
+    def failed_generation(session_id):
+        result = answer_session(answer=streamed, saved=saved, session_id=session_id)
+        result.responses.extend(api({"answerContent": saved}) for _ in range(fetch_attempts - 1))
+        return list(result.responses)
+
+    responses = failed_generation("first-unverified-session")
+    if outcome == "success":
+        responses.extend(answer_session(session_id="verified-session").responses)
+        responses.extend(answer_session(session_id="next-question-session").responses)
+    elif outcome == "persistent":
+        responses.extend(failed_generation("second-unverified-session"))
+    session = Session(responses)
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+    arguments = [
+        "--questions", str(source), "--output", str(output), "--concurrency", "1",
+        "--delay", "0", "--retry-delay", "0",
+    ]
+    if outcome == "disabled":
+        arguments.extend(["--retries", "0"])
+    assert collector.main(arguments) == (0 if outcome == "success" else 1)
+    streams = [call[2]["json"] for call in session.calls if call[1].endswith("/api/efs/stream")]
+    assert len(streams) == {"success": 3, "persistent": 2, "disabled": 1}[outcome]
+    assert all(payload["question"] != questions[0].prompt for payload in streams)
+    if outcome != "disabled":
+        assert streams[0]["sessionId"] != streams[1]["sessionId"]
+        assert streams[0]["uuid"] != streams[1]["uuid"]
+        assert streams[0]["question"] == streams[1]["question"] == questions[1].prompt
+    records = _saved_records(output)
+    preserved = records[0]
+    assert (preserved.question, preserved.answer, preserved.metadata) == (
+        original.question, original.answer, original.metadata,
+    )
+    if outcome == "success":
+        assert [record.question.id for record in records] == [19, 20, 21]
+        assert all(record.answer == ANSWER for record in records)
+    else:
+        assert output.read_bytes() == before
+        assert collector.CollectionStore(output, questions).completed_ids == {19}
+        assert all(payload["question"] == questions[1].prompt for payload in streams)
+    assert streamed not in output.read_text(encoding="utf-8")
+    assert saved not in output.read_text(encoding="utf-8")
+    assert not session.responses
+
+
+def test_mismatch_diagnostic_captures_first_pair_privately_without_request_data(
+    tmp_path, caplog,
+):
+    directory = tmp_path / "private-diagnostics"
+    streamed, saved = "stream-secret-body", "saved-secret-body"
+    session = answer_session(answer=streamed, saved=saved)
+    session.headers = {"Authorization": "private-auth", "Cookie": "private-cookie"}
+    session.responses.extend(api({"answerContent": saved}) for _ in range(3))
+    client = collector.KukaClient(session, retry_delay=0, diagnostics_dir=directory)
+    with pytest.raises(collector.UnverifiedAnswerError):
+        client.ask(QUESTION)
+    path, = directory.glob("*.json")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["question_id"] == 19
+    assert payload["streamed_answer"] == streamed
+    assert payload["saved_answer"] == saved
+    assert payload["stream_chars"] == len(streamed)
+    assert payload["saved_chars"] == len(saved)
+    assert not {"question", "prompt", "sessionId", "requestId", "uuid", "headers", "cookies"} & payload.keys()
+    assert all(secret not in path.read_text(encoding="utf-8") for secret in (
+        QUESTION.prompt, "private-auth", "private-cookie",
+    ))
+    assert streamed not in caplog.text and saved not in caplog.text
+    assert not list(directory.glob("*.tmp"))
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert directory.stat().st_mode & 0o777 == 0o700
+
+
+def test_mismatch_diagnostic_failure_preserves_original_error_and_hides_exception(
+    tmp_path, monkeypatch, caplog,
+):
+    directory = tmp_path / "diagnostics-is-a-file"
+    directory.write_text("do not replace", encoding="utf-8")
+    session = answer_session(saved="different saved answer")
+    with pytest.raises(collector.UnverifiedAnswerError, match="Stream and saved answer differ"):
+        collector.KukaClient(session, retries=0, diagnostics_dir=directory).ask(QUESTION)
+    assert directory.read_text(encoding="utf-8") == "do not replace"
+    assert "diagnostic" in caplog.text.lower()
+
+
+def test_successful_answer_does_not_create_diagnostics_directory(tmp_path):
+    directory = tmp_path / "unneeded-diagnostics"
+    answer, _ = collector.KukaClient(answer_session(), diagnostics_dir=directory).ask(QUESTION)
+    assert answer == ANSWER
+    assert not directory.exists()
+
+
+def test_diagnostics_publish_complete_private_json_atomically_with_unique_names(
+    tmp_path, monkeypatch,
+):
+    directory = tmp_path / "diagnostics"
+    original_replace = collector.os.replace
+    publications = []
+
+    def replace(source, destination):
+        source, destination = Path(source), Path(destination)
+        assert not destination.exists()
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        assert payload["state"] == "unverified"
+        assert payload["streamed_answer"].startswith("stream-")
+        assert payload["saved_answer"].startswith("saved-")
+        if os.name != "nt":
+            assert source.stat().st_mode & 0o777 == 0o600
+        publications.append(destination)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(collector.os, "replace", replace)
+
+    def capture(number):
+        client = collector.KukaClient(object(), diagnostics_dir=directory)
+        identifiers = {"uuid": f"private-generation-{number}"}
+        client._write_mismatch_diagnostic(
+            QUESTION, f"stream-{number}", f"saved-{number}", identifiers, 1,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(capture, range(2)))
+    assert len(set(publications)) == 2
+    paths = list(directory.glob("*.json"))
+    assert set(paths) == set(publications)
+    assert {json.loads(path.read_text())["streamed_answer"] for path in paths} == {"stream-0", "stream-1"}
+    assert not list(directory.glob("*.tmp"))
+
+
+def test_diagnostic_publication_failure_cleans_temporary_file_and_hides_error_body(
+    tmp_path, monkeypatch, caplog,
+):
+    directory = tmp_path / "diagnostics"
+
+    def failed_replace(*args):
+        raise OSError("signed-url?signature=private-token; private-password")
+
+    monkeypatch.setattr(collector.os, "replace", failed_replace)
+    session = answer_session(saved="different saved answer")
+    with pytest.raises(collector.UnverifiedAnswerError, match="Stream and saved answer differ"):
+        collector.KukaClient(session, retries=0, diagnostics_dir=directory).ask(QUESTION)
+    assert not list(directory.iterdir())
+    assert "private-token" not in caplog.text
+    assert "private-password" not in caplog.text
+
+
+def test_cli_no_diagnostics_keeps_failure_bodies_out_of_files(tmp_path, monkeypatch):
+    source = tmp_path / "questions.md"
+    source.write_text("## 0019 问题\n\n待回答问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    session = answer_session(saved="private mismatching body")
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+    assert collector.main([
+        "--questions", str(source), "--output", str(output), "--concurrency", "1",
+        "--retries", "0", "--no-diagnostics",
+    ]) == 1
+    assert not output.exists()
+    assert not list(tmp_path.rglob("*.json"))
 
 
 def test_retry_delay_grows_exponentially_and_is_capped(monkeypatch):

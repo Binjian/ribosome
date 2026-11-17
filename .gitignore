@@ -201,6 +201,8 @@ cython_debug/
 !/ribosome/application/layout_rag.py
 /.python-version
 /log/
+# Private unverified chatbot response snapshots.
+.*.diagnostics/
 /ollama_logs.text
 /assets/*
 !/assets/KRLU/
