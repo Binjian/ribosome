@@ -22,6 +22,7 @@ import hashlib
 import logging
 import math
 import os
+import re
 import sys
 import tempfile
 import time
@@ -313,9 +314,12 @@ class KukaClient:
             "200",
             "ok",
         ):
-            # Do not echo server bodies, signed URLs, or credentials to logs.
+            # Only bounded numeric API codes are safe to echo. Never include
+            # arbitrary server messages, signed URLs, or response bodies.
+            code = str(data.get("code")) if isinstance(data, dict) else ""
+            safe_code = code if re.fullmatch(r"-?[0-9]{1,10}", code) else "unavailable"
             raise CollectionError(
-                f"{path}: API rejected request; stopping without saving"
+                f"{path}: API rejected request (code={safe_code}); stopping without saving"
             )
         return data.get("data")
 
@@ -526,6 +530,11 @@ def _ask_worker(client, question):
         return None, None, exc
 
 
+def _failure_reason(error):
+    """Collector errors are sanitized at origin; unknown exception text is not."""
+    return str(error) if isinstance(error, CollectionError) else type(error).__name__
+
+
 async def _collect_concurrently(clients, pending, store, delay):
     """Bound whole ask calls; only this coordinator publishes completed answers."""
     idle = deque(clients)
@@ -563,8 +572,8 @@ async def _collect_concurrently(clients, pending, store, delay):
                     if failure is None:
                         failure = error
                     LOG.error(
-                        "Question %04d failed; stopping new questions and draining %d active calls",
-                        question.id, len(active),
+                        "Question %04d failed: %s; stopping new questions and draining %d active calls",
+                        question.id, _failure_reason(error), len(active),
                     )
                 elif publishing:
                     try:
@@ -573,8 +582,8 @@ async def _collect_concurrently(clients, pending, store, delay):
                         publishing = False
                         failure = exc
                         LOG.error(
-                            "Output write failed; stopping publication and draining %d active calls",
-                            len(active),
+                            "Output write failed (%s); stopping publication and draining %d active calls",
+                            _failure_reason(exc), len(active),
                         )
 
             if failure is not None or interrupted:

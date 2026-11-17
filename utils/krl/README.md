@@ -248,6 +248,7 @@ idempotent; a different answer for an existing sample is rejected.
 | HTTP 463 at `/api-b/program_assistant/api/sign` | Update the collector and rerun. Main-site service requests need the frontend's `/api` proxy prefix: `/api/api-b/program_assistant/api/sign`. Completed pairs are reused. |
 | `ConnectionError`, read timeout, or interrupted stream | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun; completed pairs remain saved. Increase `--answer-timeout` if generation needs longer silent intervals. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
+| `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. The log shows the safe numeric API code immediately, while other active calls finish. The code alone may require service support to distinguish account quotas, concurrency limits, and other rejections; the collector does not log server messages or response bodies. |
 | Stream and persisted answer differ | Inspect the service response/interface before retrying; the uncertain pair was not published. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |

@@ -308,12 +308,14 @@ def test_moderation_refusal_does_not_export_rejected_raw_answer():
     assert len(session.calls) == 3
 
 
-@pytest.mark.parametrize("code", [401, "error", None])
+@pytest.mark.parametrize("code", [401, "-42", "error", None, "private-token", {"secret": "private-token"}])
 def test_json_error_codes_are_not_answers_or_logged_bodies(code):
     session = Session([Response({"code": code, "msg": "private-token"})])
     with pytest.raises(collector.CollectionError, match="API rejected") as error:
         collector.KukaClient(session).api("/api/session/saveOrUpdate", {})
     assert "private-token" not in str(error.value)
+    expected_code = str(code) if code in (401, "-42") else "unavailable"
+    assert f"code={expected_code}" in str(error.value)
 
 
 def test_http_failure_closes_response_and_hides_signed_url():
@@ -940,7 +942,7 @@ def test_global_delay_spaces_concurrent_starts_without_waiting_for_answers(concu
 
 
 @pytest.mark.parametrize("delay", ["0", "10"])
-def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_cli, monkeypatch, delay):
+def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_cli, monkeypatch, caplog, delay):
     state = concurrent_cli
     second_started = threading.Event()
     calls = []
@@ -954,6 +956,7 @@ def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_c
             raise collector.CollectionError("terminal failure")
         second_started.set()
         assert state.draining.wait(5)
+        assert "Question 0019 failed: terminal failure" in caplog.text
         assert not client.session.closed
         return ANSWER, {}
 
@@ -973,6 +976,29 @@ def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_c
     assert collector.main(state.arguments) == 0
     assert set(calls) == set(range(19, 25)) - completed
     assert [record.question.id for record in _saved_records(state.output)] == list(range(19, 25))
+
+
+def test_unknown_worker_exception_is_logged_immediately_without_sensitive_text(concurrent_cli, monkeypatch, caplog):
+    state = concurrent_cli
+    second_started = threading.Event()
+
+    def ask(client, question):
+        if question.id == 19:
+            assert second_started.wait(5)
+            raise requests.ConnectionError(
+                "https://example.test/api/login?signature=private-token; password=private-password"
+            )
+        second_started.set()
+        assert state.draining.wait(5)
+        assert "Question 0019 failed: ConnectionError" in caplog.text
+        assert "private-token" not in caplog.text
+        assert "private-password" not in caplog.text
+        return ANSWER, {}
+
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    assert collector.main(state.arguments) == 1
+    assert state.saved == [20]
+    assert "private-token" not in caplog.text and "private-password" not in caplog.text
 
 
 def test_live_run_repairs_previous_completion_order_before_login(concurrent_cli):
