@@ -4985,6 +4985,7 @@ dependencies = [
     { name = "pypandoc" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "tqdm" },
 ]
 
@@ -5050,6 +5051,7 @@ requires-dist = [
     { name = "pysymbol-llm", marker = "extra == 'dev'" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "python-dotenv" },
+    { name = "requests", specifier = ">=2.34.0" },
     { name = "sphinx", marker = "extra == 'dev'" },
     { name = "svg-py", marker = "extra == 'dev'" },
     { name = "tqdm" },
