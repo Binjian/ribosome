@@ -339,7 +339,7 @@ def test_saved_answer_mismatch_exhausts_default_fetch_budget_with_safe_diagnosti
     saved = "saved-secret-contents"
     session = answer_session(answer=streamed, saved=saved)
     session.responses.extend(api({"answerContent": saved}) for _ in range(3))
-    with pytest.raises(collector.CollectionError, match="Stream and saved answer differ") as error:
+    with pytest.raises(collector.UnverifiedAnswerError, match="Stream and saved answer differ") as error:
         collector.KukaClient(session, retry_delay=0).ask(QUESTION)
     assert len(session.calls) == 7
     assert all(call == session.calls[3] for call in session.calls[3:])
@@ -1089,6 +1089,162 @@ def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_c
     assert collector.main(state.arguments) == 0
     assert set(calls) == set(range(19, 25)) - completed
     assert [record.question.id for record in _saved_records(state.output)] == list(range(19, 25))
+
+
+@pytest.mark.parametrize("recovery", ["success", "repeat-mismatch", "disabled"])
+def test_unverified_answer_drains_before_bounded_serial_recovery(
+    concurrent_cli, monkeypatch, recovery,
+):
+    state = concurrent_cli
+    started = {number: threading.Event() for number in (19, 21)}
+    draining = threading.Event()
+    calls = []
+
+    # Recovery can use either log level; synchronize on the drain transition,
+    # not scheduling delays or the exact diagnostic text.
+    for level in ("warning", "error"):
+        original = getattr(collector.LOG, level)
+
+        def log(message, *args, original=original, **kwargs):
+            original(message, *args, **kwargs)
+            if "draining" in message:
+                draining.set()
+
+        monkeypatch.setattr(collector.LOG, level, log)
+
+    def ask(client, question):
+        assert not client.session.closed
+        calls.append(question.id)
+        if question.id in started:
+            started[question.id].set()
+            assert draining.wait(5), "Active answers must drain before recovery"
+            assert set(calls) == {19, 20, 21}, "New questions started while draining"
+            return ANSWER, {}
+        if question.id == 20:
+            if calls.count(20) == 1:
+                assert all(event.wait(5) for event in started.values())
+                raise collector.UnverifiedAnswerError("Stream and saved answer differ")
+            assert state.saved_events[19].is_set() and state.saved_events[21].is_set()
+            assert calls.count(20) == 2, "Recovery must be bounded to one fresh conversation"
+            assert set(calls) == {19, 20, 21}, "Pending questions preceded recovery"
+            if recovery == "repeat-mismatch":
+                raise collector.UnverifiedAnswerError("Stream and saved answer differ")
+            return ANSWER, {}
+        # Once the failed question recovers, keep the remaining work serial.
+        assert state.saved_events[question.id - 1].is_set()
+        return ANSWER, {}
+
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    arguments = [*state.arguments, "--concurrency", "3", "--retry-delay", "0"]
+    if recovery == "disabled":
+        arguments.extend(["--retries", "0"])
+    assert collector.main(arguments) == (0 if recovery == "success" else 1)
+    assert all(session.closed for session in state.sessions)
+    completed = collector.CollectionStore(state.output, state.questions).completed_ids
+    if recovery == "success":
+        assert calls[3:] == [20, 22, 23, 24]
+        assert completed == set(range(19, 25))
+        assert state.saved.index(21) < state.saved.index(20)
+    else:
+        assert calls.count(20) == (1 if recovery == "disabled" else 2)
+        assert set(calls) == {19, 20, 21}
+        assert completed == {19, 21}
+        before = {
+            record.question.id: (record.question, record.answer, record.metadata)
+            for record in _saved_records(state.output)
+        }
+        calls.clear()
+
+        def resumed_ask(client, question):
+            calls.append(question.id)
+            return ANSWER, {}
+
+        monkeypatch.setattr(collector.KukaClient, "ask", resumed_ask)
+        assert collector.main(arguments) == 0
+        assert set(calls) == {20, 22, 23, 24}
+        after = {
+            record.question.id: (record.question, record.answer, record.metadata)
+            for record in _saved_records(state.output)
+        }
+        assert all(after[number] == saved for number, saved in before.items())
+    assert [record.question.id for record in _saved_records(state.output)] == list(range(19, 25))
+
+
+@pytest.mark.parametrize("failure", ["terminal", "output-write"])
+def test_terminal_failure_during_recovery_drain_discards_queued_retry(
+    concurrent_cli, monkeypatch, failure,
+):
+    state = concurrent_cli
+    state.original_save(
+        collector.CollectionStore(state.output, state.questions), state.questions[0],
+        ANSWER, {"session_id": "already-complete"},
+    )
+    before = state.output.read_bytes()
+    original_record, = _saved_records(state.output)
+    started = {number: threading.Event() for number in (21, 22)}
+    recovery_draining = threading.Event()
+    terminal_seen = threading.Event()
+    calls = []
+    save_attempts = []
+
+    original_warning = collector.LOG.warning
+    original_error = collector.LOG.error
+
+    def warning(message, *args, **kwargs):
+        original_warning(message, *args, **kwargs)
+        if "draining" in message:
+            recovery_draining.set()
+
+    def error(message, *args, **kwargs):
+        original_error(message, *args, **kwargs)
+        if "Output write failed" in message or (
+            "Question %04d failed" in message and args[0] == 21
+        ):
+            terminal_seen.set()
+
+    original_save = collector.CollectionStore.save
+
+    def save(store, question, answer, metadata=None):
+        save_attempts.append(question.id)
+        if failure == "output-write" and question.id == 21:
+            raise OSError("simulated output failure")
+        return original_save(store, question, answer, metadata)
+
+    def ask(client, question):
+        calls.append(question.id)
+        if question.id == 20:
+            assert all(event.wait(5) for event in started.values())
+            raise collector.UnverifiedAnswerError("Stream and saved answer differ")
+        assert question.id in started, "A queued retry or new question was dispatched"
+        started[question.id].set()
+        assert recovery_draining.wait(5)
+        if question.id == 21:
+            if failure == "terminal":
+                raise collector.CollectionError("terminal failure during drain")
+            return ANSWER, {}
+        assert terminal_seen.wait(5), "The late answer must follow the terminal error"
+        return ANSWER, {}
+
+    monkeypatch.setattr(collector.LOG, "warning", warning)
+    monkeypatch.setattr(collector.LOG, "error", error)
+    monkeypatch.setattr(collector.CollectionStore, "save", save)
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    assert collector.main([
+        *state.arguments, "--concurrency", "3", "--retry-delay", "0",
+    ]) == 1
+    assert sorted(calls) == [20, 21, 22]
+    assert all(session.closed for session in state.sessions)
+    records = _saved_records(state.output)
+    first = next(record for record in records if record.question.id == 19)
+    assert (first.question, first.answer, first.metadata) == (
+        original_record.question, original_record.answer, original_record.metadata,
+    )
+    if failure == "output-write":
+        assert save_attempts == [21], "Publication continued after the output write failed"
+        assert state.output.read_bytes() == before
+    else:
+        assert save_attempts == [22]
+        assert {record.question.id for record in records} == {19, 22}
 
 
 def test_unknown_worker_exception_is_logged_immediately_without_sensitive_text(concurrent_cli, monkeypatch, caplog):

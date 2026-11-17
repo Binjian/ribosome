@@ -202,7 +202,17 @@ fetch retry only that step, retaining the original stream and identifiers.
 Missing, empty, or mismatching persisted answers also retry the fetch, allowing
 a delayed server save to catch up. HTTP failures and verification mismatches
 share the same fetch retry budget; neither generation nor the answer check is
-repeated. A persistent mismatch still prevents publication. Its log includes
+repeated during those fetch retries. If a concurrent run exhausts the fetch
+budget with a mismatch, it pauses new questions and drains active calls, saving
+their verified answers. It then retries each unverified question once in a fresh
+conversation and continues with one worker for the rest of the run. This gives
+an unusable generation a chance to recover without overlapping new requests.
+The replacement answer must still pass the full check and exact stream/saved
+comparison. A second exhausted mismatch for the same question stops collection;
+other terminal errors retain their existing stop-and-drain behavior.
+`--retries 0` also disables this recovery.
+
+A persistent mismatch always prevents publication of that answer. Its log includes
 the stream/saved character counts and the first differing offset after newline
 normalization (starting at zero), without printing answer text.
 
@@ -245,6 +255,12 @@ saves validated answers, and exits with status 1 or 130 respectively. Graceful
 shutdown can wait through HTTP timeouts and retry backoff. Keep the process
 running until it exits to retain these answers. An output-write failure stops
 all further publication while active HTTP calls drain.
+
+An exhausted stream/saved-answer mismatch has one bounded recovery before it
+becomes terminal: the coordinator drains active calls, retries the unverified
+question in a new conversation, and lowers concurrency to 1 for the remainder
+of that run. Several mismatches in the drained calls are retried sequentially.
+This does not assume a particular account limit or accept mismatching text.
 
 For a bounded session or a separate collection:
 
@@ -370,7 +386,7 @@ idempotent; a different answer for an existing sample is rejected.
 | `ConnectionError`, read timeout, or interrupted stream | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun; completed pairs remain saved. Increase `--answer-timeout` if generation needs longer silent intervals. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
 | `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. The log shows the safe numeric API code immediately, while other active calls finish. The code alone may require service support to distinguish account quotas, concurrency limits, and other rejections; the collector does not log server messages or response bodies. |
-| Stream and persisted answer differ | The collector refetches with the same stream/conversation up to `--retries` times. If the difference persists, the uncertain pair is not published; rerun to retry missing IDs. Counts and the differing offset in the log help diagnose it. |
+| Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Concurrent runs then drain active calls and retry the unverified question once in a fresh conversation, continuing with one worker. A repeated failure stops without publishing the uncertain answer. `--retries 0` disables recovery. Counts and the differing offset help diagnose it; response lengths alone do not establish the server-side cause. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |
 

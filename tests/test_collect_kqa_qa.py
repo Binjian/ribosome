@@ -1,9 +1,12 @@
 """Offline checks for the KUKA Center 智能问答 collection entry point."""
 
+import asyncio
 import os
 import re
 import subprocess
 import sys
+import threading
+from collections import Counter
 from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
@@ -193,3 +196,121 @@ def test_kqa_gap_insertion_preserves_existing_intro_and_labels_new_batches(tmp_p
     assert [record.question.id for record in records] == [1, 2, 3]
     assert records[-1].answer == ANSWER
     assert records[-1].metadata["robot_model"] == "intelligent_customer_service_robot"
+
+
+def test_kqa_protocol_mismatches_drain_and_regenerate_serially(tmp_path, monkeypatch):
+    """Replay the reported 35/28 mismatch without inventing its upstream text."""
+    questions = [collector.Question(number, f"问题{number}", f"检查项目{number}")
+                 for number in range(1, 16)]
+    output = tmp_path / "qa.md"
+    store = collector.CollectionStore(
+        output, questions, title=kqa.PROFILE.title, mode=kqa.PROFILE.mode,
+    )
+    for question in questions[:10]:
+        store.save(question, ANSWER, {"session_id": f"preserved-{question.id}"})
+    before = {
+        record.question.id: (record.question, record.answer, record.metadata)
+        for record in _saved_records(output)
+    }
+    # Synthetic stand-ins retain only the diagnostic lengths from the log.
+    bad_stream, bad_saved = "stream-notice-" + "x" * 21, "persisted-notice-" + "y" * 11
+    assert (len(bad_stream), len(bad_saved)) == (35, 28)
+    first_mismatch = threading.Event()
+    initial_started = {number: threading.Event() for number in (11, 12)}
+    fourteen_started = threading.Event()
+    draining = threading.Event()
+    both_failed = threading.Event()
+    queued = set()
+    original_warning = collector.LOG.warning
+
+    def warning(message, *args, **kwargs):
+        original_warning(message, *args, **kwargs)
+        if "draining" in message:
+            queued.add(args[0])
+            draining.set()
+            if queued == {13, 14}:
+                both_failed.set()
+
+    monkeypatch.setattr(collector.LOG, "warning", warning)
+    lock = threading.Lock()
+    sessions = {}
+    attempts = Counter()
+    fetches = Counter()
+    generations = []
+    active = set()
+    prompts = {question.prompt: question.id for question in questions}
+
+    def request(method, url, **kwargs):
+        assert method == "POST"
+        payload = kwargs["json"]
+        if url.endswith("/api/session/saveOrUpdate"):
+            with lock:
+                session_id = f"conversation-{len(sessions) + 1}"
+                sessions[session_id] = {}
+            return _response({"sessionId": session_id})
+        if url.endswith("/api/efs/stream"):
+            number = prompts[payload["question"]]
+            session_id = payload["sessionId"]
+            with lock:
+                attempts[number] += 1
+                attempt = attempts[number]
+                if attempt > 1 or number == 15:
+                    assert not active, "Recovery and subsequent questions must be serial"
+                active.add(session_id)
+                sessions[session_id].update(number=number, attempt=attempt, uuid=payload["uuid"])
+                generations.append((number, session_id, payload["uuid"]))
+            assert payload["robotModel"] == kqa.PROFILE.robot_model
+            if number in initial_started:
+                initial_started[number].set()
+            if number == 11:
+                assert first_mismatch.wait(5)
+            if number == 12:
+                assert both_failed.wait(5), "Both unverified calls must drain before recovery"
+            if number == 14 and attempt == 1:
+                fourteen_started.set()
+            return _response(answer=bad_stream if number in (13, 14) and attempt == 1 else ANSWER)
+        if url.endswith("/api/check"):
+            assert payload["content"] in (ANSWER, bad_stream)
+            return _response({"status": True})
+        assert url.endswith("/api/krl/selectQuestionInfo")
+        session_id = payload["sessionId"]
+        state = sessions[session_id]
+        number, attempt = state["number"], state["attempt"]
+        assert payload["uuid"] == state["uuid"]
+        assert payload["requestId"] == session_id
+        assert payload["question"] == payload["content"] == questions[number - 1].prompt
+        fetches[number, attempt] += 1
+        if number in (13, 14) and attempt == 1:
+            assert all(event.wait(5) for event in initial_started.values())
+            first_mismatch.set()
+            if fetches[number, attempt] == 4:
+                assert (fourteen_started if number == 13 else draining).wait(5)
+                with lock:
+                    active.remove(session_id)
+            return _response({"answerContent": bad_saved})
+        with lock:
+            active.remove(session_id)
+        return _response({"answerContent": ANSWER, "id": f"answer-{number}"})
+
+    clients = []
+    for _ in range(3):
+        session = Mock()
+        session.request.side_effect = request
+        clients.append(collector.KukaClient(session, retry_delay=0, profile=kqa.PROFILE))
+    asyncio.run(collector._collect_concurrently(clients, questions[10:], store, delay=0))
+
+    order = [number for number, _, _ in generations]
+    assert sorted(order[:3]) == [11, 12, 13]
+    assert order[3:] == [14, 13, 14, 15]
+    assert attempts == {11: 1, 12: 1, 13: 2, 14: 2, 15: 1}
+    assert fetches[13, 1] == fetches[14, 1] == 4
+    for number in (13, 14):
+        first, second = [entry for entry in generations if entry[0] == number]
+        assert first[1] != second[1] and first[2] != second[2]
+    records = _saved_records(output)
+    assert [record.question.id for record in records] == list(range(1, 16))
+    assert all(record.answer == ANSWER for record in records)
+    assert all((record.question, record.answer, record.metadata) == before[record.question.id]
+               for record in records[:10])
+    assert bad_stream not in output.read_text(encoding="utf-8")
+    assert bad_saved not in output.read_text(encoding="utf-8")

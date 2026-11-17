@@ -92,6 +92,14 @@ class RetryableCollectionError(CollectionError):
     """A transient transport or persistence failure; retry the affected stage."""
 
 
+class AnswerMismatchError(RetryableCollectionError):
+    """The persisted answer does not yet match the completed stream."""
+
+
+class UnverifiedAnswerError(CollectionError):
+    """Fetch retries ended with a mismatch; generation may need to be restarted."""
+
+
 def _answer_for_comparison(answer: str) -> str:
     """Ignore newline encoding and outer newlines, retaining Markdown spaces."""
     return answer.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
@@ -290,7 +298,11 @@ class KukaClient:
                 return action()
             except RetryableCollectionError as exc:
                 if attempt == self.retries:
-                    raise CollectionError(
+                    error_type = (
+                        UnverifiedAnswerError
+                        if isinstance(exc, AnswerMismatchError) else CollectionError
+                    )
+                    raise error_type(
                         f"{operation} failed after {attempt + 1} attempt(s): {exc}"
                     ) from exc
                 LOG.warning(
@@ -545,7 +557,7 @@ class KukaClient:
             )
             # Counts explain persistent mismatches without logging answers,
             # prompts, credentials, or arbitrary server response text.
-            raise RetryableCollectionError(
+            raise AnswerMismatchError(
                 "Stream and saved answer differ "
                 f"(stream_chars={len(streamed)}, saved_chars={len(answer)}, "
                 f"first_difference={first_difference}); "
@@ -625,6 +637,10 @@ async def _collect_concurrently(clients, pending, store, delay):
     failure = None
     interrupted = False
     publishing = True
+    retry_pending = deque()
+    recovered = set()
+    recovering = False
+    concurrency = len(clients)
 
     async def run_question(client, question):
         try:
@@ -635,7 +651,10 @@ async def _collect_concurrently(clients, pending, store, delay):
         # source order even when other questions finish first.
         completed.put_nowait((client, question, outcome))
 
-    while active or (index < len(pending) and failure is None and not interrupted):
+    while active or (
+        (index < len(pending) or retry_pending)
+        and failure is None and not interrupted
+    ):
         try:
             # Consume every available result before deciding to dispatch more.
             while not completed.empty():
@@ -643,6 +662,24 @@ async def _collect_concurrently(clients, pending, store, delay):
                 active.pop(client)
                 idle.append(client)
                 if error is not None:
+                    if (
+                        isinstance(error, UnverifiedAnswerError)
+                        and client.retries > 0 and question.id not in recovered
+                        and failure is None and not interrupted
+                    ):
+                        # Re-fetching cannot repair an unusable generation. Let
+                        # existing calls finish before re-asking, rather than
+                        # adding more load while they are still running.
+                        recovered.add(question.id)
+                        retry_pending.append(question)
+                        recovering = True
+                        LOG.warning(
+                            "Question %04d could not be verified: %s; pausing new questions "
+                            "and draining %d active calls before one fresh-conversation "
+                            "retry with concurrency 1",
+                            question.id, _failure_reason(error), len(active),
+                        )
+                        continue
                     if isinstance(error, (KeyboardInterrupt, EOFError)):
                         interrupted = True
                     if failure is None:
@@ -667,26 +704,48 @@ async def _collect_concurrently(clients, pending, store, delay):
                     await asyncio.wait(active.values(), return_when=asyncio.FIRST_COMPLETED)
                 continue
 
-            remaining = max(0.0, next_start - loop.time())
-            if idle and index < len(pending) and remaining == 0:
-                client = idle.popleft()
-                question = pending[index]
-                index += 1
-                LOG.info(
-                    "[%d/%d] Asking %04d %s (%s)",
-                    index, len(pending), question.id, question.title, client.profile.mode,
+            if recovering:
+                if active:
+                    await asyncio.wait(active.values(), return_when=asyncio.FIRST_COMPLETED)
+                    continue
+                concurrency = 1
+                recovering = False
+                LOG.warning(
+                    "Continuing with concurrency 1; retrying %d unverified question(s) "
+                    "before starting new questions",
+                    len(retry_pending),
                 )
+
+            remaining = max(0.0, next_start - loop.time())
+            can_dispatch = bool(idle) and len(active) < concurrency and (
+                index < len(pending) or bool(retry_pending)
+            )
+            if can_dispatch and remaining == 0:
+                client = idle.popleft()
+                if retry_pending:
+                    question = retry_pending.popleft()
+                    LOG.info(
+                        "Retrying %04d %s in a fresh conversation (concurrency 1; %s)",
+                        question.id, question.title, client.profile.mode,
+                    )
+                else:
+                    question = pending[index]
+                    index += 1
+                    LOG.info(
+                        "[%d/%d] Asking %04d %s (%s)",
+                        index, len(pending), question.id, question.title, client.profile.mode,
+                    )
                 active[client] = asyncio.create_task(run_question(client, question))
                 next_start = loop.time() + delay
                 # Let the dispatched call start and expose any immediate failure.
                 await asyncio.sleep(0)
             elif active:
-                timeout = remaining if idle and index < len(pending) else None
+                timeout = remaining if can_dispatch else None
                 await asyncio.wait(
                     active.values(), timeout=timeout,
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-            elif index < len(pending):
+            elif index < len(pending) or retry_pending:
                 await asyncio.sleep(remaining)
         except asyncio.CancelledError:
             # asyncio.run translates the first Ctrl+C into coordinator
