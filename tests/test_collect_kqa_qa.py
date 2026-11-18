@@ -22,11 +22,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ANSWER = "## 检查步骤\n\n先确认控制柜型号与 KSS 版本。  \n\n| 项目 | 记录 |\n| --- | --- |\n| 软件 | 待核实 |\n"
 
 
-def _response(data=None, *, answer=None):
+def _response(data=None, *, answer=None, code="0"):
     response = MagicMock()
     response.status_code = 200
     response.headers = {"Content-Type": "application/json" if answer is None else "text/plain"}
-    response.json.return_value = {"code": "0", "data": data}
+    response.json.return_value = {"code": code, "data": data}
     response.iter_content.return_value = iter([answer.encode("utf-8")]) if answer is not None else iter([])
     response.__enter__.return_value = response
     return response
@@ -80,11 +80,19 @@ def test_kqa_help_works_without_local_settings_from_another_directory(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_kqa_ask_selects_smart_mode_and_checks_persisted_answer():
+@pytest.mark.parametrize("reuse_conversation", [False, True])
+def test_kqa_ask_selects_smart_mode_and_checks_persisted_answer(reuse_conversation):
     question = collector.Question(1, "控制系统版本", "如何确认控制柜型号与 KSS 版本？")
     session = Mock()
+    conversation = {"sessionId": "smart-session"}
+    opening = [_response(conversation)]
+    if reuse_conversation:
+        opening = [
+            _response(code=1), _response({"TODAY": [conversation]}),
+            _response({"questionInfos": []}),
+        ]
     session.request.side_effect = [
-        _response({"sessionId": "smart-session"}),
+        *opening,
         _response(answer=ANSWER),
         _response({"status": True}),
         _response({"answerContent": ANSWER, "id": "smart-answer", "time": "server-time"}),
@@ -95,8 +103,15 @@ def test_kqa_ask_selects_smart_mode_and_checks_persisted_answer():
     assert metadata["robot_model"] == "intelligent_customer_service_robot"
     assert metadata["answer_check_passed"] is True
     assert metadata["answer_id"] == "smart-answer"
-    create, stream, check, persisted = session.request.call_args_list
+    create, *lookup, stream, check, persisted = session.request.call_args_list
     assert create.args == ("POST", collector.CHAT_URL + "/api/session/saveOrUpdate")
+    if reuse_conversation:
+        assert [call.args[1].removeprefix(collector.CHAT_URL) for call in lookup] == [
+            "/api/session/select", "/api/question/select",
+        ]
+        assert lookup[-1].kwargs["json"] == conversation
+    else:
+        assert not lookup
     assert stream.args == ("POST", collector.CHAT_URL + "/api/efs/stream")
     payload = stream.kwargs["json"]
     assert payload["robotModel"] == "intelligent_customer_service_robot"

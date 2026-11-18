@@ -3,9 +3,9 @@
 
 Run ``python utils/krl/collect_krlu_qa.py --dry-run`` first. Each source question
 contains a generated KRL sample program. This entry point shares login,
-streaming validation, retries, concurrency, and atomic storage with the existing
-collectors. Credentials come from utils/krl/.env; live login still requires
-the site's image CAPTCHA.
+empty-conversation recovery, streaming validation, retries, concurrency, and
+atomic storage with the existing collectors. Credentials come from utils/krl/.env
+and live login requires the site's image CAPTCHA.
 """
 
 from __future__ import annotations
@@ -104,6 +104,19 @@ class KrluClient(collector.KukaClient):
     @staticmethod
     def validate_question(question):
         program_files(question)
+
+    def _latest_empty_conversation(self):
+        """Check for project data that can exist before the first question."""
+        session_id = super()._latest_empty_conversation()
+        if session_id is None:
+            return None
+        files = self.api("/api/krl/selectFilesInfo", {"sessionId": session_id})
+        if files not in (None, []):
+            return None
+        status = _training_status(self.api("/api/krl/queryStatus", {"requestId": session_id}))
+        if status in (None, 0):
+            return session_id
+        return None
 
     def prepare_question(self, question, identifiers):
         files = program_files(question)

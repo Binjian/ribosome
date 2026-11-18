@@ -2,9 +2,9 @@
 """Collect KUKA Center 智能问答 answers into resumable Markdown batches.
 
 Run ``python utils/krl/collect_kqa_qa.py --dry-run`` first. This entry point
-shares login, streaming, validation, retries, concurrency, and atomic storage
-with the KRL collector. Credentials come from utils/krl/.env; live login still
-requires the site's image CAPTCHA.
+shares login, empty-conversation recovery, streaming, validation, retries,
+concurrency, and atomic storage with the KRL collector. Credentials come from
+utils/krl/.env and live login requires the site's image CAPTCHA.
 """
 
 from __future__ import annotations

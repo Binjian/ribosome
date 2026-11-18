@@ -182,10 +182,12 @@ newlines, while preserving spaces and indentation; the original persisted
 Markdown is saved verbatim. If the site's check rejects an answer, it saves the
 refusal shown by the frontend.
 
-If creating a conversation returns `code=1`, KRL and KQA check whether the
-newest conversation is empty, using the same history checks as the web client.
-The collector can use that conversation once, and workers share the same record
-of which conversations have already been assigned during the run.
+If creating a conversation returns `code=1`, all three collectors check whether
+the newest conversation is empty, using the same history checks as the web
+client. KRLU also checks for existing project files and training state before
+uploading a sample. The collector can use that conversation once, and workers
+share the same record of which conversations have already been assigned during
+the run.
 
 ### 3. Continue the remaining questions
 
@@ -408,7 +410,7 @@ idempotent; a different answer for an existing sample is rejected.
 | HTTP 463 at `/api-b/program_assistant/api/sign` | Update the collector and rerun. Main-site service requests need the frontend's `/api` proxy prefix: `/api/api-b/program_assistant/api/sign`. Completed pairs are reused. |
 | `ConnectionError`, read timeout, or interrupted stream | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun; completed pairs remain saved. Increase `--answer-timeout` if generation needs longer silent intervals. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
-| `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. For `code=1` in KRL or KQA, the collector can continue if the newest conversation is confirmed empty and available. If collection stops, the numeric code alone does not identify the service-side cause. |
+| `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. For `code=1`, the collector can continue if the newest conversation is confirmed empty and available. KRLU also requires an empty project context. If collection stops, the numeric code alone does not identify the service-side cause. |
 | Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Both sequential and concurrent CLI runs then retry the unverified question once in a fresh conversation; concurrent runs first drain active calls and continue with one worker. A repeated failure stops without publishing the uncertain answer. `--retries 0` disables recovery. Inspect `streamed_answer` and `saved_answer` in the private diagnostic JSON for the actual responses; response lengths alone do not establish the server-side cause. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |

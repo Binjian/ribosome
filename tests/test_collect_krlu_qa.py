@@ -25,19 +25,19 @@ ANSWER = "## 执行解释\n\n```krl\n  $OUT[10] = TRUE\n```\n\n| 变量 | 值 |\
 QUESTION = collector.Question(1, "变量与输出", PROMPT)
 
 
-def _response(data=None, *, answer=None):
+def _response(data=None, *, answer=None, code="0"):
     response = MagicMock()
     response.status_code = 200
     response.headers = {"Content-Type": "application/json" if answer is None else "text/plain"}
-    response.json.return_value = {"code": "0", "data": data}
+    response.json.return_value = {"code": code, "data": data}
     response.iter_content.return_value = iter([answer.encode("utf-8")]) if answer is not None else iter([])
     response.__enter__.return_value = response
     return response
 
 
-def _project_responses(*, training=2, file_status=0):
+def _project_responses(*, training=2, file_status=0, session_id="project-session"):
     return [
-        _response({"sessionId": "project-session"}),
+        _response({"sessionId": session_id}),
         _response(["uploaded-main-src", "uploaded-main-dat"]),
         _response(None),
         _response({}),
@@ -94,10 +94,18 @@ def test_dry_run_and_help_work_from_another_directory_without_outputs(module, tm
     assert not list(tmp_path.iterdir())
 
 
-def test_project_files_are_uploaded_verbatim_then_trained_before_streaming():
+@pytest.mark.parametrize("reused_project", [False, True])
+def test_project_files_are_uploaded_verbatim_then_trained_before_streaming(reused_project):
     session = Mock()
+    create, *project = _project_responses()
+    opening = [create]
+    if reused_project:
+        opening = [
+            _response(code=1), _response({"TODAY": [{"sessionId": "project-session"}]}),
+            _response({"questionInfos": []}), _response([]), _response(None),
+        ]
     session.request.side_effect = [
-        *_project_responses(), _response(answer=ANSWER), _response({"status": True}),
+        *opening, *project, _response(answer=ANSWER), _response({"status": True}),
         _response({"answerContent": ANSWER, "id": "project-answer", "time": "server-time"}),
     ]
     answer, metadata = krlu.KrluClient(session, profile=krlu.PROFILE).ask(QUESTION)
@@ -106,8 +114,16 @@ def test_project_files_are_uploaded_verbatim_then_trained_before_streaming():
     assert metadata["robot_model"] is None
     assert metadata["stream_path"] == "/api/krl/stream"
     assert metadata["answer_id"] == "project-answer"
-    create, upload, previous, train, status, files, stream, check, persisted = session.request.call_args_list
+    create, *lookup, upload, previous, train, status, files, stream, check, persisted = session.request.call_args_list
     assert create.kwargs["json"] == {"sessionTitle": "新建对话"}
+    if reused_project:
+        assert [call.args[1].removeprefix(collector.CHAT_URL) for call in lookup] == [
+            "/api/session/select", "/api/question/select", "/api/krl/selectFilesInfo", "/api/krl/queryStatus",
+        ]
+        assert lookup[1].kwargs["json"] == lookup[2].kwargs["json"] == {"sessionId": "project-session"}
+        assert lookup[3].kwargs["json"] == {"requestId": "project-session"}
+    else:
+        assert not lookup
     assert upload.args == ("POST", collector.CHAT_URL + "/api/uploadFiles")
     assert upload.kwargs["files"] == [
         ("files", ("MAIN.src", SOURCE.encode("utf-8"), "application/octet-stream")),
@@ -134,6 +150,31 @@ def test_project_files_are_uploaded_verbatim_then_trained_before_streaming():
         "question": PROMPT, "content": PROMPT, "sessionId": "project-session",
         "requestId": "project-session", "uuid": payload["uuid"],
     }
+
+
+@pytest.mark.parametrize("project_state", [
+    ([{"name": "earlier.src", "status": 0}],),
+    ({"files": []},),
+    ([], {"status": 1}),
+    ([], {"status": 2}),
+    (None, {"status": 3}),
+])
+def test_project_recovery_preserves_existing_files_or_training(project_state):
+    session = Mock()
+    session.request.side_effect = [
+        _response(code=1), _response({"TODAY": [{"sessionId": "project-session"}]}),
+        _response({"questionInfos": []}), *(_response(state) for state in project_state),
+    ]
+    with pytest.raises(collector.CollectionError, match=r"saveOrUpdate.*code=1"):
+        krlu.KrluClient(session).ask(QUESTION)
+    paths = [call.args[1].removeprefix(collector.CHAT_URL) for call in session.request.call_args_list]
+    assert paths[:4] == [
+        "/api/session/saveOrUpdate", "/api/session/select", "/api/question/select", "/api/krl/selectFilesInfo",
+    ]
+    if len(project_state) == 2:
+        assert paths[4:] == ["/api/krl/queryStatus"]
+    else:
+        assert len(paths) == 4
 
 
 def test_pending_training_and_eventual_file_visibility_are_polled(monkeypatch):
@@ -264,7 +305,7 @@ def test_interrupted_training_preserves_completed_pair_and_resume_retrains_only_
                  "--concurrency", "1", "--delay", "0"]
     successful = [*_project_responses(), _response(answer=ANSWER), _response({"status": True}),
                   _response({"answerContent": ANSWER})]
-    interrupted = [*_project_responses()[:4], KeyboardInterrupt()]
+    interrupted = [*_project_responses(session_id="interrupted-project")[:4], KeyboardInterrupt()]
     request = Mock(side_effect=[*successful, *interrupted])
     monkeypatch.setattr(requests.Session, "request", request)
     monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-account", "test-password"))

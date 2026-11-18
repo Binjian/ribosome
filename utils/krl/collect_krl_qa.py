@@ -536,9 +536,6 @@ class KukaClient:
         return None
 
     def _open_conversation(self):
-        # Project mode needs a clean upload and training context.
-        if self.profile.robot_model is None:
-            return self._create_conversation()
         # Workers share the account's history. Keep creation and claiming an
         # empty conversation exclusive; generation runs outside the lock.
         with self._conversation_lock:
