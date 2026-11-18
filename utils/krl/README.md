@@ -42,7 +42,8 @@ described below. The module entry point is
 KRL程序理解 has a separate workflow in the
 [public frontend](https://chat.kukacenter.com/): each new conversation receives
 the sample's `.src` and optional `.dat` files through `/api/uploadFiles`, followed
-by `/api/krl/train` and bounded `/api/krl/queryStatus` polling. Collection waits
+by `/api/krl/train` and bounded `/api/krl/queryStatus` polling. The status lookup
+can return `code=1` before the training record is available. Collection waits
 for successful training before submitting the complete prompt to
 `/api/krl/stream`. This endpoint does not receive `robotModel` or
 `networkSearchFlag`. The answer check and persisted-answer verification use
@@ -192,7 +193,11 @@ the newest conversation is empty, using the same history checks as the web
 client. KRLU also checks for existing project files and training state before
 uploading a sample. The collector can use that conversation once, and workers
 share the same record of which conversations have already been assigned during
-the run.
+the run. KUKA Center rejects creating a second empty conversation, which can
+happen during KRLU training before the first prompt is submitted. When no
+conversation is eligible during a concurrent run, the collector drains active
+questions, retries the deferred question once, and continues with one worker.
+`--retries 0` disables the serial retry.
 
 ### 3. Continue the remaining questions
 
@@ -222,8 +227,8 @@ worker for the rest of the run. Sequential runs retry before moving to the next
 question. This gives an unusable generation a chance to recover without
 overlapping new requests.
 The replacement answer must still pass the full check and exact stream/saved
-comparison. A second exhausted mismatch for the same question stops collection;
-other terminal errors retain their existing stop-and-drain behavior.
+comparison. A second exhausted mismatch for the same question stops collection.
+Terminal errors stop new work and drain active calls.
 `--retries 0` also disables this recovery.
 
 A persistent mismatch always prevents publication of that answer. Its log includes

@@ -39,7 +39,7 @@ def _project_responses(*, training=2, file_status=0, session_id="project-session
     return [
         _response({"sessionId": session_id}),
         _response(["uploaded-main-src", "uploaded-main-dat"]),
-        _response(None),
+        _response(code=1),
         _response({}),
         _response({"status": training}),
         _response([{"name": "MAIN.src", "status": file_status}, {"name": "MAIN.dat", "status": file_status}]),
@@ -95,17 +95,20 @@ def test_dry_run_and_help_work_from_another_directory_without_outputs(module, tm
 
 
 @pytest.mark.parametrize("reused_project", [False, True])
-def test_project_files_are_uploaded_verbatim_then_trained_before_streaming(reused_project):
+def test_project_files_are_uploaded_verbatim_then_trained_before_streaming(reused_project, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(krlu.time, "sleep", sleeps.append)
     session = Mock()
-    create, *project = _project_responses()
+    create, upload, previous, train, status, files = _project_responses()
     opening = [create]
     if reused_project:
         opening = [
             _response(code=1), _response({"TODAY": [{"sessionId": "project-session"}]}),
-            _response({"questionInfos": []}), _response([]), _response(None),
+            _response({"questionInfos": []}), _response([]), _response(code="1"),
         ]
     session.request.side_effect = [
-        *opening, *project, _response(answer=ANSWER), _response({"status": True}),
+        *opening, upload, previous, train, _response(code=1), status, files,
+        _response(answer=ANSWER), _response({"status": True}),
         _response({"answerContent": ANSWER, "id": "project-answer", "time": "server-time"}),
     ]
     answer, metadata = krlu.KrluClient(session, profile=krlu.PROFILE).ask(QUESTION)
@@ -114,7 +117,10 @@ def test_project_files_are_uploaded_verbatim_then_trained_before_streaming(reuse
     assert metadata["robot_model"] is None
     assert metadata["stream_path"] == "/api/krl/stream"
     assert metadata["answer_id"] == "project-answer"
-    create, *lookup, upload, previous, train, status, files, stream, check, persisted = session.request.call_args_list
+    assert sleeps == [2.0]
+    create, *lookup, upload, previous, train, pending, status, files, stream, check, persisted = (
+        session.request.call_args_list
+    )
     assert create.kwargs["json"] == {"sessionTitle": "新建对话"}
     if reused_project:
         assert [call.args[1].removeprefix(collector.CHAT_URL) for call in lookup] == [
@@ -131,7 +137,8 @@ def test_project_files_are_uploaded_verbatim_then_trained_before_streaming(reuse
     ]
     assert "Content-Type" not in upload.kwargs["headers"]
     assert "json" not in upload.kwargs
-    assert previous.kwargs["json"] == status.kwargs["json"] == {"requestId": "project-session"}
+    assert previous == pending == status
+    assert status.kwargs["json"] == {"requestId": "project-session"}
     training = train.kwargs["json"]
     assert training["filesUrl"] == ["uploaded-main-src", "uploaded-main-dat"]
     assert training["sessionId"] == training["requestId"] == "project-session"

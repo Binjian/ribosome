@@ -95,8 +95,9 @@ class ApiRejectedError(CollectionError):
     """An API rejection with a sanitized application code."""
 
     def __init__(self, path, code):
+        self.path = path
         self.code = code
-        super().__init__(f"{path}: API rejected request (code={code}); stopping without saving")
+        super().__init__(f"{path}: API rejected request (code={code})")
 
 
 class RetryableCollectionError(CollectionError):
@@ -375,14 +376,13 @@ class KukaClient:
                 raise CollectionError(
                     f"{path}: expected JSON; login may have expired"
                 ) from exc
-        if not isinstance(data, dict) or str(data.get("code")) not in (
-            "0",
-            "200",
-            "ok",
-        ):
+        code = str(data.get("code")) if isinstance(data, dict) else ""
+        # The frontend reads the training status payload even when this lookup
+        # returns code=1, including when there is no training record yet.
+        status_lookup = path == "/api/krl/queryStatus" and code == "1"
+        if code not in ("0", "200", "ok") and not status_lookup:
             # Only bounded numeric API codes are safe to echo. Never include
             # arbitrary server messages, signed URLs, or response bodies.
-            code = str(data.get("code")) if isinstance(data, dict) else ""
             safe_code = code if re.fullmatch(r"-?[0-9]{1,10}", code) else "unavailable"
             raise ApiRejectedError(path, safe_code)
         return data.get("data")
@@ -774,19 +774,22 @@ async def _collect_concurrently(clients, pending, store, delay):
                 active.pop(client)
                 idle.append(client)
                 if error is not None:
+                    recovery_key = (question.id, type(error))
+                    creation_rejected = (
+                        concurrency > 1 and isinstance(error, ApiRejectedError)
+                        and error.path == "/api/session/saveOrUpdate" and error.code == "1"
+                    )
                     if (
-                        isinstance(error, UnverifiedAnswerError)
-                        and client.retries > 0 and question.id not in recovered
+                        (isinstance(error, UnverifiedAnswerError) or creation_rejected)
+                        and client.retries > 0 and recovery_key not in recovered
                         and failure is None and not interrupted
                     ):
-                        # Re-fetching cannot repair an unusable generation. Let
-                        # existing calls finish before re-asking, rather than
-                        # adding more load while they are still running.
-                        recovered.add(question.id)
+                        # Finish active answers before trying another conversation.
+                        recovered.add(recovery_key)
                         retry_pending.append(question)
                         recovering = True
                         LOG.warning(
-                            "Question %04d could not be verified: %s; pausing new questions "
+                            "Question %04d deferred: %s; pausing new questions "
                             "and draining %d active calls before one fresh-conversation "
                             "retry with concurrency 1",
                             question.id, _failure_reason(error), len(active),
@@ -823,7 +826,7 @@ async def _collect_concurrently(clients, pending, store, delay):
                 concurrency = 1
                 recovering = False
                 LOG.warning(
-                    "Continuing with concurrency 1; retrying %d unverified question(s) "
+                    "Continuing with concurrency 1; retrying %d deferred question(s) "
                     "before starting new questions",
                     len(retry_pending),
                 )

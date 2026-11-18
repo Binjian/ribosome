@@ -1327,9 +1327,13 @@ def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_c
     assert [record.question.id for record in _saved_records(state.output)] == list(range(19, 25))
 
 
-@pytest.mark.parametrize("recovery", ["success", "repeat-mismatch", "disabled"])
-def test_unverified_answer_drains_before_bounded_serial_recovery(
-    concurrent_cli, monkeypatch, recovery,
+@pytest.mark.parametrize("make_error", [
+    pytest.param(lambda: collector.UnverifiedAnswerError("Stream and saved answer differ"), id="answer-mismatch"),
+    pytest.param(lambda: collector.ApiRejectedError("/api/session/saveOrUpdate", "1"), id="conversation-rejected"),
+])
+@pytest.mark.parametrize("recovery", ["success", "repeat-failure", "disabled"])
+def test_concurrent_failures_drain_before_bounded_serial_recovery(
+    concurrent_cli, monkeypatch, recovery, make_error,
 ):
     state = concurrent_cli
     started = {number: threading.Event() for number in (19, 21)}
@@ -1359,12 +1363,12 @@ def test_unverified_answer_drains_before_bounded_serial_recovery(
         if question.id == 20:
             if calls.count(20) == 1:
                 assert all(event.wait(5) for event in started.values())
-                raise collector.UnverifiedAnswerError("Stream and saved answer differ")
+                raise make_error()
             assert state.saved_events[19].is_set() and state.saved_events[21].is_set()
             assert calls.count(20) == 2, "Recovery must be bounded to one fresh conversation"
             assert set(calls) == {19, 20, 21}, "Pending questions preceded recovery"
-            if recovery == "repeat-mismatch":
-                raise collector.UnverifiedAnswerError("Stream and saved answer differ")
+            if recovery == "repeat-failure":
+                raise make_error()
             return ANSWER, {}
         # Once the failed question recovers, keep the remaining work serial.
         assert state.saved_events[question.id - 1].is_set()
