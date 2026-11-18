@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
+from threading import Lock
 from urllib.parse import urlsplit
 
 if __package__:
@@ -87,6 +88,14 @@ LOG = logging.getLogger("collect_krl_qa")
 
 class CollectionError(RuntimeError):
     """A failure for which the current answer must not be published."""
+
+
+class ApiRejectedError(CollectionError):
+    """An API rejection with a sanitized application code."""
+
+    def __init__(self, path, code):
+        self.code = code
+        super().__init__(f"{path}: API rejected request (code={code}); stopping without saving")
 
 
 class RetryableCollectionError(CollectionError):
@@ -292,6 +301,8 @@ class KukaClient:
         self.profile = profile
         self.diagnostics_dir = Path(diagnostics_dir) if diagnostics_dir is not None else None
         self._diagnosed_generations = set()
+        self._conversation_lock = Lock()
+        self._used_conversations = set()
 
     def retry(self, operation, action):
         """Bound transport/persistence retries with a sanitized reason and backoff."""
@@ -372,9 +383,7 @@ class KukaClient:
             # arbitrary server messages, signed URLs, or response bodies.
             code = str(data.get("code")) if isinstance(data, dict) else ""
             safe_code = code if re.fullmatch(r"-?[0-9]{1,10}", code) else "unavailable"
-            raise CollectionError(
-                f"{path}: API rejected request (code={safe_code}); stopping without saving"
-            )
+            raise ApiRejectedError(path, safe_code)
         return data.get("data")
 
     def login(self, username, password=None, *, accept_terms=False):
@@ -495,12 +504,66 @@ class KukaClient:
     def prepare_question(self, question: Question, identifiers: dict) -> None:
         """Prepare conversation context, when required by a frontend mode."""
 
-    def generate(self, question: Question) -> tuple[str, dict]:
-        """Start a fresh conversation; a failed stream is never reused."""
+    def _create_conversation(self):
         session = self.api("/api/session/saveOrUpdate", {"sessionTitle": "新建对话"})
-        if not isinstance(session, dict) or not session.get("sessionId"):
+        session_id = session.get("sessionId") if isinstance(session, dict) else None
+        if type(session_id) not in (str, int) or not session_id:
             raise CollectionError("Chat did not create a session")
-        session_id = session["sessionId"]
+        return session_id
+
+    def _latest_empty_conversation(self):
+        """Follow the frontend's history order and confirm the newest chat is empty."""
+        history = self.api("/api/session/select")
+        if not isinstance(history, dict):
+            return None
+        for period in ("TODAY", "SEVEN_DAYS", "THIRTY_DAYS"):
+            conversations = history.get(period)
+            if not isinstance(conversations, list):
+                return None
+            if conversations:
+                break
+        else:
+            return None
+        newest = conversations[0]
+        session_id = newest.get("sessionId") if isinstance(newest, dict) else None
+        if type(session_id) not in (str, int) or not session_id:
+            return None
+        if str(session_id) in self._used_conversations:
+            return None
+        details = self.api("/api/question/select", {"sessionId": session_id})
+        if isinstance(details, dict) and details.get("questionInfos") == []:
+            return session_id
+        return None
+
+    def _open_conversation(self):
+        # Project mode needs a clean upload and training context.
+        if self.profile.robot_model is None:
+            return self._create_conversation()
+        # Workers share the account's history. Keep creation and claiming an
+        # empty conversation exclusive; generation runs outside the lock.
+        with self._conversation_lock:
+            try:
+                session_id = self._create_conversation()
+            except ApiRejectedError as exc:
+                if exc.code != "1":
+                    raise
+                try:
+                    session_id = self._latest_empty_conversation()
+                except CollectionError as lookup_error:
+                    LOG.warning("Could not check for an empty conversation (%s)", lookup_error)
+                    raise exc from lookup_error
+                if session_id is None:
+                    raise
+                LOG.info("Reusing KUKA Center's newest empty conversation")
+            else:
+                if str(session_id) in self._used_conversations:
+                    raise CollectionError("Chat returned a conversation already used in this run")
+            self._used_conversations.add(str(session_id))
+            return session_id
+
+    def generate(self, question: Question) -> tuple[str, dict]:
+        """Start a question in a conversation without prior turns."""
+        session_id = self._open_conversation()
         question_uuid = str(uuid.uuid4())
         identifiers = {
             "sessionId": session_id,
@@ -822,12 +885,15 @@ def _collect_with_workers(client, pending, store, concurrency, delay):
             # Copy the complete jar, including cookie domains/paths/flags. Each
             # worker has its own cookies, adapters, and connection pools.
             session.cookies = client.session.cookies.copy()
-            clients.append(type(client)(
+            worker = type(client)(
                 session, client.request_timeout, client.answer_timeout,
                 retries=client.retries, retry_delay=client.retry_delay,
                 profile=client.profile,
                 diagnostics_dir=client.diagnostics_dir,
-            ))
+            )
+            worker._conversation_lock = client._conversation_lock
+            worker._used_conversations = client._used_conversations
+            clients.append(worker)
         asyncio.run(_collect_concurrently(clients, pending, store, delay))
 
 

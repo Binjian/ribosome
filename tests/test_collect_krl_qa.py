@@ -268,6 +268,49 @@ def test_api_rejection_does_not_retry_generation():
     assert len(session.calls) == 1
 
 
+def test_create_rejection_reuses_latest_empty_conversation_only_once():
+    history = {
+        "TODAY": [], "SEVEN_DAYS": [{"sessionId": "empty-217"}],
+        "THIRTY_DAYS": [{"sessionId": "older-conversation"}],
+    }
+    rejection = api(None, code=1)
+    session = Session([
+        rejection, api(history), api({"questionInfos": []}),
+        Response(chunks=[ANSWER.encode("utf-8")]), api({"status": True}),
+        api({"answerContent": ANSWER}), api(None, code=1), api(history),
+    ])
+    client = collector.KukaClient(session, retries=0)
+
+    answer, metadata = client.ask(collector.Question(217, "喷涂", "喷涂问题"))
+    assert answer == ANSWER
+    assert metadata["session_id"] == "empty-217"
+    create, history_call, details, stream, _, saved = session.calls
+    assert create[1].endswith("/api/session/saveOrUpdate") and rejection.closed
+    assert history_call[1].endswith("/api/session/select")
+    assert details[1].endswith("/api/question/select")
+    assert details[2]["json"] == {"sessionId": "empty-217"}
+    assert stream[2]["json"]["requestId"] == saved[2]["json"]["sessionId"] == "empty-217"
+
+    with pytest.raises(collector.CollectionError, match=r"saveOrUpdate.*code=1"):
+        client.ask(collector.Question(218, "喷涂", "另一个喷涂问题"))
+    assert len(session.calls) == 8
+    assert not session.responses
+
+
+@pytest.mark.parametrize("question_infos", [None, [{"question": "Earlier browser question"}]])
+def test_create_rejection_requires_explicitly_empty_conversation(question_infos):
+    session = Session([
+        api(None, code="1"),
+        api({"TODAY": [{"sessionId": "newest"}, {"sessionId": "older"}]}),
+        api({"questionInfos": question_infos}),
+    ])
+    with pytest.raises(collector.CollectionError, match=r"saveOrUpdate.*code=1"):
+        collector.KukaClient(session, retries=0).ask(QUESTION)
+    assert session.calls[-1][1].endswith("/api/question/select")
+    assert session.calls[-1][2]["json"] == {"sessionId": "newest"}
+    assert not session.responses
+
+
 def test_invalid_utf8_stream_does_not_retry_generation():
     session = answer_session(chunks=[b"\xe7"])
     with pytest.raises(UnicodeDecodeError):
@@ -1103,6 +1146,7 @@ def concurrent_cli(tmp_path, monkeypatch):
 
     def login(client, username, password, **kwargs):
         state.logins.append(client.session)
+        state.login_client = client
         client.session.cookies.set(
             "auth", "main-cookie", domain="www.kukacenter.com", path="/chat",
         )
@@ -1165,6 +1209,8 @@ def test_concurrent_calls_overlap_with_isolated_authenticated_sessions(concurren
         assert not session.closed
         assert session is not state.logins[0]
         assert session.headers == state.logins[0].headers
+        assert client._conversation_lock is state.login_client._conversation_lock
+        assert client._used_conversations is state.login_client._used_conversations
         assert session.cookies.get("auth", domain="www.kukacenter.com", path="/chat") == "main-cookie"
         assert session.cookies.get("auth", domain="chat.kukacenter.com", path="/api") == "chat-cookie"
         chat_cookie = next(cookie for cookie in session.cookies if cookie.domain == "chat.kukacenter.com")
