@@ -15,6 +15,7 @@ import json
 import os
 import re
 import tempfile
+from bisect import bisect_left
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -344,16 +345,30 @@ class CollectionStore:
                 _atomic_bytes(path, before)
         journal.unlink()
 
-    def _publish_sorted(self, records: list[_Saved]) -> None:
+    def _publish_sorted(self, records: list[_Saved], *, insert_at: int | None = None) -> None:
         records = sorted(records, key=lambda record: self._order[record.question.id])
+        counts = [count for _, count in self._batches]
+        if insert_at is not None:
+            # Fill the first available batch at or after the insertion point.
+            # Preserve the sizes of the other batches, including shortened ones.
+            end = 0
+            for index, count in enumerate(counts):
+                end += count
+                if end >= insert_at and count < self.batch_size:
+                    counts[index] += 1
+                    break
+            else:
+                counts.append(1)
         updates = []
-        for offset in range(0, len(records), self.batch_size):
-            path = self._batch_path(offset // self.batch_size + 1)
+        offset = 0
+        for number, count in enumerate(counts, 1):
+            path = self._batch_path(number)
             content = self._prefixes.get(path, self._default_prefix + b"\n\n")
-            for record in records[offset:offset + self.batch_size]:
+            for record in records[offset:offset + count]:
                 if content and not content.endswith((b"\n\n", b"\r\n\r\n")):
                     content += b"\n\n"
                 content += record.raw
+            offset += count
             before = path.read_bytes() if path.exists() else None
             updates.append((path, before, content))
         if not any(before != after for _, before, after in updates):
@@ -423,9 +438,9 @@ class CollectionStore:
         self._batches = []
         self._saved = {}
         self._prefixes = {}
-        for number, path in sorted(numbered.items()):
+        for _, path in sorted(numbered.items()):
             self._prefixes[path], records = _read_batch(path)
-            if len(records) > self.batch_size or (number != max(numbered) and len(records) != self.batch_size):
+            if len(records) > self.batch_size:
                 raise ValueError(f"Unexpected number of records in batch {path}: {len(records)}")
             for record in records:
                 question = record.question
@@ -458,9 +473,10 @@ class CollectionStore:
         ordered_ids = sorted(self._saved, key=self._order.__getitem__)
         if (list(self._saved) != ordered_ids
                 or (ordered_ids and self._order[question.id] < self._order[ordered_ids[-1]])):
+            insert_at = bisect_left(ordered_ids, self._order[question.id], key=self._order.__getitem__)
             self._publish_sorted([
                 *self._saved.values(), _Saved(question, answer, path, block),
-            ])
+            ], insert_at=insert_at)
             self._reload()
             return self._saved[question.id].path
         previous = path.read_bytes() if path.exists() else self._default_prefix

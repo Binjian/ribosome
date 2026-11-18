@@ -314,10 +314,13 @@ preserved; the dry-run report reflects the actual saved records.
 
 All modes store completed QAs in the order of the source question list. Each
 batch holds at most `--batch-size` pairs; gaps can remain when a question fails
-or a selected range skips questions. Resume checks completed IDs across all
-batches and requests only missing questions. Inserting an earlier answer can
-move existing records between batches, preserving their prompts, exact answer
-text, and metadata. Existing introductory text stays with its original file.
+or a selected range skips questions. Removing complete records can also leave
+a partially filled earlier batch. Resume checks completed IDs across all
+batches and requests only missing questions. When the original batch has room
+at the insertion point, the new record goes back there. Inserting into a full
+batch can move existing records between batches, preserving their prompts,
+exact answer text, and metadata. Existing introductory text stays with its
+original file.
 
 Live runs also repair batches produced by the older completion-order behavior,
 and nest saved answer headings beneath their `### 小库原始回答` label, before

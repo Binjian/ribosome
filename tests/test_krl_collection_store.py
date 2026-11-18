@@ -229,6 +229,57 @@ def batch_ids(store):
             for path, _ in store._batches]
 
 
+def test_resume_shortened_middle_batch_fills_it_without_moving_later_answers(tmp_path):
+    source = questions(46)
+    first = tmp_path / "collected.md"
+    second = tmp_path / "collected_002.md"
+    third = tmp_path / "collected_003.md"
+    store = CollectionStore(first, source)
+    for question in source:
+        store.save(question, f"答案{question.id}", {"session_id": f"saved-{question.id}"})
+    original_first, original_third = first.read_bytes(), third.read_bytes()
+    prefix, records = store_module._read_batch(second)
+    second.write_bytes(prefix + b"".join(record.raw for record in records[:14]))
+    shortened = second.read_bytes()
+
+    resumed = CollectionStore(first, source)
+    assert resumed.pending(start=1) == source[34:40]
+    resumed.ensure_order()
+    assert second.read_bytes() == shortened
+
+    for question_id in (37, 35, 38, 36, 40, 39):
+        assert resumed.save(source[question_id - 1], f"新答案{question_id}") == second
+        assert first.read_bytes() == original_first
+        assert third.read_bytes() == original_third
+
+    _, recovered = store_module._read_batch(second)
+    assert [record.question.id for record in recovered] == list(range(21, 41))
+    assert [(record.answer, record.metadata) for record in recovered[:14]] == [
+        (record.answer, record.metadata) for record in records[:14]
+    ]
+    assert [record.answer for record in recovered[14:]] == [f"新答案{number}" for number in range(35, 41)]
+    assert resumed.pending(start=1) == []
+
+
+def test_repairs_keep_shortened_batch_boundaries(tmp_path):
+    source = questions(5)
+    first = tmp_path / "collected.md"
+    files = [first, tmp_path / "collected_002.md", tmp_path / "collected_003.md"]
+    for path, ids in zip(files, ([1, 2], [5], [3])):
+        path.write_text("# 批次说明\n\n" + "\n\n".join(
+            legacy_record(source[number - 1], "## 旧答案标题\n\n内容") for number in ids
+        ), encoding="utf-8")
+
+    store = CollectionStore(first, source, batch_size=2)
+    store.ensure_heading_hierarchy()
+    store.ensure_order()
+    assert batch_ids(store) == [[1, 2], [3], [5]]
+    assert store.pending(start=1) == [source[3]]
+    assert all(b"#### " in path.read_bytes() for path in files)
+    assert store.save(source[3], "恢复的答案") == files[1]
+    assert batch_ids(store) == [[1, 2], [3, 4], [5]]
+
+
 def test_insert_earlier_answer_rebatches_in_source_order_preserving_content(tmp_path):
     source = questions(4)
     path = tmp_path / "collected.md"
