@@ -127,6 +127,63 @@ def test_kqa_ask_selects_smart_mode_and_checks_persisted_answer(reuse_conversati
     }
 
 
+def test_kqa_cli_saves_verified_faq_notice_and_continues(tmp_path, monkeypatch):
+    source = tmp_path / "questions.md"
+    source.write_text("".join(
+        f"## {number:04d} 操作问题{number}\n\n如何检查设备项目{number}？\n\n"
+        for number in range(12, 15)
+    ), encoding="utf-8")
+    output = tmp_path / "qa.md"
+    questions = collector.parse_questions(source)
+    store = collector.CollectionStore(output, questions, title=kqa.PROFILE.title, mode=kqa.PROFILE.mode)
+    store.save(questions[0], ANSWER)
+    before, = _saved_records(output)
+
+    notice = "<p>非常抱歉，您的问题小库还需学习一下才可以哦</p>"
+    streamed = "##FAQ##" + notice
+    request = Mock(side_effect=[
+        _response({"sessionId": "session-13"}), _response(answer=streamed),
+        _response({"status": True}), _response({"answerContent": notice, "id": "faq-13"}),
+        _response({"sessionId": "session-14"}), _response(answer=ANSWER),
+        _response({"status": True}), _response({"answerContent": ANSWER}),
+    ])
+    monkeypatch.setattr(requests.Session, "request", request)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-password"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+
+    assert kqa.main([
+        "--questions", str(source), "--output", str(output), "--start", "12",
+        "--concurrency", "1", "--delay", "0", "--retry-delay", "0",
+    ]) == 0
+    preserved, faq, next_answer = _saved_records(output)
+    assert (preserved.question, preserved.answer, preserved.metadata) == (
+        before.question, before.answer, before.metadata,
+    )
+    assert faq.question.id == 13 and faq.answer == notice
+    assert faq.metadata["answer_id"] == "faq-13"
+    assert faq.metadata["answer_check_passed"] is True
+    assert next_answer.question.id == 14 and next_answer.answer == ANSWER
+    assert request.call_count == 8
+    assert request.call_args_list[2].kwargs["json"]["content"] == streamed
+    assert not output.with_name(".qa.diagnostics").exists()
+
+
+@pytest.mark.parametrize("streamed, persisted", [
+    ("##FAQ##" + ANSWER, ANSWER[:20]),
+    ("正文\n##FAQ##" + ANSWER, "正文\n" + ANSWER),
+])
+def test_kqa_faq_verification_still_rejects_different_answer_text(streamed, persisted):
+    question = collector.Question(13, "问题", "检查项目")
+    session = Mock()
+    session.request.side_effect = [
+        _response({"sessionId": "session-13"}), _response(answer=streamed),
+        _response({"status": True}), _response({"answerContent": persisted}),
+    ]
+    client = collector.KukaClient(session, profile=kqa.PROFILE, retries=0)
+    with pytest.raises(collector.UnverifiedAnswerError, match="Stream and saved answer differ"):
+        client.ask(question)
+
+
 @pytest.mark.parametrize("concurrency", [1, 2])
 def test_kqa_collects_from_one_and_resumes_with_matching_mode_for_all_workers(
     concurrency, tmp_path, monkeypatch,
@@ -214,7 +271,7 @@ def test_kqa_gap_insertion_preserves_existing_intro_and_labels_new_batches(tmp_p
 
 
 def test_kqa_protocol_mismatches_drain_and_regenerate_serially(tmp_path, monkeypatch):
-    """Replay the reported 35/28 mismatch without inventing its upstream text."""
+    """Regenerate answers serially after exhausting retries on content mismatches."""
     questions = [collector.Question(number, f"问题{number}", f"检查项目{number}")
                  for number in range(1, 16)]
     output = tmp_path / "qa.md"
@@ -227,9 +284,7 @@ def test_kqa_protocol_mismatches_drain_and_regenerate_serially(tmp_path, monkeyp
         record.question.id: (record.question, record.answer, record.metadata)
         for record in _saved_records(output)
     }
-    # Synthetic stand-ins retain only the diagnostic lengths from the log.
     bad_stream, bad_saved = "stream-notice-" + "x" * 21, "persisted-notice-" + "y" * 11
-    assert (len(bad_stream), len(bad_saved)) == (35, 28)
     first_mismatch = threading.Event()
     initial_started = {number: threading.Event() for number in (11, 12)}
     fourteen_started = threading.Event()

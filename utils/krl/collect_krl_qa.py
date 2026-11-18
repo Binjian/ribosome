@@ -78,6 +78,7 @@ KRL_PROFILE = CollectionProfile(
 )
 
 REFUSAL = "**输出答案** 非常抱歉！由于回答中可能涉及敏感词，无法提供答案。请重新输入问答，感谢您的理解和支持！"
+FAQ_STREAM_PREFIX = "##FAQ##"
 TERMS = (
     f"{MAIN_URL}/policy/kuka_center_legal_statement.html",
     f"{MAIN_URL}/policy/kuka_center_privacy_policy.html",
@@ -656,6 +657,9 @@ class KukaClient:
             )
         expected = _answer_for_comparison(streamed)
         actual = _answer_for_comparison(answer)
+        if self.profile.key == "kqa" and actual != expected and expected.startswith(FAQ_STREAM_PREFIX):
+            # KQA can stream an FAQ marker that the saved answer omits.
+            expected = expected.removeprefix(FAQ_STREAM_PREFIX).lstrip("\n")
         if actual != expected:
             first_difference = next(
                 (index for index, (left, right) in enumerate(zip(expected, actual))

@@ -182,6 +182,11 @@ newlines, while preserving spaces and indentation; the original persisted
 Markdown is saved verbatim. If the site's check rejects an answer, it saves the
 refusal shown by the frontend.
 
+KQA streams can begin with a `##FAQ##` marker that KUKA omits from the saved
+answer. The collector sends the full stream to the site's answer check and
+ignores the leading marker when comparing it with the saved answer. A verified
+notice that KUKA cannot answer yet is saved verbatim and collection continues.
+
 If creating a conversation returns `code=1`, all three collectors check whether
 the newest conversation is empty, using the same history checks as the web
 client. KRLU also checks for existing project files and training state before
@@ -222,8 +227,8 @@ other terminal errors retain their existing stop-and-drain behavior.
 `--retries 0` also disables this recovery.
 
 A persistent mismatch always prevents publication of that answer. Its log includes
-the stream/saved character counts and the first differing offset after newline
-normalization (starting at zero), without printing answer text.
+the raw stream/saved character counts and the first differing offset in the
+comparison (starting at zero), without printing answer text.
 
 On the first mismatch in each generation, the CLI also saves a private diagnostic
 JSON file beside the output in `.<output-stem>.diagnostics/`. For KQA, the default
@@ -234,10 +239,8 @@ payloads. These files remain separate from collected answers and never mark a
 question complete. Use `--diagnostics-dir PATH` to choose another directory, or
 `--no-diagnostics` to disable response capture.
 
-For repeated short responses, inspect those two diagnostic fields before
-assigning a server-side cause. Counts such as 35 and 28 characters do not establish
-a concurrency limit, an authentication problem, or harmless formatting changes.
-The replacement answer still has to pass verification.
+For repeated short responses, compare the two diagnostic fields to see whether
+the answer text differs or the stream carries an extra marker.
 
 Use `--retries 0` to disable retries, or adjust `--retries` and `--retry-delay`.
 Authentication/API rejections and malformed response types stop immediately.
