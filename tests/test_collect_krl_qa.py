@@ -621,37 +621,86 @@ def test_request_failure_redacts_signed_url_and_credentials(monkeypatch):
     assert "/cas/login" in str(error.value)
 
 
-def test_login_posts_md5_captcha_and_signed_chat_credentials(monkeypatch, capsys):
+@pytest.mark.parametrize("retry_gets", [False, True], ids=["first-attempt", "retry-login-gets"])
+def test_login_posts_md5_captcha_and_signed_chat_credentials(retry_gets, monkeypatch, capsys, caplog):
     signature = {"uuid": "account-uuid", "timestamp": 123, "nonceStr": "nonce", "sign": "signature"}
-    session = Session([
+    responses = [
         Response(url=LOGIN_URL, text=FORM),
         Response(content_type="image/png", content=b"captcha-image"),
         Response(), api(signature), api({}),
-    ])
+    ]
+    if retry_gets:
+        for stage in (3, 1, 0):
+            responses.insert(stage, wrapped_tls_error(ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "private-token")))
+    session = Session(responses)
     answers = iter(["yes", "abcd"])
     monkeypatch.setattr(builtins, "input", lambda prompt: next(answers))
     monkeypatch.setattr(collector.getpass, "getpass", lambda prompt: "test-secret")
-    collector.KukaClient(session).login("test-user")
-    login_post = session.calls[2]
+    collector.KukaClient(session, retries=1, retry_delay=0).login("test-user")
+    if retry_gets:
+        first_page, page, first_captcha, captcha, login_post, first_sign, sign, chat_login = session.calls
+        assert first_page == page
+        assert first_captcha[:2] == captcha[:2]
+        assert first_captcha[2]["params"]["uuid"] != captcha[2]["params"]["uuid"]
+        assert first_sign[:2] == sign[:2]
+        assert first_sign[2]["params"]["nonceStr"] != sign[2]["params"]["nonceStr"]
+        assert caplog.text.count("TLS connection closed or reset (SSLError)") == 3
+        assert "private-token" not in caplog.text
+    else:
+        page, captcha, login_post, sign, chat_login = session.calls
+    assert page[:2] == ("GET", collector.MAIN_URL + "/chat")
     fields = login_post[2]["data"]
     assert login_post[:2] == ("POST", LOGIN_URL)
     assert fields["username"] == "test-user"
     assert fields["password"] == hashlib.md5(b"test-secret").hexdigest()
     assert fields["captcha"] == "abcd" and fields["execution"] == "flow&token"
-    assert fields["uuid"] == session.calls[1][2]["params"]["uuid"]
+    assert fields["uuid"] == captcha[2]["params"]["uuid"]
     assert fields["loginType"] == "0"
-    assert session.calls[3][0] == "GET"
-    assert session.calls[3][1] == collector.MAIN_URL + "/api/api-b/program_assistant/api/sign"
-    assert session.calls[4][2]["json"] == {
+    assert sign[:2] == ("GET", collector.MAIN_URL + "/api/api-b/program_assistant/api/sign")
+    assert chat_login[:2] == ("POST", collector.CHAT_URL + "/api/login")
+    assert chat_login[2]["json"] == {
         "uuid": "account-uuid", "timestamp": "123", "nonceStr": "nonce", "signature": "signature",
     }
-    assert session.calls[4][2]["headers"] == {
+    assert chat_login[2]["headers"] == {
         "Origin": collector.CHAT_URL, "Referer": collector.CHAT_URL + "/",
     }
+    assert not session.responses
     output = capsys.readouterr().out
     assert "test-secret" not in output
     captcha_line = next(line for line in output.splitlines() if "CAPTCHA:" in line)
     assert not Path(captcha_line.split(": ", 1)[1]).exists()
+
+
+@pytest.mark.parametrize("retries, cause, attempts, diagnostic", [
+    (0, ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "private-token"), 1, "1 attempt"),
+    (1, ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "private-token"), 2, "2 attempt"),
+    (3, ssl.SSLCertVerificationError(ssl.SSL_ERROR_SSL, "private-token"), 1,
+     "TLS certificate verification failed"),
+])
+def test_login_page_retries_are_bounded_and_keep_certificate_errors_terminal(
+    retries, cause, attempts, diagnostic, caplog,
+):
+    session = Session([wrapped_tls_error(cause) for _ in range(attempts)])
+    with pytest.raises(collector.CollectionError, match=diagnostic) as error:
+        collector.KukaClient(session, retries=retries, retry_delay=0).login("test-user", "test-secret")
+    assert [call[:2] for call in session.calls] == [("GET", collector.MAIN_URL + "/chat")] * attempts
+    assert "private-token" not in str(error.value) + caplog.text
+
+
+@pytest.mark.parametrize("stage", ["cas", "chat"])
+def test_login_post_is_never_replayed_after_a_tls_disconnect(stage, monkeypatch, caplog):
+    signature = {"uuid": "account-uuid", "timestamp": 123, "nonceStr": "nonce", "sign": "signature"}
+    responses = [Response(url=LOGIN_URL, text=FORM), Response(content_type="image/png", content=b"captcha-image")]
+    if stage == "chat":
+        responses.extend([Response(), api(signature)])
+    responses.append(wrapped_tls_error(ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "private-token")))
+    session = Session(responses)
+    monkeypatch.setattr(builtins, "input", lambda prompt: "abcd")
+    with pytest.raises(collector.CollectionError, match="TLS connection closed or reset") as error:
+        collector.KukaClient(session, retries=3, retry_delay=0).login("test-user", "test-secret", accept_terms=True)
+    expected = [LOGIN_URL] if stage == "cas" else [LOGIN_URL, collector.CHAT_URL + "/api/login"]
+    assert [url for method, url, _ in session.calls if method == "POST"] == expected
+    assert "private-token" not in str(error.value) + caplog.text
 
 
 def test_declining_terms_never_sends_credentials_or_requests_captcha(monkeypatch):

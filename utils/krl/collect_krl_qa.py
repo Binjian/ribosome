@@ -442,8 +442,23 @@ class KukaClient:
             raise ApiRejectedError(path, safe_code)
         return data.get("data")
 
+    def _fetch_captcha(self, login_url: str) -> tuple[str, bytes]:
+        captcha_uuid = str(uuid.uuid4())
+        with self.request(
+            "GET",
+            "https://sso.kukacenter.com/cas/captcha",
+            params={"uuid": captcha_uuid},
+            headers={"Referer": login_url},
+        ) as response:
+            if not response.headers.get("Content-Type", "").lower().startswith("image/"):
+                raise CollectionError("Login CAPTCHA endpoint did not return an image")
+            return captcha_uuid, response.content
+
     def login(self, username, password=None, *, accept_terms=False):
-        with self.request("GET", MAIN_URL + "/chat") as response:
+        with self.retry(
+            "Open KUKA Center login page",
+            lambda: self.request("GET", MAIN_URL + "/chat"),
+        ) as response:
             login_url = response.url
             form = LoginForm(response.text)
         if form.found:
@@ -472,25 +487,14 @@ class KukaClient:
                 password = getpass.getpass("KUKA Center password: ")
             if not password:
                 raise CollectionError("A password is required")
-            captcha_uuid = str(uuid.uuid4())
             with tempfile.TemporaryDirectory(prefix=f"{self.profile.key}-login-") as temporary:
                 captcha_path = Path(temporary) / "captcha.png"
-                with self.request(
-                    "GET",
-                    "https://sso.kukacenter.com/cas/captcha",
-                    params={"uuid": captcha_uuid},
-                    headers={"Referer": login_url},
-                ) as response:
-                    if (
-                        not response.headers.get("Content-Type", "")
-                        .lower()
-                        .startswith("image/")
-                    ):
-                        raise CollectionError(
-                            "Login CAPTCHA endpoint did not return an image"
-                        )
-                    captcha_path.write_bytes(response.content)
-                    captcha_path.chmod(0o600)
+                captcha_uuid, image = self.retry(
+                    "Fetch KUKA Center CAPTCHA",
+                    lambda: self._fetch_captcha(login_url),
+                )
+                captcha_path.write_bytes(image)
+                captcha_path.chmod(0o600)
                 print(
                     f"Open this image and read the site's CAPTCHA: {captcha_path}",
                     flush=True,
@@ -530,10 +534,13 @@ class KukaClient:
                         )
         # The main site signs its embedded chat login; CAS cookies alone do not
         # authenticate the chat host. Each requests.Session keeps both in memory.
-        signature = self.api(
-            "/api-b/program_assistant/api/sign",
-            {"nonceStr": str(uuid.uuid4())},
-            main_site=True,
+        signature = self.retry(
+            "Fetch KUKA Center chat signature",
+            lambda: self.api(
+                "/api-b/program_assistant/api/sign",
+                {"nonceStr": str(uuid.uuid4())},
+                main_site=True,
+            ),
         )
         if not isinstance(signature, dict) or not all(
             signature.get(key) is not None and str(signature[key]) != ""
@@ -1062,7 +1069,8 @@ def build_parser(*, profile=KRL_PROFILE):
     )
     parser.add_argument(
         "--retries", type=int, default=3,
-        help="Additional attempts per stage after transient HTTP errors or saved-answer mismatches (default: 3)",
+        help=("Additional attempts after transient HTTP errors on login GETs and collection stages, "
+              "or after saved-answer mismatches (default: 3)"),
     )
     if profile.key == "kqa":
         parser.add_argument(

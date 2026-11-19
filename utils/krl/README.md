@@ -188,6 +188,11 @@ The script has no password command-line option and keeps loaded passwords and
 authentication cookies in memory. `--accept-login-terms` explicitly accepts the
 site's policies without the consent prompt; it does not automate CAPTCHA entry.
 
+The login page, CAPTCHA download, and chat-signature request each use the
+configured retry budget for temporary connection failures. A CAPTCHA download
+retry requests a fresh challenge before displaying the image. The collector
+submits each authentication form once per run.
+
 Each question gets its own conversation with the KRL model. The collector waits
 for the complete UTF-8 stream, applies the site's answer check, and compares the
 persisted Markdown answer with the stream before saving it. It preserves code
@@ -390,7 +395,7 @@ the process exits or crashes.
 | `--delay` | 2 seconds | Sequential pause; with concurrency > 1, global spacing between new-question dispatches. |
 | `--request-timeout` | 180 seconds | Non-streaming HTTP read idle timeout; connection timeout is 20 seconds. |
 | `--answer-timeout` | 900 seconds | Streaming read idle timeout and answer-duration limit checked as chunks arrive. |
-| `--retries` | 3 | Additional attempts per collection step after transient HTTP failures or missing/mismatching persisted answers; 0 disables retries. |
+| `--retries` | 3 | Additional attempts for login GETs and collection steps after transient HTTP failures or missing or mismatching persisted answers. Set to 0 to disable retries. |
 | `--retry-delay` | 5 seconds | Initial retry delay, doubling up to 60 seconds. |
 | `--diagnostics-dir` | `.<output-stem>.diagnostics/` beside the output file | Directory for private JSON files containing unverified stream/saved responses. |
 | `--no-diagnostics` | Off | Disable unverified-response diagnostic files. |
