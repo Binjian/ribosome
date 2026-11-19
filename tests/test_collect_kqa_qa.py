@@ -32,11 +32,23 @@ def _response(data=None, *, answer=None, code="0"):
     return response
 
 
+def _interrupted_stream(*chunks):
+    response = _response(answer="")
+
+    def read_chunks(*args, **kwargs):
+        yield from chunks
+        raise requests.exceptions.ChunkedEncodingError("private-response-detail")
+
+    response.iter_content.side_effect = read_chunks
+    return response
+
+
 def test_kqa_defaults_and_question_bank_are_complete_and_distinct():
     args = kqa.build_parser().parse_args([])
     assert args.questions == ROOT / "assets/KQA/kqa_questions_1000.md"
     assert args.output == ROOT / "assets/KQA/kqa_qa_collected.md"
     assert args.start == 1
+    assert args.recover_saved_answer is False
     assert kqa.PROFILE.robot_model == "intelligent_customer_service_robot"
     assert kqa.PROFILE.answer_path == "/api/krl/selectQuestionInfo"
     questions = collector.parse_questions(args.questions)
@@ -48,6 +60,8 @@ def test_kqa_defaults_and_question_bank_are_complete_and_distinct():
     krl_args = collector.build_parser().parse_args([])
     assert krl_args.start == 19
     assert krl_args.output == ROOT / "assets/KRL/krl_qa_collected.md"
+    with pytest.raises(SystemExit):
+        collector.build_parser().parse_args(["--recover-saved-answer"])
 
 
 @pytest.mark.parametrize("module", [False, True])
@@ -125,6 +139,82 @@ def test_kqa_ask_selects_smart_mode_and_checks_persisted_answer(reuse_conversati
         "question": question.prompt, "content": question.prompt,
         "sessionId": "smart-session", "requestId": "smart-session", "uuid": payload["uuid"],
     }
+
+
+@pytest.mark.parametrize("concurrency", [1, 2])
+def test_kqa_cli_recovers_delayed_saved_answer_for_the_interrupted_attempt(concurrency, tmp_path, monkeypatch):
+    source = tmp_path / "questions.md"
+    source.write_text("## 0188 工艺步骤\n\n完整问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    question, = collector.parse_questions(source)
+    request = Mock(side_effect=[
+        _response({"sessionId": "interrupted-session"}), _interrupted_stream(), _response(),
+        _response({"answerContent": ANSWER, "id": "saved-188", "time": 80,
+                   "questionContent": question.prompt}),
+        _response({"status": True}),
+    ])
+    monkeypatch.setattr(requests.Session, "request", request)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-password"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+
+    assert kqa.main([
+        "--questions", str(source), "--output", str(output), "--start", "188",
+        "--concurrency", str(concurrency), "--recover-saved-answer", "--retries", "1", "--retry-delay", "0",
+    ]) == 0
+    record, = _saved_records(output)
+    assert record.question == question and record.answer == ANSWER
+    assert record.metadata["answer_id"] == "saved-188"
+    assert record.metadata["answer_source"] == "persisted_after_stream_failure"
+    assert record.metadata["answer_check_passed"] is True
+    create, stream, first_lookup, second_lookup, check = request.call_args_list
+    assert create.args[1].endswith("/api/session/saveOrUpdate")
+    assert stream.args[1].endswith("/api/efs/stream")
+    uuid = stream.kwargs["json"]["uuid"]
+    assert first_lookup == second_lookup
+    assert second_lookup.args[1].endswith("/api/krl/selectQuestionInfo")
+    assert second_lookup.kwargs["json"] == {
+        "question": question.prompt, "content": question.prompt, "sessionId": "interrupted-session",
+        "requestId": "interrupted-session", "uuid": uuid,
+    }
+    assert check.args[1].endswith("/api/check")
+    assert check.kwargs["json"] == {"content": ANSWER, "uuid": uuid}
+
+
+@pytest.mark.parametrize("enabled,chunks,lookups", [
+    pytest.param(False, (), (), id="default-keeps-full-stream"),
+    pytest.param(True, (b"partial",), (), id="partial-stream-keeps-full-stream"),
+    pytest.param(True, (), (None, None), id="persisted-answer-never-appears"),
+    pytest.param(True, (), ({"answerContent": ANSWER, "time": 80},), id="missing-id"),
+    pytest.param(True, (), ({"answerContent": ANSWER, "id": "saved", "time": 0},), id="invalid-time"),
+    pytest.param(True, (), ({"answerContent": ANSWER, "id": "saved", "time": 80,
+                             "uuid": "wrong-uuid"},), id="wrong-uuid"),
+    pytest.param(True, (), ({"answerContent": ANSWER, "id": "saved", "time": 80,
+                             "questionContent": "another prompt"},), id="wrong-question"),
+])
+def test_kqa_retries_in_a_fresh_conversation_when_saved_answer_cannot_be_recovered(enabled, chunks, lookups):
+    question = collector.Question(188, "工艺步骤", "完整问题")
+    session = Mock()
+    session.request.side_effect = [
+        _response({"sessionId": "interrupted"}), _interrupted_stream(*chunks),
+        *(_response(lookup) for lookup in lookups),
+        _response({"sessionId": "retried"}), _response(answer=ANSWER),
+        _response({"status": True}), _response({"answerContent": ANSWER, "id": "verified"}),
+    ]
+    client = collector.KukaClient(session, profile=kqa.PROFILE, retries=1, retry_delay=0,
+                                  recover_saved_answer=enabled)
+    answer, metadata = client.ask(question)
+    assert answer == ANSWER and metadata["answer_id"] == "verified"
+    assert "answer_source" not in metadata
+    _, first_stream, *probe_calls, second_create, second_stream, check, verified = session.request.call_args_list
+    assert len(probe_calls) == len(lookups)
+    assert all(call.args[1].endswith("/api/krl/selectQuestionInfo") for call in probe_calls)
+    assert second_create.args[1].endswith("/api/session/saveOrUpdate")
+    original = first_stream.kwargs["json"]
+    regenerated = second_stream.kwargs["json"]
+    assert original["sessionId"] == "interrupted" and regenerated["sessionId"] == "retried"
+    assert original["uuid"] != regenerated["uuid"]
+    assert check.kwargs["json"] == {"content": ANSWER, "uuid": regenerated["uuid"]}
+    assert verified.kwargs["json"]["uuid"] == regenerated["uuid"]
 
 
 def test_kqa_cli_saves_verified_faq_notice_and_continues(tmp_path, monkeypatch):

@@ -24,6 +24,7 @@ import logging
 import math
 import os
 import re
+import ssl
 import sys
 import tempfile
 import time
@@ -107,6 +108,13 @@ class RetryableCollectionError(CollectionError):
 class ChunkedAnswerStreamError(RetryableCollectionError):
     """An answer arrived with incomplete or invalid HTTP framing."""
 
+    def __init__(self, received_bytes: int, elapsed: float):
+        self.received_bytes = received_bytes
+        super().__init__(
+            f"Answer stream interrupted {elapsed:.1f}s after headers with "
+            f"{received_bytes} bytes delivered (ChunkedEncodingError). Discarded the stream"
+        )
+
 
 class StreamRetryExhaustedError(CollectionError):
     """Generation retries ended with an interrupted chunked stream."""
@@ -134,14 +142,18 @@ def http_failure(exc: Exception, context: str) -> CollectionError | None:
         SSLError,
         Timeout,
     )
+    from urllib3.util.ssl_match_hostname import CertificateError
 
     if not isinstance(exc, RequestException):
         return None
-    # iter_content wraps urllib3's read idle timeout in requests.ConnectionError.
-    # Inspect exception types, never their potentially sensitive message text.
+    # Requests wraps urllib3 and OpenSSL failures. In particular, urllib3's
+    # MaxRetryError can keep the original exception in its reason attribute.
+    # Inspect types and fixed error codes to avoid exposing request data.
     causes = [exc]
     seen = set()
     timed_out = False
+    tls_closed = False
+    certificate_failed = False
     while causes:
         cause = causes.pop()
         if id(cause) in seen:
@@ -149,15 +161,35 @@ def http_failure(exc: Exception, context: str) -> CollectionError | None:
         seen.add(id(cause))
         if isinstance(cause, Timeout) or type(cause).__name__ == "ReadTimeoutError":
             timed_out = True
+        reason = getattr(cause, "reason", None)
+        if isinstance(reason, BaseException):
+            causes.append(reason)
+        if isinstance(cause, (ssl.SSLCertVerificationError, CertificateError)):
+            certificate_failed = True
+        elif isinstance(cause, ssl.SSLError):
+            if reason == "CERTIFICATE_VERIFY_FAILED":
+                certificate_failed = True
+            elif (
+                isinstance(cause, (ssl.SSLEOFError, ssl.SSLZeroReturnError))
+                or cause.errno in (ssl.SSL_ERROR_EOF, ssl.SSL_ERROR_ZERO_RETURN)
+                or reason == "UNEXPECTED_EOF_WHILE_READING"
+            ):
+                tls_closed = True
+        elif isinstance(cause, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            tls_closed = True
         causes.extend(arg for arg in cause.args if isinstance(arg, BaseException))
         causes.extend(
             nested
             for nested in (cause.__cause__, cause.__context__)
             if nested is not None
         )
-    retryable = isinstance(
-        exc, (ConnectionError, Timeout, ChunkedEncodingError)
-    ) and not isinstance(exc, SSLError)
+    if isinstance(exc, SSLError):
+        if certificate_failed:
+            return CollectionError(f"{context}: TLS certificate verification failed (SSLError)")
+        if tls_closed:
+            return RetryableCollectionError(f"{context}: TLS connection closed or reset (SSLError)")
+        return CollectionError(f"{context}: TLS error (SSLError)")
+    retryable = isinstance(exc, (ConnectionError, Timeout, ChunkedEncodingError))
     error_type = RetryableCollectionError if retryable else CollectionError
     reason = "HTTP read/connect timeout" if timed_out else type(exc).__name__
     return error_type(f"{context}: {reason}")
@@ -280,7 +312,8 @@ def read_stream(response, timeout: float) -> str:
     decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
     parts = []
     received_bytes = 0
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     try:
         for chunk in response.iter_content(chunk_size=4096):
             if time.monotonic() > deadline:
@@ -290,9 +323,7 @@ def read_stream(response, timeout: float) -> str:
                 parts.append(decoder.decode(chunk))
     except ChunkedEncodingError as exc:
         raise ChunkedAnswerStreamError(
-            f"Answer stream interrupted after {received_bytes} bytes "
-            "(ChunkedEncodingError from an incomplete or malformed HTTP response). "
-            "Discarded the partial answer"
+            received_bytes, time.monotonic() - started
         ) from exc
     except Exception as exc:
         failure = http_failure(
@@ -312,6 +343,7 @@ class KukaClient:
     def __init__(
         self, session, request_timeout=180.0, answer_timeout=900.0,
         retries=3, retry_delay=5.0, *, profile=KRL_PROFILE, diagnostics_dir=None,
+        recover_saved_answer=False,
     ):
         self.session = session
         self.request_timeout = request_timeout
@@ -320,6 +352,7 @@ class KukaClient:
         self.retry_delay = retry_delay
         self.profile = profile
         self.diagnostics_dir = Path(diagnostics_dir) if diagnostics_dir is not None else None
+        self.recover_saved_answer = recover_saved_answer and profile.key == "kqa"
         self._diagnosed_generations = set()
         self._conversation_lock = Lock()
         self._used_conversations = set()
@@ -328,6 +361,8 @@ class KukaClient:
         """Bound transport/persistence retries with a sanitized reason and backoff."""
         delay = min(self.retry_delay, 60.0)
         for attempt in range(self.retries + 1):
+            if attempt:
+                LOG.info("Retrying %s (attempt %d/%d)", operation, attempt + 1, self.retries + 1)
             try:
                 return action()
             except RetryableCollectionError as exc:
@@ -579,7 +614,7 @@ class KukaClient:
             self._used_conversations.add(str(session_id))
             return session_id
 
-    def generate(self, question: Question) -> tuple[str, dict]:
+    def generate(self, question: Question) -> tuple[str, dict, dict | None]:
         """Start a question in a conversation without prior turns."""
         session_id = self._open_conversation()
         question_uuid = str(uuid.uuid4())
@@ -596,17 +631,24 @@ class KukaClient:
         )
         if self.profile.robot_model is not None:
             payload.update(robotModel=self.profile.robot_model, networkSearchFlag=False)
-        with self.request(
-            "POST",
-            CHAT_URL + self.profile.stream_path,
-            json=payload,
-            stream=True,
-            # Reasoning can be silent longer than ordinary API calls. Do not
-            # cut off a 900-second answer at the 180-second API idle timeout.
-            timeout=(20, self.answer_timeout),
-        ) as response:
-            streamed = read_stream(response, self.answer_timeout)
-        return streamed, identifiers
+        try:
+            with self.request(
+                "POST",
+                CHAT_URL + self.profile.stream_path,
+                json=payload,
+                stream=True,
+                # Reasoning can be silent longer than ordinary API calls.
+                timeout=(20, self.answer_timeout),
+            ) as response:
+                streamed = read_stream(response, self.answer_timeout)
+        except ChunkedAnswerStreamError as exc:
+            if self.recover_saved_answer and exc.received_bytes == 0:
+                LOG.warning("Question %04d: %s. Looking up the same attempt", question.id, exc)
+                recovered = self._recover_saved_answer(question, identifiers)
+                if recovered is not None:
+                    return recovered["answerContent"], identifiers, recovered
+            raise
+        return streamed, identifiers, None
 
     def _write_mismatch_diagnostic(self, question, streamed, saved, identifiers, first_difference):
         """Keep one private response snapshot per generation, outside completed output."""
@@ -652,8 +694,8 @@ class KukaClient:
                 except OSError:
                     pass
 
-    def _fetch_verified_answer(self, question, streamed, identifiers):
-        """Refetch uncertain persistence without repeating generation or moderation."""
+    def _fetch_saved_answer(self, question, identifiers):
+        """Fetch nonblank Markdown for the exact submitted question and UUID."""
         saved = self.api(
             self.profile.answer_path,
             dict(identifiers, question=question.prompt, content=question.prompt),
@@ -675,6 +717,32 @@ class KukaClient:
             raise RetryableCollectionError(
                 "Chat returned an empty persisted Markdown answer; nothing saved"
             )
+        return saved
+
+    def _recover_saved_answer(self, question, identifiers):
+        """Follow KQA's browser fallback, with identity and persistence checks."""
+        def lookup():
+            saved = self._fetch_saved_answer(question, identifiers)
+            answer_id = saved.get("id")
+            duration = saved.get("time")
+            if (saved.get("uuid", identifiers["uuid"]) != identifiers["uuid"]
+                    or saved.get("questionContent", question.prompt) != question.prompt):
+                raise CollectionError("Saved response identity differs from the interrupted request")
+            if (type(answer_id) not in (str, int) or not str(answer_id).strip()
+                    or type(duration) is not int or duration <= 0):
+                raise CollectionError("Saved response lacks an answer ID or positive generation time")
+            return saved
+
+        try:
+            return self.retry(f"Question {question.id:04d} same-attempt answer lookup", lookup)
+        except CollectionError as exc:
+            LOG.warning("Question %04d: saved-answer recovery failed (%s)", question.id, exc)
+            return None
+
+    def _fetch_verified_answer(self, question, streamed, identifiers):
+        """Refetch uncertain persistence without repeating generation or moderation."""
+        saved = self._fetch_saved_answer(question, identifiers)
+        answer = saved["answerContent"]
         expected = _answer_for_comparison(streamed)
         actual = _answer_for_comparison(answer)
         if self.profile.key == "kqa" and actual != expected and expected.startswith(FAQ_STREAM_PREFIX):
@@ -698,7 +766,7 @@ class KukaClient:
         return saved
 
     def ask(self, question: Question) -> tuple[str, dict]:
-        streamed, identifiers = self.retry(
+        streamed, identifiers, recovered = self.retry(
             f"Question {question.id:04d} generation (new conversation each attempt; "
             "the previous request may still complete remotely)",
             lambda: self.generate(question),
@@ -723,13 +791,17 @@ class KukaClient:
             "question_uuid": identifiers["uuid"],
             "answer_check_passed": checked["status"],
         }
+        if recovered is not None:
+            metadata["answer_source"] = "persisted_after_stream_failure"
         if not checked["status"]:
             # Exactly the replacement displayed by the frontend's answer check.
             return REFUSAL, metadata
-        saved = self.retry(
-            f"Question {question.id:04d} saved answer fetch/verification",
-            lambda: self._fetch_verified_answer(question, streamed, identifiers),
-        )
+        saved = recovered
+        if saved is None:
+            saved = self.retry(
+                f"Question {question.id:04d} saved answer fetch/verification",
+                lambda: self._fetch_verified_answer(question, streamed, identifiers),
+            )
         answer = saved["answerContent"]
         metadata.update(answer_id=saved.get("id"), server_time=saved.get("time"))
         return answer, metadata
@@ -918,6 +990,7 @@ def _collect_with_workers(client, pending, store, concurrency, delay):
                 retries=client.retries, retry_delay=client.retry_delay,
                 profile=client.profile,
                 diagnostics_dir=client.diagnostics_dir,
+                recover_saved_answer=client.recover_saved_answer,
             )
             worker._conversation_lock = client._conversation_lock
             worker._used_conversations = client._used_conversations
@@ -991,6 +1064,11 @@ def build_parser(*, profile=KRL_PROFILE):
         "--retries", type=int, default=3,
         help="Additional attempts per stage after transient HTTP errors or saved-answer mismatches (default: 3)",
     )
+    if profile.key == "kqa":
+        parser.add_argument(
+            "--recover-saved-answer", action="store_true",
+            help="After a zero-byte stream failure, try the saved KQA answer without stream comparison",
+        )
     parser.add_argument(
         "--retry-delay", type=float, default=5.0,
         help="Initial retry delay in seconds; doubles up to 60 seconds (default: 5)",
@@ -1124,6 +1202,7 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
                         None if args.no_diagnostics else args.diagnostics_dir
                         or args.output.with_name(f".{args.output.stem}.diagnostics")
                     ),
+                    recover_saved_answer=getattr(args, "recover_saved_answer", False),
                 )
                 client.login(
                     username,

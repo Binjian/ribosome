@@ -5,6 +5,7 @@ import builtins
 import hashlib
 import json
 import os
+import ssl
 import subprocess
 import sys
 import textwrap
@@ -19,8 +20,10 @@ from types import SimpleNamespace
 
 import pytest
 import requests
-from urllib3.exceptions import ReadTimeoutError
+from urllib3.exceptions import MaxRetryError, ReadTimeoutError
+from urllib3.exceptions import SSLError as Urllib3SSLError
 from urllib3.response import HTTPResponse as Urllib3Response
+from urllib3.util.ssl_match_hostname import CertificateError
 from utils.krl import collect_krl_qa as collector
 from utils.krl.krl_collection_store import _saved_records
 
@@ -105,6 +108,19 @@ def answer_session(*, answer=ANSWER, saved=None, check=True, chunks=None,
         responses.append(api({"answerContent": answer if saved is None else saved,
                               "id": "answer-19", "time": "server-time"}))
     return Session(responses)
+
+
+def wrapped_tls_error(cause):
+    # MaxRetryError keeps the underlying exception in .reason, outside .args.
+    return requests.exceptions.SSLError(MaxRetryError(
+        None, "/api/session/saveOrUpdate?signature=private-token", Urllib3SSLError(cause),
+    ))
+
+
+def openssl_error(reason):
+    error = ssl.SSLError(ssl.SSL_ERROR_SSL, "private-token")
+    error.reason = reason
+    return error
 
 
 def test_utf8_stream_preserves_full_markdown_across_arbitrary_byte_boundaries():
@@ -294,11 +310,69 @@ def test_permanent_http_error_does_not_retry(status):
     assert failed.closed
 
 
-def test_ssl_error_does_not_retry_generation():
-    session = Session([requests.exceptions.SSLError("private-token")])
-    with pytest.raises(collector.CollectionError):
+@pytest.mark.parametrize("error, diagnostic", [
+    (requests.exceptions.SSLError("UNEXPECTED_EOF_WHILE_READING private-token"), "TLS error"),
+    (wrapped_tls_error(openssl_error("WRONG_VERSION_NUMBER")), "TLS error"),
+    (wrapped_tls_error(ssl.SSLCertVerificationError(ssl.SSL_ERROR_SSL, "private-token")),
+     "TLS certificate verification failed"),
+    (wrapped_tls_error(CertificateError("private-token")), "TLS certificate verification failed"),
+])
+def test_permanent_and_unknown_tls_failures_stop_generation(error, diagnostic, caplog):
+    session = Session([error])
+    with pytest.raises(collector.CollectionError) as raised:
         collector.KukaClient(session, retries=3, retry_delay=0).ask(QUESTION)
+    assert not isinstance(raised.value, collector.RetryableCollectionError)
+    assert f"{diagnostic} (SSLError)" in str(raised.value)
+    assert "private-token" not in str(raised.value) + caplog.text
     assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize("cause", [
+    openssl_error("UNEXPECTED_EOF_WHILE_READING"),
+    ssl.SSLError(ssl.SSL_ERROR_EOF, "private-token"),
+    ssl.SSLZeroReturnError(ssl.SSL_ERROR_ZERO_RETURN, "private-token"),
+    ConnectionResetError("private-token"),
+    ConnectionAbortedError("private-token"),
+    BrokenPipeError("private-token"),
+])
+def test_nested_tls_disconnects_are_retryable(cause):
+    failure = collector.http_failure(wrapped_tls_error(cause), "TLS request")
+    assert isinstance(failure, collector.RetryableCollectionError)
+    assert "TLS connection closed or reset (SSLError)" in str(failure)
+    assert "private-token" not in str(failure)
+
+
+def test_cli_retries_tls_session_creation_then_saves_verified_answer(tmp_path, monkeypatch, caplog):
+    source = tmp_path / "questions.md"
+    source.write_text("## 0188 工艺步骤\n\n完整问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    incoming = ssl.MemoryBIO()
+    connection = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).wrap_bio(
+        incoming, ssl.MemoryBIO(), server_hostname="test.example",
+    )
+    incoming.write_eof()
+    with pytest.raises(ssl.SSLEOFError) as disconnected:
+        connection.do_handshake()
+    session = answer_session(session_id="retried-conversation")
+    session.responses.appendleft(wrapped_tls_error(disconnected.value))
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
+    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+
+    assert collector.main([
+        "--questions", str(source), "--output", str(output),
+        "--start", "188", "--retries", "1", "--retry-delay", "0",
+    ]) == 0
+    saved, = _saved_records(output)
+    assert saved.question.id == 188 and saved.answer == ANSWER
+    assert saved.metadata["answer_check_passed"] is True
+    assert saved.metadata["session_id"] == "retried-conversation"
+    assert session.calls[0] == session.calls[1]
+    assert session.calls[0][1].endswith("/api/session/saveOrUpdate")
+    assert len(session.calls) == 5 and not session.responses
+    assert all(options.get("verify", True) is True for _, _, options in session.calls)
+    assert "TLS connection closed or reset (SSLError)" in caplog.text
+    assert "private-token" not in caplog.text
 
 
 def test_api_rejection_does_not_retry_generation():
@@ -1613,7 +1687,10 @@ def test_concurrent_stage_retries_preserve_generation_and_verification_boundarie
 
     def generate(client, question):
         attempt(client, "generation")
-        return ANSWER, {"sessionId": f"session-{question.id}", "requestId": f"session-{question.id}", "uuid": f"uuid-{question.id}"}
+        return ANSWER, {
+            "sessionId": f"session-{question.id}", "requestId": f"session-{question.id}",
+            "uuid": f"uuid-{question.id}",
+        }, None
 
     def api_call(client, path, payload):
         stage = "check" if path == "/api/check" else "fetch"

@@ -108,6 +108,20 @@ the selected mode and model. All collectors retain the existing storage
 format's `krl-qa-record` / `krl-qa-complete` integrity markers so parsing,
 heading repair, and recovery use the same implementation.
 
+For a KQA question whose stream closes before delivering answer bytes, use
+`--recover-saved-answer` to try the web client's saved-answer fallback. For example:
+
+```sh
+uv run utils/krl/collect_kqa_qa.py --start 188 --end 188 --concurrency 1 --recover-saved-answer
+```
+
+The collector looks up the same generation with the configured retry budget,
+checks its server answer ID and duration, and applies the usual answer check.
+Recovered records carry `answer_source: persisted_after_stream_failure` in
+their metadata. The endpoint provides a persisted snapshot without a generation
+completion flag. Standard runs require a complete stream and comparison with
+the saved answer.
+
 ## Requirements
 
 Run the commands below from the repository root, using the project Python
@@ -209,8 +223,9 @@ Rerun the same command after an interruption. Completed local pairs are skipped.
 Only a fully checked answer is published; an interrupted remote question can be
 asked again because an incomplete request is not marked complete locally.
 
-During collection, transient connection errors, timeouts, interrupted streams,
-and HTTP 408/429/500/502/503/504 responses get up to three additional attempts.
+During collection, transient connection errors, TLS disconnects, timeouts,
+interrupted streams, and HTTP 408/429/500/502/503/504 responses get up to three
+additional attempts.
 Retries wait 5, 10, then 20 seconds by default; the configurable delay doubles
 up to 60 seconds. A generation retry discards the partial stream and starts a
 fresh conversation and question UUID. The previous remote request may still
@@ -421,7 +436,8 @@ idempotent; a different answer for an existing sample is rejected.
 | Login fails | Check the account and CAPTCHA, then rerun for a fresh challenge. |
 | HTTP 463 at `/api-b/program_assistant/api/sign` | Update the collector and rerun. Main-site service requests need the frontend's `/api` proxy prefix: `/api/api-b/program_assistant/api/sign`. Completed pairs are reused. |
 | `ConnectionError` or read timeout | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun to resume. Increase `--answer-timeout` if generation needs longer silent intervals. |
-| `ChunkedEncodingError` | The HTTP response was incomplete or malformed. The warning includes the number of answer bytes received. Look for the question's later `Saved` line or check its status with `--dry-run`. Concurrent runs get a serial recovery pass if their generation retries end with this error. |
+| `SSLError` | A TLS connection that closes or resets uses the affected step's retry budget. Certificate verification failures and other TLS errors stop collection. Check the certificate or proxy configuration if the log reports a verification failure. |
+| `ChunkedEncodingError` | The HTTP response was incomplete or malformed. The warning gives the elapsed time since response headers and the number of answer bytes delivered to the collector. A `Retrying` line marks the start of each new attempt. Concurrent runs get a serial recovery pass if their generation retries end with this error. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
 | `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. For `code=1`, the collector can continue if the newest conversation is confirmed empty and available. KRLU also requires an empty project context. If collection stops, the numeric code alone does not identify the service-side cause. |
 | Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Both sequential and concurrent CLI runs then retry the unverified question once in a fresh conversation; concurrent runs first drain active calls and continue with one worker. A repeated failure stops without publishing the uncertain answer. `--retries 0` disables recovery. Inspect `streamed_answer` and `saved_answer` in the private diagnostic JSON for the actual responses; response lengths alone do not establish the server-side cause. |
