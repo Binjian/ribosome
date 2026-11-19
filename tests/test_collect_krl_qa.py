@@ -12,12 +12,15 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPResponse
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import requests
 from urllib3.exceptions import ReadTimeoutError
+from urllib3.response import HTTPResponse as Urllib3Response
 from utils.krl import collect_krl_qa as collector
 from utils.krl.krl_collection_store import _saved_records
 
@@ -108,6 +111,43 @@ def test_utf8_stream_preserves_full_markdown_across_arbitrary_byte_boundaries():
     encoded = ANSWER.encode("utf-8")
     response = Response(chunks=[bytes([byte]) for byte in encoded])
     assert collector.read_stream(response, 10) == ANSWER
+
+
+@pytest.mark.parametrize("complete", [True, False], ids=["complete", "truncated"])
+def test_chunked_answer_requires_the_terminal_http_chunk(complete):
+    answer = "### 参数\n\n私有回答\n"
+    body = answer.encode("utf-8")
+    wire = (
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: text/plain\r\n\r\n"
+        + f"{len(body):x}\r\n".encode("ascii") + body + b"\r\n"
+    )
+    if complete:
+        wire += b"0\r\n\r\n"
+    # Feed the real requests parser in memory without a network connection.
+    source = HTTPResponse(SimpleNamespace(makefile=lambda *_: BytesIO(wire)), method="POST")
+    source.begin()
+    response = requests.Response()
+    response.status_code = source.status
+    response.headers.update(source.getheaders())
+    response.raw = Urllib3Response(
+        body=source, headers=source.getheaders(), preload_content=False, original_response=source,
+    )
+    session = answer_session(answer=answer)
+    session.responses[1] = response
+    client = collector.KukaClient(session, retries=0)
+
+    if complete:
+        assert client.ask(QUESTION)[0] == answer
+        assert not session.responses
+    else:
+        with pytest.raises(collector.StreamRetryExhaustedError) as error:
+            client.ask(QUESTION)
+        assert isinstance(error.value.__cause__, collector.ChunkedAnswerStreamError)
+        message = str(error.value)
+        assert "ChunkedEncodingError" in message
+        assert f"{len(body)} bytes" in message
+        assert "私有回答" not in message
+        assert len(session.calls) == 2
 
 
 @pytest.mark.parametrize("chunks", [[], [b"", b" \n\t"]])
@@ -1330,6 +1370,7 @@ def test_terminal_failure_stops_dispatch_drains_success_and_resumes(concurrent_c
 @pytest.mark.parametrize("make_error", [
     pytest.param(lambda: collector.UnverifiedAnswerError("Stream and saved answer differ"), id="answer-mismatch"),
     pytest.param(lambda: collector.ApiRejectedError("/api/session/saveOrUpdate", "1"), id="conversation-rejected"),
+    pytest.param(lambda: collector.StreamRetryExhaustedError("Interrupted answer stream"), id="chunked-stream-exhausted"),
 ])
 @pytest.mark.parametrize("recovery", ["success", "repeat-failure", "disabled"])
 def test_concurrent_failures_drain_before_bounded_serial_recovery(

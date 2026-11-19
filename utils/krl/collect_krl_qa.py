@@ -104,6 +104,14 @@ class RetryableCollectionError(CollectionError):
     """A transient transport or persistence failure; retry the affected stage."""
 
 
+class ChunkedAnswerStreamError(RetryableCollectionError):
+    """An answer arrived with incomplete or invalid HTTP framing."""
+
+
+class StreamRetryExhaustedError(CollectionError):
+    """Generation retries ended with an interrupted chunked stream."""
+
+
 class AnswerMismatchError(RetryableCollectionError):
     """The persisted answer does not yet match the completed stream."""
 
@@ -262,6 +270,8 @@ def output_lock(output: Path):
 
 def read_stream(response, timeout: float) -> str:
     """Decode full raw Markdown; an interrupted stream is never a success."""
+    from requests.exceptions import ChunkedEncodingError
+
     content_type = response.headers.get("Content-Type", "").lower()
     if "json" in content_type or "html" in content_type:
         raise CollectionError(
@@ -269,13 +279,21 @@ def read_stream(response, timeout: float) -> str:
         )
     decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
     parts = []
+    received_bytes = 0
     deadline = time.monotonic() + timeout
     try:
         for chunk in response.iter_content(chunk_size=4096):
             if time.monotonic() > deadline:
                 raise CollectionError("Answer exceeded --answer-timeout; nothing saved")
             if chunk:
+                received_bytes += len(chunk)
                 parts.append(decoder.decode(chunk))
+    except ChunkedEncodingError as exc:
+        raise ChunkedAnswerStreamError(
+            f"Answer stream interrupted after {received_bytes} bytes "
+            "(ChunkedEncodingError from an incomplete or malformed HTTP response). "
+            "Discarded the partial answer"
+        ) from exc
     except Exception as exc:
         failure = http_failure(
             exc, "Answer stream interrupted; incomplete answer discarded"
@@ -314,10 +332,12 @@ class KukaClient:
                 return action()
             except RetryableCollectionError as exc:
                 if attempt == self.retries:
-                    error_type = (
-                        UnverifiedAnswerError
-                        if isinstance(exc, AnswerMismatchError) else CollectionError
-                    )
+                    if isinstance(exc, ChunkedAnswerStreamError):
+                        error_type = StreamRetryExhaustedError
+                    elif isinstance(exc, AnswerMismatchError):
+                        error_type = UnverifiedAnswerError
+                    else:
+                        error_type = CollectionError
                     raise error_type(
                         f"{operation} failed after {attempt + 1} attempt(s): {exc}"
                     ) from exc
@@ -779,8 +799,12 @@ async def _collect_concurrently(clients, pending, store, delay):
                         concurrency > 1 and isinstance(error, ApiRejectedError)
                         and error.path == "/api/session/saveOrUpdate" and error.code == "1"
                     )
+                    stream_interrupted = (
+                        concurrency > 1 and isinstance(error, StreamRetryExhaustedError)
+                    )
                     if (
-                        (isinstance(error, UnverifiedAnswerError) or creation_rejected)
+                        (isinstance(error, UnverifiedAnswerError) or creation_rejected
+                         or stream_interrupted)
                         and client.retries > 0 and recovery_key not in recovered
                         and failure is None and not interrupted
                     ):

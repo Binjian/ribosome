@@ -287,11 +287,12 @@ shutdown can wait through HTTP timeouts and retry backoff. Keep the process
 running until it exits to retain these answers. An output-write failure stops
 all further publication while active HTTP calls drain.
 
-An exhausted stream/saved-answer mismatch has one bounded recovery before it
-becomes terminal: the coordinator drains active calls, retries the unverified
-question in a new conversation, and lowers concurrency to 1 for the remainder
-of that run. Several mismatches in the drained calls are retried sequentially.
-This does not assume a particular account limit or accept mismatching text.
+If a question exhausts its saved-answer mismatch retries or its generation
+retries end with `ChunkedEncodingError`, the coordinator drains active calls
+and makes one recovery pass in a fresh conversation with the configured retry
+budget. Deferred questions run sequentially, and collection continues with
+one worker after a successful recovery. Each recovered answer goes through the
+full stream and saved-answer verification.
 
 For a bounded session or a separate collection:
 
@@ -419,7 +420,8 @@ idempotent; a different answer for an existing sample is rejected.
 | --- | --- |
 | Login fails | Check the account and CAPTCHA, then rerun for a fresh challenge. |
 | HTTP 463 at `/api-b/program_assistant/api/sign` | Update the collector and rerun. Main-site service requests need the frontend's `/api` proxy prefix: `/api/api-b/program_assistant/api/sign`. Completed pairs are reused. |
-| `ConnectionError`, read timeout, or interrupted stream | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun; completed pairs remain saved. Increase `--answer-timeout` if generation needs longer silent intervals. |
+| `ConnectionError` or read timeout | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun to resume. Increase `--answer-timeout` if generation needs longer silent intervals. |
+| `ChunkedEncodingError` | The HTTP response was incomplete or malformed. The warning includes the number of answer bytes received. Look for the question's later `Saved` line or check its status with `--dry-run`. Concurrent runs get a serial recovery pass if their generation retries end with this error. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
 | `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. For `code=1`, the collector can continue if the newest conversation is confirmed empty and available. KRLU also requires an empty project context. If collection stops, the numeric code alone does not identify the service-side cause. |
 | Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Both sequential and concurrent CLI runs then retry the unverified question once in a fresh conversation; concurrent runs first drain active calls and continue with one worker. A repeated failure stops without publishing the uncertain answer. `--retries 0` disables recovery. Inspect `streamed_answer` and `saved_answer` in the private diagnostic JSON for the actual responses; response lengths alone do not establish the server-side cause. |
