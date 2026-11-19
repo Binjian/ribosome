@@ -294,8 +294,9 @@ def test_kqa_collects_from_one_and_resumes_with_matching_mode_for_all_workers(
     def fail_network(*args, **kwargs):
         raise AssertionError("Offline KQA test attempted an HTTP request")
 
-    def login(client, *args, **kwargs):
+    def login(client, username, password, *, accept_terms):
         assert client.profile == kqa.PROFILE
+        assert accept_terms is True
         logins.append(client.session)
 
     def ask(client, question):

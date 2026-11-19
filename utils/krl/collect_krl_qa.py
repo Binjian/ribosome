@@ -4,9 +4,9 @@
 Run ``python utils/krl/collect_krl_qa.py --dry-run`` first. Live runs read the
 KUKACENTER_ACCOUT and KUKACENTER_PASSWORD values from utils/krl/.env beside this
 script. COLLECT_CONCURRENCY in that file sets the default concurrent questions
-(otherwise 1). Existing environment values take precedence; --username and
---concurrency override their settings. Login also requires agreement consent
-and the site's image CAPTCHA.
+(otherwise 1). Existing environment values take precedence. Use --username and
+--concurrency to override their settings. The CLI automatically accepts the
+site's login policies and prompts for the image CAPTCHA.
 
 Uses the same signed login, KRL model, streaming, answer check, and saved-answer
 endpoints as the site's chat frontend. No CAPTCHA solving or browser dependency.
@@ -1009,7 +1009,8 @@ def build_parser(*, profile=KRL_PROFILE):
     parser = argparse.ArgumentParser(
         description=(__doc__ if profile == KRL_PROFILE else
                      f"Collect original KUKA Center {profile.mode} answers into resumable Markdown batches.\n"
-                     "Login settings: utils/krl/.env; interactive CAPTCHA required.\n"
+                     "Login uses utils/krl/.env and accepts the site's policies automatically.\n"
+                     "Enter the site's image CAPTCHA when prompted.\n"
                      "Start with --dry-run to inspect pending questions offline."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1084,7 +1085,8 @@ def build_parser(*, profile=KRL_PROFILE):
     parser.add_argument(
         "--accept-login-terms",
         action="store_true",
-        help="Explicitly accept the site's login policies without an interactive prompt",
+        default=True,
+        help="Accept the site's login policies (also the default)",
     )
     parser.add_argument(
         "--repair-headings",

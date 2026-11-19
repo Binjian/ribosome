@@ -179,14 +179,12 @@ overrides the account from either source. If no account is configured, the exist
 it at a hidden prompt. Credential values are read literally without `${...}`
 interpolation, and unrelated `.env` values are not exported into the process.
 
-The login flow also asks you to accept the site's linked policies and read the
-four-character CAPTCHA from the temporary image path printed in the terminal.
-Keep the command waiting while you open that image and enter its code. The
-image is removed after the login attempt.
+All three collectors automatically accept the site's login policies. Open the
+temporary image at the path printed in the terminal and enter the four-character
+CAPTCHA. The image is removed after the login attempt.
 
 The script has no password command-line option and keeps loaded passwords and
-authentication cookies in memory. `--accept-login-terms` explicitly accepts the
-site's policies without the consent prompt; it does not automate CAPTCHA entry.
+authentication cookies in memory.
 
 The login page, CAPTCHA download, and chat-signature request each use the
 configured retry budget for temporary connection failures. A CAPTCHA download
@@ -399,7 +397,7 @@ the process exits or crashes.
 | `--retry-delay` | 5 seconds | Initial retry delay, doubling up to 60 seconds. |
 | `--diagnostics-dir` | `.<output-stem>.diagnostics/` beside the output file | Directory for private JSON files containing unverified stream/saved responses. |
 | `--no-diagnostics` | Off | Disable unverified-response diagnostic files. |
-| `--accept-login-terms` | Off | Explicitly accept the site's login policies. |
+| `--accept-login-terms` | On | Accept the site's login policies. Existing commands can keep using this flag. |
 | `--dry-run` | Off | Validate files and report pending work without network access. |
 | `--repair-headings` | Off | Repair saved answer headings offline and exit without login or new questions. |
 
@@ -450,7 +448,7 @@ idempotent; a different answer for an existing sample is rejected.
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |
 
 Exit status is 0 for success/dry run, 1 for collection or file errors (including
-declined consent or a blank/invalid CAPTCHA), 130 for Ctrl+C or end-of-input at
+a blank or invalid CAPTCHA), 130 for Ctrl+C or end-of-input at
 an interactive prompt, and 2 for invalid command-line arguments.
 The frontend HTTP interface can change, so live collection still requires an
 initial account/CAPTCHA check.

@@ -742,7 +742,11 @@ def test_cli_stops_on_second_question_failure_and_resumes_completed_pair(tmp_pat
     session = Session([])
     monkeypatch.setattr(requests, "Session", lambda: session)
     monkeypatch.setattr(collector, "load_credentials", lambda username=None: ("test-user", "test-secret"))
-    monkeypatch.setattr(collector.KukaClient, "login", lambda *args, **kwargs: None)
+
+    def login(client, username, password, *, accept_terms):
+        assert accept_terms is True
+
+    monkeypatch.setattr(collector.KukaClient, "login", login)
     calls = []
 
     def ask(client, question):
@@ -758,7 +762,7 @@ def test_cli_stops_on_second_question_failure_and_resumes_completed_pair(tmp_pat
     assert calls == [19, 20]
     assert "样本0019" in saved.decode("utf-8") and "样本0020" not in saved.decode("utf-8")
     calls.clear()
-    assert collector.main(arguments) == 1
+    assert collector.main([*arguments, "--accept-login-terms"]) == 1
     assert calls == [20]
     assert output.read_bytes() == saved
 

@@ -273,8 +273,9 @@ def test_collection_keeps_krlu_client_in_workers_preserves_code_and_resumes(conc
                  "--concurrency", str(concurrency), "--delay", "0"]
     asked, logins = [], []
 
-    def login(client, *args, **kwargs):
+    def login(client, username, password, *, accept_terms):
         assert isinstance(client, krlu.KrluClient)
+        assert accept_terms is True
         logins.append(client.session)
 
     def ask(client, question):
