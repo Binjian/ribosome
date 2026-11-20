@@ -145,17 +145,21 @@ def test_no_duplicate_and_no_silent_overwrite_or_changed_source(tmp_path):
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("mutation", [
-    lambda value: value.replace("完整答案", "被改答案"),
-    lambda value: value.split("<!-- krl-qa-complete")[0],
+@pytest.mark.parametrize("mutation, error", [
+    (lambda value: value.replace("完整答案", "被改答案"), "Saved Q&A integrity check failed"),
+    (lambda value: value.replace("完整答案", "新增的完整答案"),
+     "Saved Q&A integrity check failed .*answer length differs"),
+    (lambda value: value.replace("完整答案", "答案"),
+     "Saved Q&A integrity check failed .*answer length differs"),
+    (lambda value: value.split("<!-- krl-qa-complete")[0], "Incomplete saved answer"),
 ])
-def test_integrity_or_truncation_failure_is_not_completed(tmp_path, mutation):
+def test_integrity_or_truncation_failure_is_not_completed(tmp_path, mutation, error):
     source = questions(1)
     path = tmp_path / "collected.md"
     CollectionStore(path, source).save(source[0], "完整答案")
     damaged = mutation(path.read_text(encoding="utf-8"))
     path.write_text(damaged, encoding="utf-8")
-    with pytest.raises(ValueError, match="integrity|Incomplete"):
+    with pytest.raises(ValueError, match=error):
         CollectionStore(path, source)
     assert path.read_text(encoding="utf-8") == damaged
 
@@ -477,6 +481,34 @@ def test_modified_visible_heading_fails_integrity_validation(tmp_path, before, a
     path.write_bytes(original.replace(before.encode("utf-8"), after.encode("utf-8")))
     with pytest.raises(ValueError):
         CollectionStore(path, source)
+
+
+def test_heading_migration_preserves_confirmed_local_answer_layout(tmp_path):
+    source = questions(1)
+    path = tmp_path / "collected.md"
+    original = "## 原始标题\n\n原始正文"
+    edited = "##### 编辑后的标题\r\n\r\n编辑后的正文  \r\n"
+    edited_bytes = edited.encode("utf-8")
+    CollectionStore(path, source).save(source[0], original)
+    path.write_bytes(path.read_bytes().replace("#### 原始标题\n\n原始正文".encode("utf-8"), edited_bytes))
+
+    def record_edit(metadata):
+        metadata["original_answer_integrity"] = {
+            key: metadata.pop(key)
+            for key in ("answer_length", "answer_sha256", "answer_heading_levels")
+        }
+        metadata.update(answer_length=len(edited), answer_sha256=hashlib.sha256(edited_bytes).hexdigest())
+
+    edit_metadata(path, record_edit)
+    before = path.read_bytes()
+    store = CollectionStore(path, source)
+    store.ensure_heading_hierarchy()
+
+    assert path.read_bytes() == before
+    assert CollectionStore(path, source).completed_ids == {1}
+    record, = store_module._saved_records(path)
+    assert record.answer == edited
+    assert record.metadata["original_answer_integrity"]["answer_length"] == len(original)
 
 
 @pytest.mark.parametrize("with_length", [False, True])

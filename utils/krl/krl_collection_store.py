@@ -215,9 +215,13 @@ def _read_batch(path: Path) -> tuple[bytes, list[_Saved]]:
                     raise ValueError(f"Invalid answer length for {question.id:04d} in {path}")
                 if levels is not None:
                     answer_length += sum(_nested_levels(levels)) - sum(levels)
-                answer = answer_block[2:2 + answer_length]
-                if answer_block[2 + answer_length:] != "\n\n" + end_marker:
+                trailer = "\n\n" + end_marker
+                if not answer_block.endswith(trailer):
                     raise ValueError(f"Incomplete saved answer {question.id:04d} in {path}")
+                answer = answer_block[2:-len(trailer)]
+                if len(answer) != answer_length:
+                    raise ValueError(f"Saved Q&A integrity check failed for {question.id:04d} in {path}: "
+                                     "answer length differs from the recorded length")
             elif answer.endswith(end_marker):
                 # Accept records written before exact whitespace preservation.
                 answer = answer[:-len(end_marker)].strip()
@@ -405,8 +409,10 @@ class CollectionStore:
         records = []
         changed = False
         for record in self._saved.values():
-            levels = [level for _, level in _answer_headings(record.answer)]
-            if levels and "answer_heading_levels" not in (record.metadata or {}):
+            metadata = record.metadata or {}
+            # Reconciled local edits already store the displayed layout verbatim.
+            saved_layout = "answer_heading_levels" in metadata or "original_answer_integrity" in metadata
+            if not saved_layout and _answer_headings(record.answer):
                 raw = _render_record(
                     record.question, record.answer, record.metadata,
                     preserve_legacy_hash=record.metadata is not None
