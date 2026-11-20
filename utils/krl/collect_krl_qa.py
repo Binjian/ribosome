@@ -95,6 +95,10 @@ class CollectionError(RuntimeError):
     """A failure for which the current answer must not be published."""
 
 
+class LoginCancelled(CollectionError):
+    """The user explicitly cancelled at a login prompt."""
+
+
 class ApiRejectedError(CollectionError):
     """An API rejection with a sanitized application code."""
 
@@ -486,7 +490,7 @@ class KukaClient:
                     input("Type yes to accept and continue login: ").strip().lower()
                     != "yes"
                 ):
-                    raise CollectionError("Login cancelled before sending credentials")
+                    raise LoginCancelled("Login cancelled before sending credentials")
             if password is None:
                 password = getpass.getpass("KUKA Center password: ")
             if not password:
@@ -511,10 +515,10 @@ class KukaClient:
                         flush=True,
                     )
                     captcha = input("CAPTCHA (4 characters, or blank to cancel): ").strip()
+                    if not captcha:
+                        raise LoginCancelled("Login cancelled at the CAPTCHA prompt")
                 if len(captcha) != 4:
-                    raise CollectionError(
-                        "Login cancelled: a four-character CAPTCHA is required"
-                    )
+                    raise CollectionError("A four-character CAPTCHA is required")
                 fields = dict(form.fields)
                 fields.update(
                     username=username,
@@ -1024,6 +1028,7 @@ def build_parser(*, profile=KRL_PROFILE):
                      "Enter the site's image CAPTCHA when prompted, or use --auto-captcha.\n"
                      "Start with --dry-run to inspect pending questions offline."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="After a failed collection attempt, the CLI waits 10 seconds and resumes from saved answers.",
     )
     parser.add_argument(
         "--questions", type=Path, default=profile.questions
@@ -1116,7 +1121,7 @@ def build_parser(*, profile=KRL_PROFILE):
     return parser
 
 
-def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
+def main(argv=None, *, profile=KRL_PROFILE, client_factory=None, retry_failed_runs=False):
     client_factory = KukaClient if client_factory is None else client_factory
     parser = build_parser(profile=profile)
     args = parser.parse_args(argv)
@@ -1146,6 +1151,19 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
+    try:
+        while True:
+            status = _run_once(args, profile, client_factory)
+            if status != 1 or not retry_failed_runs or args.dry_run or args.repair_headings:
+                return status
+            LOG.warning("Collection attempt failed. Retrying in 10 seconds from saved answers")
+            time.sleep(10)
+    except KeyboardInterrupt:
+        LOG.info("Stopped. Completed pairs are preserved")
+        return 130
+
+
+def _run_once(args, profile, client_factory):
     try:
         args.questions = args.questions.resolve()
         args.output = args.output.resolve()
@@ -1184,13 +1202,6 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
                 store.ensure_heading_hierarchy()
             LOG.info("Repaired heading hierarchy for %d saved Q&A pairs", len(store.completed_ids))
             return 0
-        # HTTP dependencies are unnecessary for --help, --dry-run and --repair-headings.
-        try:
-            import requests
-        except ImportError as exc:
-            raise CollectionError(
-                "Install requests: python -m pip install requests"
-            ) from exc
         with output_lock(args.output):
             CollectionStore.recover(args.output)
             store = CollectionStore(
@@ -1200,11 +1211,19 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
             store.ensure_heading_hierarchy()
             store.ensure_order()
             pending = store.pending(args.start, args.end)
-            if args.max_questions:
+            if args.max_questions and pending:
                 pending = pending[: args.max_questions]
+                # Keep the initial selection across retries so saved answers still count toward the limit.
+                args.end = pending[-1].id
             if not pending:
                 LOG.info("All selected questions are already collected")
                 return 0
+            try:
+                import requests
+            except ImportError as exc:
+                raise CollectionError(
+                    "Install requests: python -m pip install requests"
+                ) from exc
             LOG.info(
                 "%d already saved; collecting %d pending questions from %04d",
                 len(store.completed_ids),
@@ -1268,8 +1287,9 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
                 len(store.completed_ids),
             )
         return 0
-    except (KeyboardInterrupt, EOFError):
-        LOG.error("Stopped. Completed pairs are preserved; rerun to resume")
+    except (KeyboardInterrupt, EOFError, LoginCancelled) as exc:
+        message = str(exc) if isinstance(exc, LoginCancelled) else "Stopped"
+        LOG.info("%s. Completed pairs are preserved", message)
         return 130
     except (CollectionError, OSError, ValueError) as exc:
         message = (
@@ -1277,7 +1297,7 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
             if type(exc).__module__.startswith(("requests.", "urllib3."))
             else str(exc)
         )
-        LOG.error("%s. Completed pairs are preserved; rerun to resume", message)
+        LOG.error("%s. Completed pairs are preserved", message)
         return 1
     except Exception as exc:
         # Avoid printing a requests exception that embeds a signed login URL.
@@ -1289,4 +1309,4 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(retry_failed_runs=True))

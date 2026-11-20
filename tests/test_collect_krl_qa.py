@@ -831,6 +831,82 @@ def test_cli_stops_on_second_question_failure_and_resumes_completed_pair(tmp_pat
     assert output.read_bytes() == saved
 
 
+@pytest.mark.parametrize("mode", ["krl", "kqa", "krlu"])
+@pytest.mark.parametrize("capped", [False, True])
+def test_cli_retries_failed_runs_until_selected_answers_are_saved(mode, capped, tmp_path, monkeypatch):
+    from utils.krl import collect_kqa_qa as kqa
+    from utils.krl import collect_krlu_qa as krlu
+
+    entry = {"krl": collector, "kqa": kqa, "krlu": krlu}[mode]
+    questions = tmp_path / "questions.md"
+    questions.write_text("\n".join(
+        f"## {qid:04d} 输出\n\n解释输出。\n\n```krl\n; FILE: MAIN.src\nDEF MAIN()\n"
+        "  $OUT[10] = TRUE\nEND\n```\n" for qid in (19, 20, 21)
+    ), encoding="utf-8")
+    output = tmp_path / "qa.md"
+    monkeypatch.setattr(requests, "Session", lambda: Session([]))
+    monkeypatch.setattr(collector, "load_credentials", lambda _: ("user", "password"))
+    sessions = []
+    calls = []
+    delays = []
+
+    def login(client, *args, **kwargs):
+        sessions.append(client.session)
+
+    def ask(client, question):
+        calls.append(question.id)
+        if question.id == 20 and len(sessions) < 3:
+            raise collector.CollectionError("answer generation failed")
+        return ANSWER, {}
+
+    def wait(seconds):
+        if seconds == 0:
+            return
+        delays.append(seconds)
+        assert len(delays) <= 2
+        with collector.output_lock(output):
+            assert collector.CollectionStore(output, collector.parse_questions(questions)).completed_ids == {19}
+
+    monkeypatch.setattr(collector.KukaClient, "login", login)
+    monkeypatch.setattr(collector.KukaClient, "ask", ask)
+    monkeypatch.setattr(collector, "time", SimpleNamespace(sleep=wait))
+    args = ["--questions", str(questions), "--output", str(output),
+            "--start", "19", "--delay", "0", "--retries", "0"]
+    if capped:
+        args += ["--max-questions", "2"]
+    assert entry.main(args, retry_failed_runs=True) == 0
+    assert delays == [10, 10]
+    assert len(set(sessions)) == 3
+    expected = [19, 20] if capped else [19, 20, 21]
+    assert calls == [19, 20, 20, *expected[1:]]
+    assert collector.CollectionStore(output, collector.parse_questions(questions)).completed_ids == set(expected)
+
+
+def test_ctrl_c_during_outer_retry_wait_exits(monkeypatch):
+    def interrupt(seconds):
+        assert seconds == 10
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(collector, "_run_once", lambda *args: 1)
+    monkeypatch.setattr(collector, "time", SimpleNamespace(sleep=interrupt))
+    assert collector.main([], retry_failed_runs=True) == 130
+
+
+def test_blank_captcha_cancels_the_cli_without_retry(tmp_path, monkeypatch):
+    questions = tmp_path / "questions.md"
+    questions.write_text("## 0019 真空搬运\n\n完整问题\n", encoding="utf-8")
+    output = tmp_path / "qa.md"
+    session = Session([Response(url=LOGIN_URL, text=FORM), Response(content_type="image/png")])
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(collector, "load_credentials", lambda _: ("user", "password"))
+    monkeypatch.setattr(builtins, "input", lambda _: "")
+    monkeypatch.setattr(collector, "time", SimpleNamespace(sleep=lambda _: pytest.fail("Retried cancellation")))
+    assert collector.main([
+        "--questions", str(questions), "--output", str(output),
+    ], retry_failed_runs=True) == 130
+    assert [call[0] for call in session.calls] == ["GET", "GET"]
+
+
 def test_cli_sign_http_463_preserves_existing_completed_output(tmp_path, monkeypatch):
     questions = tmp_path / "questions.md"
     questions.write_text("## 0019 真空搬运\n\n完整问题\n\n## 0020 夹取\n\n第二问题\n", encoding="utf-8")

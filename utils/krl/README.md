@@ -199,10 +199,9 @@ Each command runs its own collection; choose the mode you need. OCR runs on the
 downloaded image locally, preserving character case, the challenge UUID, and the
 existing HTTP session. No CAPTCHA prompt is shown in this mode. Credentials still
 come from the settings above. OCR output must be exactly four ASCII letters or
-digits. An OCR error stops before the login POST; a rejected login stops after
-one submission. Rerun for a fresh challenge, or omit `--auto-captcha` to enter it
-manually. OCR can misread an image, so a four-character result does not guarantee
-that login will succeed.
+digits. An OCR error ends the attempt before the login POST. If login fails,
+the next attempt fetches a fresh challenge. OCR can misread characters and
+produce a code that the site rejects.
 
 The standalone helper accepts an image URL, a local path, or a `file://` URL and
 prints only the recognized code plus a newline to stdout (errors go to stderr,
@@ -223,7 +222,7 @@ authentication cookies in memory.
 The login page, CAPTCHA download, and chat-signature request each use the
 configured retry budget for temporary connection failures. A CAPTCHA download
 retry requests a fresh challenge before displaying the image. The collector
-submits each authentication form once per run.
+submits each authentication form once per attempt.
 
 Each question gets its own conversation with the KRL model. The collector waits
 for the complete UTF-8 stream, applies the site's answer check, and compares the
@@ -256,9 +255,12 @@ questions, retries the deferred question once, and continues with one worker.
 .venv/bin/python utils/krl/collect_krl_qa.py
 ```
 
-Rerun the same command after an interruption. Completed local pairs are skipped.
-Only a fully checked answer is published; an interrupted remote question can be
-asked again because an incomplete request is not marked complete locally.
+If a live collection attempt fails, all three CLIs wait 10 seconds and resume
+using the saved batches. They stop when every selected question is answered.
+`--start`, `--end`, and `--max-questions` define the selection across attempts.
+Ctrl+C, a blank CAPTCHA entry, or end-of-input at a prompt stops the run.
+Only fully checked answers are published. An interrupted question can be asked
+again if it has no saved answer.
 
 During collection, transient connection errors, TLS disconnects, timeouts,
 interrupted streams, and HTTP 408/429/500/502/503/504 responses get up to three
@@ -279,7 +281,7 @@ worker for the rest of the run. Sequential runs retry before moving to the next
 question. This gives an unusable generation a chance to recover without
 overlapping new requests.
 The replacement answer must still pass the full check and exact stream/saved
-comparison. A second exhausted mismatch for the same question stops collection.
+comparison. A second exhausted mismatch for the same question ends the attempt.
 Terminal errors stop new work and drain active calls.
 `--retries 0` also disables this recovery.
 
@@ -299,9 +301,10 @@ question complete. Use `--diagnostics-dir PATH` to choose another directory, or
 For repeated short responses, compare the two diagnostic fields to see whether
 the answer text differs or the stream carries an extra marker.
 
-Use `--retries 0` to disable retries, or adjust `--retries` and `--retry-delay`.
-Authentication/API rejections and malformed response types stop immediately.
-Exhausting retries or cancelling preserves completed local pairs for the next run.
+Use `--retries 0` to disable retries within each attempt, or adjust `--retries`
+and `--retry-delay`. Authentication/API rejections and malformed response types
+end the current attempt immediately. The 10-second restart applies after a
+failed attempt even with `--retries 0`.
 
 ### 4. Collect concurrently
 
@@ -427,7 +430,7 @@ the process exits or crashes.
 | `--delay` | 2 seconds | Sequential pause; with concurrency > 1, global spacing between new-question dispatches. |
 | `--request-timeout` | 180 seconds | Non-streaming HTTP read idle timeout; connection timeout is 20 seconds. |
 | `--answer-timeout` | 900 seconds | Streaming read idle timeout and answer-duration limit checked as chunks arrive. |
-| `--retries` | 3 | Additional attempts for login GETs and collection steps after transient HTTP failures or missing or mismatching persisted answers. Set to 0 to disable retries. |
+| `--retries` | 3 | Additional attempts for login GETs and collection steps after transient HTTP failures or missing or mismatching persisted answers. Set to 0 to disable retries within each attempt. |
 | `--retry-delay` | 5 seconds | Initial retry delay, doubling up to 60 seconds. |
 | `--diagnostics-dir` | `.<output-stem>.diagnostics/` beside the output file | Directory for private JSON files containing unverified stream/saved responses. |
 | `--no-diagnostics` | Off | Disable unverified-response diagnostic files. |
@@ -470,9 +473,9 @@ idempotent; a different answer for an existing sample is rejected.
 
 | Symptom | Next step |
 | --- | --- |
-| Login fails | Check the account and CAPTCHA, then rerun for a fresh challenge. |
+| Login fails | The next attempt fetches a fresh CAPTCHA. If login keeps failing, stop the run and check the account and CAPTCHA. |
 | HTTP 463 at `/api-b/program_assistant/api/sign` | Update the collector and rerun. Main-site service requests need the frontend's `/api` proxy prefix: `/api/api-b/program_assistant/api/sign`. Completed pairs are reused. |
-| `ConnectionError` or read timeout | Collection retries transient failures automatically. If retries are exhausted, check connectivity and rerun to resume. Increase `--answer-timeout` if generation needs longer silent intervals. |
+| `ConnectionError` or read timeout | If step retries are exhausted, the CLI waits 10 seconds and resumes. Check connectivity if failures persist. Increase `--answer-timeout` if generation needs longer silent intervals. |
 | `SSLError` | A TLS connection that closes or resets uses the affected step's retry budget. Certificate verification failures and other TLS errors stop collection. Check the certificate or proxy configuration if the log reports a verification failure. |
 | `ChunkedEncodingError` | The HTTP response was incomplete or malformed. The warning gives the elapsed time since response headers and the number of answer bytes delivered to the collector. A `Retrying` line marks the start of each new attempt. Concurrent runs get a serial recovery pass if their generation retries end with this error. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
@@ -481,9 +484,9 @@ idempotent; a different answer for an existing sample is rejected.
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |
 
-Exit status is 0 for success/dry run, 1 for collection or file errors (including
-a blank or invalid CAPTCHA), 130 for Ctrl+C or end-of-input at
-an interactive prompt, and 2 for invalid command-line arguments.
+Exit status is 0 for success, 1 for errors in offline commands, 130 for Ctrl+C,
+a blank CAPTCHA entry, or end-of-input at an interactive prompt, and 2 for
+invalid command-line arguments.
 The frontend HTTP interface can change, so live collection still requires an
 initial account/CAPTCHA check.
 

@@ -35,9 +35,9 @@ def build_parser():
     return collector.build_parser(profile=PROFILE)
 
 
-def main(argv=None):
-    return collector.main(argv, profile=PROFILE)
+def main(argv=None, *, retry_failed_runs=False):
+    return collector.main(argv, profile=PROFILE, retry_failed_runs=retry_failed_runs)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(retry_failed_runs=True))
