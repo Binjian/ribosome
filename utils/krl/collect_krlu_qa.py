@@ -5,7 +5,8 @@ Run ``python utils/krl/collect_krlu_qa.py --dry-run`` first. Each source questio
 contains a generated KRL sample program. This entry point shares login,
 empty-conversation recovery, streaming validation, retries, concurrency, and
 atomic storage with the existing collectors. Credentials come from utils/krl/.env
-and live login requires the site's image CAPTCHA.
+and --auto-captcha reads and submits the site's image CAPTCHA locally.
+Without that option, enter the four characters at the prompt.
 """
 
 from __future__ import annotations

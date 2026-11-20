@@ -6,10 +6,11 @@ KUKACENTER_ACCOUT and KUKACENTER_PASSWORD values from utils/krl/.env beside this
 script. COLLECT_CONCURRENCY in that file sets the default concurrent questions
 (otherwise 1). Existing environment values take precedence. Use --username and
 --concurrency to override their settings. The CLI automatically accepts the
-site's login policies and prompts for the image CAPTCHA.
+site's login policies and prompts for the image CAPTCHA. Use --auto-captcha
+to recognize and submit the four characters with the optional local OCR engine.
 
 Uses the same signed login, KRL model, streaming, answer check, and saved-answer
-endpoints as the site's chat frontend. No CAPTCHA solving or browser dependency.
+endpoints as the site's chat frontend. No browser dependency.
 """
 
 from __future__ import annotations
@@ -41,8 +42,10 @@ from urllib.parse import urlsplit
 
 if __package__:
     from .krl_collection_store import CollectionStore, Question, parse_questions
+    from .solve_captcha import CaptchaError, solve_captcha
 else:
     from krl_collection_store import CollectionStore, Question, parse_questions
+    from solve_captcha import CaptchaError, solve_captcha
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -343,7 +346,7 @@ class KukaClient:
     def __init__(
         self, session, request_timeout=180.0, answer_timeout=900.0,
         retries=3, retry_delay=5.0, *, profile=KRL_PROFILE, diagnostics_dir=None,
-        recover_saved_answer=False,
+        recover_saved_answer=False, auto_captcha=False,
     ):
         self.session = session
         self.request_timeout = request_timeout
@@ -353,6 +356,7 @@ class KukaClient:
         self.profile = profile
         self.diagnostics_dir = Path(diagnostics_dir) if diagnostics_dir is not None else None
         self.recover_saved_answer = recover_saved_answer and profile.key == "kqa"
+        self.auto_captcha = auto_captcha
         self._diagnosed_generations = set()
         self._conversation_lock = Lock()
         self._used_conversations = set()
@@ -495,11 +499,18 @@ class KukaClient:
                 )
                 captcha_path.write_bytes(image)
                 captcha_path.chmod(0o600)
-                print(
-                    f"Open this image and read the site's CAPTCHA: {captcha_path}",
-                    flush=True,
-                )
-                captcha = input("CAPTCHA (4 characters, or blank to cancel): ").strip()
+                if self.auto_captcha:
+                    try:
+                        captcha = solve_captcha(image)
+                    except CaptchaError as exc:
+                        raise CollectionError(str(exc)) from exc
+                    LOG.info("Read four CAPTCHA characters locally; submitting login")
+                else:
+                    print(
+                        f"Open this image and read the site's CAPTCHA: {captcha_path}",
+                        flush=True,
+                    )
+                    captcha = input("CAPTCHA (4 characters, or blank to cancel): ").strip()
                 if len(captcha) != 4:
                     raise CollectionError(
                         "Login cancelled: a four-character CAPTCHA is required"
@@ -1010,7 +1021,7 @@ def build_parser(*, profile=KRL_PROFILE):
         description=(__doc__ if profile == KRL_PROFILE else
                      f"Collect original KUKA Center {profile.mode} answers into resumable Markdown batches.\n"
                      "Login uses utils/krl/.env and accepts the site's policies automatically.\n"
-                     "Enter the site's image CAPTCHA when prompted.\n"
+                     "Enter the site's image CAPTCHA when prompted, or use --auto-captcha.\n"
                      "Start with --dry-run to inspect pending questions offline."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1032,6 +1043,10 @@ def build_parser(*, profile=KRL_PROFILE):
     parser.add_argument(
         "--username",
         help="Override KUKACENTER_ACCOUT from the environment or utils/krl/.env",
+    )
+    parser.add_argument(
+        "--auto-captcha", action="store_true",
+        help="Recognize and submit the four CAPTCHA characters locally (requires ddddocr)",
     )
     parser.add_argument(
         "--start", type=int, default=profile.start,
@@ -1213,6 +1228,7 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None):
                         or args.output.with_name(f".{args.output.stem}.diagnostics")
                     ),
                     recover_saved_answer=getattr(args, "recover_saved_answer", False),
+                    auto_captcha=args.auto_captcha,
                 )
                 client.login(
                     username,

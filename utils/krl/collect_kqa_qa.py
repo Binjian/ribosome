@@ -4,7 +4,8 @@
 Run ``python utils/krl/collect_kqa_qa.py --dry-run`` first. This entry point
 shares login, empty-conversation recovery, streaming, validation, retries,
 concurrency, and atomic storage with the KRL collector. Credentials come from
-utils/krl/.env and live login requires the site's image CAPTCHA.
+utils/krl/.env. Use --auto-captcha to read and submit the site's image CAPTCHA
+locally, or enter it at the prompt.
 """
 
 from __future__ import annotations

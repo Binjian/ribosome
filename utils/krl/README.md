@@ -13,6 +13,7 @@ pairs are reused across runs, and each output file holds up to 20 pairs.
 | [collect_krl_qa.py](collect_krl_qa.py) | CLI; `KukaClient` | Authenticate, submit prompts to the KRL model, consume streamed answers, check them, and publish completed pairs. |
 | [collect_kqa_qa.py](collect_kqa_qa.py) | CLI | Collect 智能问答 answers using the shared client and storage, with separate KQA defaults. |
 | [collect_krlu_qa.py](collect_krlu_qa.py) | CLI | Upload generated KRL samples, wait for training, and collect KRL程序理解 answers with separate KRLU defaults. |
+| [solve_captcha.py](solve_captcha.py) | CLI; `solve_captcha` | Read four CAPTCHA characters locally from image bytes, a URL, or a file; used by all collectors with `--auto-captcha`. |
 | [generate_krlu_questions.py](generate_krlu_questions.py) | CLI | Reproduce the 1,000-question KRLU bank from program templates and comprehension scenarios. |
 | [krl_collection_store.py](krl_collection_store.py) | Python library | Parse numbered prompts, validate existing output, identify pending questions, and append completed answers atomically. |
 
@@ -34,7 +35,7 @@ chatbot answers are collected separately.
 KRLU starts at **0001** and reads `assets/KRLU/krlu_questions_1000.md`.
 Answers go to `assets/KRLU/krlu_qa_collected.md`, then
 `krlu_qa_collected_002.md`, and so on, with 20 pairs per file by default.
-The collector shares the account settings in `utils/krl/.env`, interactive CAPTCHA,
+The collector shares the account settings in `utils/krl/.env`, manual or automatic CAPTCHA,
 retries, concurrency, integrity checks, atomic publication, and ID-based resume
 described below. The module entry point is
 `python -m utils.krl.collect_krlu_qa --dry-run`.
@@ -138,7 +139,7 @@ In an environment with pip installed,
 `python -m pip install requests python-dotenv` is an alternative; use that
 environment's Python for the collector too.
 Live collection requires a KUKA Center account, connectivity to its login/chat
-services, and a person to enter the site's image CAPTCHA.
+services, and either manual CAPTCHA entry or the optional local OCR dependency.
 
 ## Tutorial: inspect, collect one answer, then resume
 
@@ -182,6 +183,39 @@ interpolation, and unrelated `.env` values are not exported into the process.
 All three collectors automatically accept the site's login policies. Open the
 temporary image at the path printed in the terminal and enter the four-character
 CAPTCHA. The image is removed after the login attempt.
+
+To read and submit the four characters automatically, install the optional
+[ddddocr](https://github.com/sml2h3/ddddocr) engine in the same Python environment
+and add `--auto-captcha` to any collector:
+
+```sh
+uv pip install --python .venv/bin/python 'ddddocr>=1.6,<2'
+.venv/bin/python utils/krl/collect_kqa_qa.py --auto-captcha
+.venv/bin/python utils/krl/collect_krl_qa.py --auto-captcha
+.venv/bin/python utils/krl/collect_krlu_qa.py --auto-captcha
+```
+
+Each command runs its own collection; choose the mode you need. OCR runs on the
+downloaded image locally, preserving character case, the challenge UUID, and the
+existing HTTP session. No CAPTCHA prompt is shown in this mode. Credentials still
+come from the settings above. OCR output must be exactly four ASCII letters or
+digits. An OCR error stops before the login POST; a rejected login stops after
+one submission. Rerun for a fresh challenge, or omit `--auto-captcha` to enter it
+manually. OCR can misread an image, so a four-character result does not guarantee
+that login will succeed.
+
+The standalone helper accepts an image URL, a local path, or a `file://` URL and
+prints only the recognized code plus a newline to stdout (errors go to stderr,
+with exit status 1):
+
+```sh
+.venv/bin/python utils/krl/solve_captcha.py 'https://example.com/captcha.png'
+.venv/bin/python utils/krl/solve_captcha.py /tmp/captcha.png
+```
+
+Use the collector option for automatic login: it reads the challenge that the
+collector already downloaded. A separate URL request can create a different
+challenge or lack the login session's cookies.
 
 The script has no password command-line option and keeps loaded passwords and
 authentication cookies in memory.
@@ -456,7 +490,7 @@ initial account/CAPTCHA check.
 ```sh
 .venv/bin/python -m pytest --confcutdir=tests -q \
   tests/test_collect_krl_qa.py tests/test_collect_kqa_qa.py tests/test_collect_krlu_qa.py \
-  tests/test_krl_collection_store.py
+  tests/test_krl_collection_store.py tests/test_solve_captcha.py
 ```
 
 These tests use fake HTTP responses and temporary files; they do not log in or

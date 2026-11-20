@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
     "corpus/copy_remaining_pdfs.py",
     "deployment/deploy_unlimited_ocr_v2.py",
     "krl/collect_krl_qa.py",
+    "krl/solve_captcha.py",
     "rag/generate_program_rag_samples.py",
     "rag/generate_regular_object_samples.py",
     "rag/rag_evaluation_samples.py",

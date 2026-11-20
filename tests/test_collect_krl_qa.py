@@ -711,6 +711,70 @@ def test_declining_terms_never_sends_credentials_or_requests_captcha(monkeypatch
     assert len(session.calls) == 1
 
 
+@pytest.mark.parametrize("mode", ["krl", "kqa", "krlu"])
+def test_auto_captcha_cli_submits_downloaded_challenge_without_prompt(mode, tmp_path, monkeypatch):
+    from utils.krl import collect_kqa_qa as kqa
+    from utils.krl import collect_krlu_qa as krlu
+
+    entry = {"krl": collector, "kqa": kqa, "krlu": krlu}[mode]
+    questions = tmp_path / "questions.md"
+    questions.write_text(
+        "## 0019 输出\n\n解释输出。\n\n```krl\n; FILE: MAIN.src\nDEF MAIN()\n"
+        "  $OUT[10] = TRUE\nEND\n```\n", encoding="utf-8",
+    )
+    output = tmp_path / "answers.md"
+    signature = {"uuid": "account", "timestamp": 123, "nonceStr": "nonce", "sign": "sign"}
+    session = Session([
+        Response(url=LOGIN_URL, text=FORM),
+        Response(content_type="image/png", content=b"exact-challenge-image"),
+        Response(), api(signature), api({}),
+    ])
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    monkeypatch.setattr(collector, "load_credentials", lambda _: ("test-user", "test-secret"))
+    monkeypatch.setattr(builtins, "input", lambda _: pytest.fail("Automatic login must not prompt"))
+    images = []
+
+    def recognize(image):
+        images.append(image)
+        return "aB27"
+
+    monkeypatch.setattr(collector, "solve_captcha", recognize)
+    monkeypatch.setattr(collector.KukaClient, "ask", lambda *a: (ANSWER, {"mode": mode}))
+    assert entry.main([
+        "--questions", str(questions), "--output", str(output),
+        "--start", "19", "--auto-captcha", "--concurrency", "1",
+    ]) == 0
+    assert images == [b"exact-challenge-image"]
+    download = session.calls[1]
+    login_post = session.calls[2]
+    assert login_post[2]["data"]["captcha"] == "aB27"
+    assert login_post[2]["data"]["uuid"] == download[2]["params"]["uuid"]
+    assert len([call for call in session.calls if call[:2] == ("POST", LOGIN_URL)]) == 1
+    assert output.is_file() and not session.responses
+
+
+@pytest.mark.parametrize("failure", [collector.CaptchaError("OCR did not return exactly four characters"),
+                                     KeyboardInterrupt()])
+def test_auto_captcha_failure_never_submits_credentials(failure, monkeypatch, tmp_path):
+    session = Session([
+        Response(url=LOGIN_URL, text=FORM),
+        Response(content_type="image/png", content=b"captcha-image"),
+    ])
+
+    def fail(image):
+        raise failure
+
+    monkeypatch.setattr(collector, "solve_captcha", fail)
+    monkeypatch.setattr(collector.tempfile, "tempdir", str(tmp_path))
+    expected = KeyboardInterrupt if isinstance(failure, KeyboardInterrupt) else collector.CollectionError
+    with pytest.raises(expected):
+        collector.KukaClient(session, auto_captcha=True).login(
+            "test-user", "test-secret", accept_terms=True,
+        )
+    assert not [call for call in session.calls if call[0] == "POST"]
+    assert not list(tmp_path.iterdir())
+
+
 def test_unexpected_login_destination_never_receives_credentials():
     session = Session([Response(url="https://unexpected.example/cas/login", text=FORM)])
     with pytest.raises(collector.CollectionError, match="Unexpected login destination"):
