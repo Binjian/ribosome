@@ -272,6 +272,46 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
+class FailedQuestions:
+    """Unanswered prompts for an output series, updated under its output lock."""
+
+    def __init__(self, output: Path):
+        self.path = output.with_name(f"{output.stem}.failed.json")
+        self._records = {}
+        try:
+            records = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid failed-question report: {self.path}") from exc
+        if not isinstance(records, list):
+            raise ValueError(f"Invalid failed-question report: {self.path}")
+        for record in records:
+            if (not isinstance(record, dict) or type(record.get("id")) is not int
+                    or record["id"] in self._records
+                    or any(not isinstance(record.get(key), str) for key in ("title", "prompt", "reason"))):
+                raise ValueError(f"Invalid failed-question record: {self.path}")
+            self._records[record["id"]] = record
+
+    def matches(self, question: Question) -> bool:
+        record = self._records.get(question.id)
+        return record is not None and (record["title"], record["prompt"]) == (question.title, question.prompt)
+
+    def record(self, question: Question, reason: str) -> None:
+        self._publish({**self._records, question.id: {
+            "id": question.id, "title": question.title, "prompt": question.prompt, "reason": reason,
+        }})
+
+    def discard_completed(self, completed_ids: set[int]) -> None:
+        if completed_ids.intersection(self._records):
+            self._publish({key: value for key, value in self._records.items() if key not in completed_ids})
+
+    def _publish(self, records: dict) -> None:
+        payload = [records[key] for key in sorted(records)]
+        _atomic_bytes(self.path, (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        self._records = records
+
+
 class CollectionStore:
     """Keep completed answers in source order, filling batches before creating more.
 

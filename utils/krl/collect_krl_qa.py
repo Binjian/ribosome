@@ -41,10 +41,20 @@ from threading import Lock
 from urllib.parse import urlsplit
 
 if __package__:
-    from .krl_collection_store import CollectionStore, Question, parse_questions
+    from .krl_collection_store import (
+        CollectionStore,
+        FailedQuestions,
+        Question,
+        parse_questions,
+    )
     from .solve_captcha import CaptchaError, solve_captcha
 else:
-    from krl_collection_store import CollectionStore, Question, parse_questions
+    from krl_collection_store import (
+        CollectionStore,
+        FailedQuestions,
+        Question,
+        parse_questions,
+    )
     from solve_captcha import CaptchaError, solve_captcha
 
 
@@ -98,6 +108,10 @@ class CollectionError(RuntimeError):
 
 class LoginCancelled(CollectionError):
     """The user explicitly cancelled at a login prompt."""
+
+
+class SessionAccessError(CollectionError):
+    """An authentication, proxy access, or TLS failure affects the whole session."""
 
 
 class ApiRejectedError(CollectionError):
@@ -215,10 +229,10 @@ def http_failure(exc: Exception, context: str, *, opening_stream=False) -> Colle
         )
     if isinstance(exc, SSLError):
         if certificate_failed:
-            return CollectionError(f"{context}: TLS certificate verification failed (SSLError)")
+            return SessionAccessError(f"{context}: TLS certificate verification failed (SSLError)")
         if tls_closed:
             return RetryableCollectionError(f"{context}: TLS connection closed or reset (SSLError)")
-        return CollectionError(f"{context}: TLS error (SSLError)")
+        return SessionAccessError(f"{context}: TLS error (SSLError)")
     retryable = isinstance(exc, (ConnectionError, Timeout, ChunkedEncodingError))
     error_type = RetryableCollectionError if retryable else CollectionError
     if opening_stream and isinstance(exc, (ConnectTimeout, ProxyError)):
@@ -342,7 +356,8 @@ def read_stream(response, timeout: float) -> str:
 
     content_type = response.headers.get("Content-Type", "").lower()
     if "json" in content_type or "html" in content_type:
-        raise CollectionError(
+        error_type = SessionAccessError if "html" in content_type else CollectionError
+        raise error_type(
             "Chat returned an error/login document instead of an answer"
         )
     decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
@@ -445,11 +460,11 @@ class KukaClient:
             ) from exc
         if not 200 <= response.status_code < 300:
             response.close()
-            error_type = (
-                RetryableCollectionError
-                if response.status_code in (408, 429, 500, 502, 503, 504)
-                else CollectionError
-            )
+            error_type = CollectionError
+            if response.status_code in (401, 403, 407):
+                error_type = SessionAccessError
+            elif response.status_code in (408, 429, 500, 502, 503, 504):
+                error_type = RetryableCollectionError
             raise error_type(
                 f"{method} {urlsplit(url).path}: HTTP {response.status_code}"
             )
@@ -472,7 +487,9 @@ class KukaClient:
             try:
                 data = response.json()
             except ValueError as exc:
-                raise CollectionError(
+                content_type = response.headers.get("Content-Type", "").lower()
+                error_type = SessionAccessError if "html" in content_type else CollectionError
+                raise error_type(
                     f"{path}: expected JSON; login may have expired"
                 ) from exc
         code = str(data.get("code")) if isinstance(data, dict) else ""
@@ -483,6 +500,8 @@ class KukaClient:
             # Only bounded numeric API codes are safe to echo. Never include
             # arbitrary server messages, signed URLs, or response bodies.
             safe_code = code if re.fullmatch(r"-?[0-9]{1,10}", code) else "unavailable"
+            if safe_code in ("401", "403", "407"):
+                raise SessionAccessError(f"{path}: API rejected request (code={safe_code})")
             raise ApiRejectedError(path, safe_code)
         return data.get("data")
 
@@ -662,6 +681,8 @@ class KukaClient:
                     raise
                 try:
                     session_id = self._latest_empty_conversation()
+                except SessionAccessError:
+                    raise
                 except CollectionError as lookup_error:
                     LOG.warning("Could not check for an empty conversation (%s)", lookup_error)
                     raise exc from lookup_error
@@ -899,14 +920,32 @@ def _failure_reason(error):
     return str(error) if isinstance(error, CollectionError) else type(error).__name__
 
 
-def _conversation_open_failed(error):
-    return isinstance(error, ConversationTransportError) or (
+def _conversation_creation_rejected(error):
+    return (
         isinstance(error, ApiRejectedError)
         and error.path == "/api/session/saveOrUpdate" and error.code == "1"
     )
 
 
-async def _collect_concurrently(clients, pending, store, delay):
+def _conversation_open_failed(error):
+    return isinstance(error, ConversationTransportError) or _conversation_creation_rejected(error)
+
+
+def _ask_sequentially(client, question, *, retry_rejected):
+    try:
+        return client.ask(question)
+    except CollectionError as error:
+        if client.retries == 0 or not (
+            isinstance(error, UnverifiedAnswerError)
+            or (retry_rejected and _conversation_creation_rejected(error))
+        ):
+            raise
+        LOG.warning("Retrying %04d once in a fresh conversation (concurrency 1): %s", question.id, error)
+    time.sleep(min(client.retry_delay, 60.0))
+    return client.ask(question)
+
+
+async def _collect_concurrently(clients, pending, store, delay, *, skip_question=None):
     """Publish completed answers and report the failure and final worker limit."""
     idle = deque(clients)
     active = {}
@@ -945,12 +984,13 @@ async def _collect_concurrently(clients, pending, store, delay):
                 active.pop(client)
                 idle.append(client)
                 if error is not None:
-                    recovery_key = (question.id, type(error))
+                    recovery_key = question.id if skip_question else (question.id, type(error))
                     needs_serial_recovery = concurrency > 1 and (
                         _conversation_open_failed(error) or isinstance(error, StreamRetryExhaustedError)
                     )
                     if (
-                        (isinstance(error, UnverifiedAnswerError) or needs_serial_recovery)
+                        (isinstance(error, UnverifiedAnswerError) or needs_serial_recovery
+                         or (skip_question and _conversation_creation_rejected(error)))
                         and client.retries > 0 and recovery_key not in recovered
                         and failure is None and not interrupted
                     ):
@@ -965,6 +1005,18 @@ async def _collect_concurrently(clients, pending, store, delay):
                             question.id, _failure_reason(error), len(active),
                         )
                         continue
+                    if skip_question and failure is None and not interrupted:
+                        try:
+                            if skip_question(question, error):
+                                continue
+                        except Exception as exc:
+                            publishing = False
+                            failure = exc
+                            LOG.error(
+                                "Failed-question report write failed (%s); draining %d active calls",
+                                _failure_reason(exc), len(active),
+                            )
+                            continue
                     if isinstance(error, (KeyboardInterrupt, EOFError)):
                         interrupted = True
                     if failure is None:
@@ -1047,7 +1099,7 @@ async def _collect_concurrently(clients, pending, store, delay):
     return failure, concurrency
 
 
-def _collect_with_workers(client, pending, store, concurrency, delay):
+def _collect_with_workers(client, pending, store, concurrency, delay, *, skip_question=None):
     import requests
 
     with ExitStack() as sessions:
@@ -1068,7 +1120,7 @@ def _collect_with_workers(client, pending, store, concurrency, delay):
             worker._conversation_lock = client._conversation_lock
             worker._used_conversations = client._used_conversations
             clients.append(worker)
-        return asyncio.run(_collect_concurrently(clients, pending, store, delay))
+        return asyncio.run(_collect_concurrently(clients, pending, store, delay, skip_question=skip_question))
 
 
 def build_parser(*, profile=KRL_PROFILE):
@@ -1114,8 +1166,15 @@ def build_parser(*, profile=KRL_PROFILE):
     )
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument(
-        "--max-questions", type=int, help="Limit newly collected answers for this run"
+        "--max-questions", type=int,
+        help=("Limit selected questions, including any that fail" if profile.key == "krlu"
+              else "Limit newly collected answers for this run"),
     )
+    if profile.key == "krlu":
+        parser.add_argument(
+            "--retry-failed", action="store_true",
+            help="Select only previously failed questions from the output's .failed.json report",
+        )
     parser.add_argument(
         "--concurrency", type=int,
         help="Maximum simultaneous questions; overrides COLLECT_CONCURRENCY from the environment or utils/krl/.env (fallback: 1)",
@@ -1179,6 +1238,19 @@ class CollectionAttempt:
     saved: int = 0
 
 
+def _select_pending(store, args, failed, skipped_this_run):
+    pending = store.pending(args.start, args.end)
+    if failed is None:
+        return pending, 0
+    failed_ids = {question.id for question in pending if failed.matches(question)}
+    if args.retry_failed:
+        retry_ids = failed_ids - skipped_this_run
+        selected = [question for question in pending if question.id in retry_ids]
+    else:
+        selected = [question for question in pending if question.id not in failed_ids]
+    return selected, len(failed_ids)
+
+
 def main(argv=None, *, profile=KRL_PROFILE, client_factory=None, retry_failed_runs=False):
     client_factory = KukaClient if client_factory is None else client_factory
     parser = build_parser(profile=profile)
@@ -1210,9 +1282,10 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None, retry_failed_ru
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
     failures_without_progress = 0
+    skipped_this_run = set()
     try:
         while True:
-            attempt = _run_once(args, profile, client_factory)
+            attempt = _run_once(args, profile, client_factory, skipped_this_run)
             if attempt.status != 1 or not retry_failed_runs or args.dry_run or args.repair_headings:
                 return attempt.status
             failures_without_progress = 0 if attempt.saved else failures_without_progress + 1
@@ -1234,7 +1307,7 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None, retry_failed_ru
         return 130
 
 
-def _run_once(args, profile, client_factory):
+def _run_once(args, profile, client_factory, skipped_this_run):
     store = None
     initial_saved = None
     try:
@@ -1252,10 +1325,13 @@ def _run_once(args, profile, client_factory):
                 args.output, questions, args.batch_size,
                 title=profile.title, mode=profile.mode,
             )
-            pending = store.pending(args.start, args.end)
+            failed = FailedQuestions(args.output) if profile.key == "krlu" else None
+            pending, previously_failed = _select_pending(store, args, failed, skipped_this_run)
             print(
                 f"Source: {len(questions)} questions; saved: {len(store.completed_ids)}; pending: {len(pending)}"
             )
+            if previously_failed:
+                print(f"Previously failed in range: {previously_failed}; report: {failed.path}")
             if pending:
                 print(
                     f"Next: {pending[0].id:04d} {pending[0].title}; last: {pending[-1].id:04d}"
@@ -1284,14 +1360,31 @@ def _run_once(args, profile, client_factory):
             store.ensure_heading_hierarchy()
             store.ensure_order()
             initial_saved = len(store.completed_ids)
-            pending = store.pending(args.start, args.end)
+            failed = FailedQuestions(args.output) if profile.key == "krlu" else None
+            if failed is not None:
+                failed.discard_completed(store.completed_ids)
+            pending, previously_failed = _select_pending(store, args, failed, skipped_this_run)
+            if failed is not None and previously_failed and not args.retry_failed:
+                LOG.info("Skipping %d previously failed question(s) listed in %s", previously_failed, failed.path)
             if args.max_questions and pending:
                 pending = pending[: args.max_questions]
-                # Keep the initial selection across retries so saved answers still count toward the limit.
+                # Keep the initial selection across automatic restarts.
                 args.end = pending[-1].id
             if not pending:
-                LOG.info("All selected questions are already collected")
+                LOG.info("No selected questions left to ask")
                 return CollectionAttempt(0)
+
+            def skip_failed_question(question, error):
+                if not isinstance(error, (CollectionError, UnicodeError)) or isinstance(
+                    error, (LoginCancelled, SessionAccessError)
+                ):
+                    return False
+                reason = _failure_reason(error)
+                failed.record(question, reason)
+                skipped_this_run.add(question.id)
+                LOG.warning("Skipped question %04d (%s). Recorded in %s", question.id, reason, failed.path)
+                return True
+
             try:
                 import requests
             except ImportError as exc:
@@ -1331,6 +1424,7 @@ def _run_once(args, profile, client_factory):
                 if args.concurrency > 1:
                     failure, args.concurrency = _collect_with_workers(
                         client, pending, store, args.concurrency, args.delay,
+                        skip_question=skip_failed_question if failed is not None else None,
                     )
                     if failure is not None:
                         raise failure
@@ -1345,19 +1439,18 @@ def _run_once(args, profile, client_factory):
                             profile.mode,
                         )
                         try:
-                            answer, metadata = client.ask(question)
-                        except UnverifiedAnswerError:
-                            if client.retries == 0:
+                            answer, metadata = _ask_sequentially(client, question, retry_rejected=failed is not None)
+                        except (CollectionError, UnicodeError) as exc:
+                            if failed is None or not skip_failed_question(question, exc):
                                 raise
-                            LOG.warning(
-                                "Retrying %04d once in a fresh conversation after failed verification "
-                                "(concurrency 1)", question.id,
-                            )
-                            time.sleep(min(client.retry_delay, 60.0))
-                            answer, metadata = client.ask(question)
-                        _save_answer(store, question, answer, metadata)
+                        else:
+                            _save_answer(store, question, answer, metadata)
                         if index + 1 < len(pending):
                             time.sleep(args.delay)
+            if failed is not None:
+                failed.discard_completed(store.completed_ids)
+                if skipped_this_run:
+                    LOG.warning("Finished with %d unanswered question(s) in %s", len(skipped_this_run), failed.path)
             LOG.info(
                 "Finished: %d Q&A pairs saved across output batches",
                 len(store.completed_ids),

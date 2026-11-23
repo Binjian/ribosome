@@ -61,6 +61,16 @@ generation; training status and file readiness are polled every two seconds.
 If the HTTPS connection or proxy tunnel fails before the stream POST is sent,
 the collector retries submission with the same trained project and question UUID.
 
+When a question exhausts its retries, KRLU records the ID, title, full prompt,
+and last failure reason in `assets/KRLU/krlu_qa_collected.failed.json` and moves
+on. A custom `--output` gets its own `.failed.json` file beside the answer
+batches. Regular runs skip matching entries in that report, and `--dry-run`
+shows how many are in the selected range. `--retry-failed` selects only those
+questions. Once an answer is saved, its entry is cleared from the report.
+`--max-questions` limits the number of selected KRLU questions, including any
+that fail. Login, session access, and local write failures stop the current
+attempt and use the usual restart policy.
+
 The source bank can be reproduced or checked offline:
 
 ```sh
@@ -260,8 +270,9 @@ questions, retries the deferred question once, and continues with one worker.
 If a live collection attempt fails, all three CLIs resume using the saved
 batches after a 10-second wait. Consecutive failures without a new answer
 increase the wait to 20 and then 40 seconds. The fourth consecutive failure
-without a save exits with status 1. Saving an answer resets the backoff, and
-collection succeeds when every selected question is answered.
+without a save exits with status 1. Saving an answer resets the backoff.
+KRLU also succeeds when the remaining selected questions are recorded in the
+failed-question report.
 `--start`, `--end`, and `--max-questions` define the selection across attempts.
 Ctrl+C, a blank CAPTCHA entry, or end-of-input at a prompt stops the run.
 Only fully checked answers are published. An interrupted question can be asked
@@ -287,8 +298,9 @@ worker for the rest of the run. Sequential runs retry before moving to the next
 question. This gives an unusable generation a chance to recover without
 overlapping new requests.
 The replacement answer must still pass the full check and exact stream/saved
-comparison. A second exhausted mismatch for the same question ends the attempt.
-Terminal errors stop new work and drain active calls.
+comparison. After a second exhausted mismatch, KRLU records the question and
+continues. KRL and KQA end the attempt. Session access errors stop new work and
+drain active calls.
 `--retries 0` also disables this recovery.
 
 A persistent mismatch always prevents publication of that answer. Its log includes
@@ -341,9 +353,9 @@ copied authentication cookies, but still use the same account. KUKA Center's
 account concurrency limits are unverified; measure a small run before increasing
 concurrency. More workers do not guarantee faster service-side generation.
 
-After a terminal question failure or the first Ctrl+C, the collector stops
-starting questions, finishes active questions with their configured retries,
-saves validated answers, and exits with status 1 or 130 respectively. Graceful
+After a terminal failure that stops the attempt or the first Ctrl+C, the
+collector stops starting questions, finishes active questions with their
+configured retries, and saves validated answers. Graceful
 shutdown can wait through HTTP timeouts and retry backoff. Keep the process
 running until it exits to retain these answers. An output-write failure stops
 all further publication while active HTTP calls drain.
@@ -486,7 +498,7 @@ idempotent; a different answer for an existing sample is rejected.
 | `ChunkedEncodingError` | The HTTP response was incomplete or malformed. The warning gives the elapsed time since response headers and the number of answer bytes delivered to the collector. A `Retrying` line marks the start of each new attempt. Concurrent runs get a serial recovery pass if their generation retries end with this error. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
 | `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. For `code=1`, the collector can continue if the newest conversation is confirmed empty and available. KRLU also requires an empty project context. If collection stops, the numeric code alone does not identify the service-side cause. |
-| Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Both sequential and concurrent CLI runs then retry the unverified question once in a fresh conversation; concurrent runs first drain active calls and continue with one worker. A repeated failure stops without publishing the uncertain answer. `--retries 0` disables recovery. Inspect `streamed_answer` and `saved_answer` in the private diagnostic JSON for the actual responses; response lengths alone do not establish the server-side cause. |
+| Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Both sequential and concurrent CLI runs then retry the unverified question once in a fresh conversation. Concurrent runs first drain active calls and continue with one worker. KRLU records a repeated failure in its `.failed.json` report. KRL and KQA end the attempt. `--retries 0` disables recovery. The private diagnostic JSON contains the `streamed_answer` and `saved_answer` texts. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |
 

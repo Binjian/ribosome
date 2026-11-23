@@ -856,7 +856,7 @@ def test_cli_retries_failed_runs_until_selected_answers_are_saved(mode, capped, 
     def ask(client, question):
         calls.append(question.id)
         if len(sessions) < 3 or (question.id == 20 and len(sessions) < 6):
-            raise collector.CollectionError("answer generation failed")
+            raise collector.SessionAccessError("chat session expired")
         return ANSWER, {}
 
     def wait(seconds):

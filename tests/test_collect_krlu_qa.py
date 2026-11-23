@@ -1,5 +1,6 @@
 """Offline KRL程序理解 upload, training, routing, and resumable collection checks."""
 
+import json
 import os
 import re
 import subprocess
@@ -355,7 +356,7 @@ def test_collection_keeps_krlu_client_in_workers_preserves_code_and_resumes(conc
     assert len(logins) == 2
 
 
-def test_create_timeouts_and_rejections_keep_restarts_serial_and_stop_without_progress(tmp_path, monkeypatch, caplog):
+def test_create_timeouts_and_rejections_are_reported_after_serial_recovery(tmp_path, monkeypatch, caplog):
     source = tmp_path / "questions.md"
     source.write_text("\n".join(f"## {number:04d} 程序理解{number}\n\n{PROMPT}" for number in range(1, 5)),
                       encoding="utf-8")
@@ -364,20 +365,16 @@ def test_create_timeouts_and_rejections_keep_restarts_serial_and_stop_without_pr
     store = collector.CollectionStore(output, questions, title=krlu.PROFILE.title, mode=krlu.PROFILE.mode)
     store.save(questions[0], ANSWER, {"session_id": "saved-project"})
     previous = output.read_bytes()
-    logins = []
-    opens = []
+    login = Mock()
+    first_timeout = iter([requests.exceptions.ReadTimeout("private response details")])
     pauses = []
-
-    def login(client, *args, **kwargs):
-        logins.append(client.session)
 
     def request(session, method, url, **kwargs):
         if url.endswith("/api/session/select"):
             return _response({})
         assert url.endswith("/api/session/saveOrUpdate")
-        opens.append((len(logins), session))
-        if len(logins) == 1:
-            raise requests.exceptions.ReadTimeout("private response details")
+        if timeout := next(first_timeout, None):
+            raise timeout
         return _response(code=1)
 
     monkeypatch.setattr(requests.Session, "request", request)
@@ -385,19 +382,64 @@ def test_create_timeouts_and_rejections_keep_restarts_serial_and_stop_without_pr
     monkeypatch.setattr(krlu.KrluClient, "login", login)
     monkeypatch.setattr(collector, "time", SimpleNamespace(sleep=pauses.append))
     assert krlu.main([
-        "--questions", str(source), "--output", str(output), "--concurrency", "3", "--auto-captcha",
+        "--questions", str(source), "--output", str(output), "--concurrency", "3",
         "--delay", "0", "--retries", "1", "--retry-delay", "0",
-    ], retry_failed_runs=True) == 1
+    ], retry_failed_runs=True) == 0
 
-    assert len(logins) == 4
-    assert [seconds for seconds in pauses if seconds] == [10, 20, 40]
-    assert any(session is not logins[0] for attempt, session in opens if attempt == 1)
-    assert opens[-3:] == list(enumerate(logins[1:], start=2))
+    login.assert_called_once()
+    assert pauses == [0]
     assert "Continuing with concurrency 1" in caplog.text
     assert "POST /api/session/saveOrUpdate: HTTP read timeout" in caplog.text
     assert "private response details" not in caplog.text
-    assert "No new answers after 4 collection attempts" in caplog.text
+    assert "Finished with 3 unanswered question(s)" in caplog.text
+    failures = json.loads(output.with_suffix(".failed.json").read_text(encoding="utf-8"))
+    assert [item["id"] for item in failures] == [2, 3, 4]
+    assert all("saveOrUpdate" in item["reason"] and "code=1" in item["reason"] for item in failures)
     assert output.read_bytes() == previous
+
+
+@pytest.mark.parametrize("concurrency", [1, 3])
+def test_failed_questions_are_skipped_on_resume_and_can_be_retried(concurrency, tmp_path, monkeypatch, capsys):
+    source = tmp_path / "questions.md"
+    source.write_text("\n".join(f"## {number:04d} 程序理解{number}\n\n{PROMPT}" for number in range(1, 5)),
+                      encoding="utf-8")
+    questions = collector.parse_questions(source)
+    output = tmp_path / "qa.md"
+    report = output.with_suffix(".failed.json")
+    arguments = ["--questions", str(source), "--output", str(output), "--concurrency", str(concurrency),
+                 "--delay", "0", "--retries", "1", "--retry-delay", "0"]
+    login = Mock()
+    asked = []
+    failing = {1, 3}
+
+    def ask(client, question):
+        asked.append(question.id)
+        if question.id in failing:
+            raise collector.UnverifiedAnswerError("Stream and saved answer differ")
+        return ANSWER, {}
+
+    monkeypatch.setattr(collector, "load_credentials", lambda _: ("test-account", "test-password"))
+    monkeypatch.setattr(krlu.KrluClient, "login", login)
+    monkeypatch.setattr(krlu.KrluClient, "ask", ask)
+    assert krlu.main(arguments, retry_failed_runs=True) == 0
+    assert sorted(asked) == [1, 1, 2, 3, 3, 4]
+    assert json.loads(report.read_text(encoding="utf-8")) == [
+        {"id": question.id, "title": question.title, "prompt": question.prompt,
+         "reason": "Stream and saved answer differ"}
+        for question in (questions[0], questions[2])
+    ]
+    assert [record.question.id for record in _saved_records(output)] == [2, 4]
+    assert krlu.main([*arguments, "--dry-run"]) == 0
+    assert "saved: 2; pending: 0" in capsys.readouterr().out
+    asked.clear()
+    assert krlu.main(arguments) == 0
+    assert not asked and login.call_count == 1
+
+    failing.clear()
+    assert krlu.main([*arguments, "--retry-failed"]) == 0
+    assert sorted(asked) == [1, 3]
+    assert [record.question.id for record in _saved_records(output)] == [1, 2, 3, 4]
+    assert json.loads(report.read_text(encoding="utf-8")) == []
 
 
 def test_interrupted_training_preserves_completed_pair_and_resume_retrains_only_missing(tmp_path, monkeypatch):
@@ -417,6 +459,7 @@ def test_interrupted_training_preserves_completed_pair_and_resume_retrains_only_
     previous = output.read_bytes()
     record, = _saved_records(output)
     assert record.question.id == 1 and record.answer == ANSWER
+    assert not output.with_suffix(".failed.json").exists()
     assert not output.with_name("qa_002.md").exists()
     paths = [call.args[1] for call in request.call_args_list]
     assert paths.count(collector.CHAT_URL + "/api/krl/train") == 2
