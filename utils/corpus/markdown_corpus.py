@@ -2,10 +2,9 @@
 
 import filecmp
 import os
+import tempfile
 from pathlib import Path
 from shutil import copy2
-import tempfile
-
 
 _IMAGE_SUFFIXES = {
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff',
@@ -41,9 +40,14 @@ def markdown_difference(source_dir, comparison_dirs):
 
 
 def _check_destination(source, destination):
-    if destination.exists() and (not destination.is_file()
-                                 or not filecmp.cmp(source, destination, shallow=False)):
+    if destination.is_symlink() or (
+        destination.exists() and (not destination.is_file()
+                                  or not filecmp.cmp(source, destination, shallow=False))
+    ):
         raise FileExistsError(f'Destination differs from source; no files moved: {destination}')
+    for parent in destination.parents:
+        if parent.is_symlink() or (parent.exists() and not parent.is_dir()):
+            raise NotADirectoryError(f'Destination parent is not a regular directory: {parent}')
 
 
 def _copy_missing(source, destination):
@@ -59,6 +63,29 @@ def _copy_missing(source, destination):
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def _validate_destination(destination, *input_roots):
+    for root in input_roots:
+        if root == destination or root in destination.parents or destination in root.parents:
+            raise ValueError('Destination must be separate from source and comparison directories')
+
+
+def _move_markdown_files(source, destination, files, *, dry_run=False):
+    resources = sorted({path for folder in {file.parent for file in files}
+                        for path in folder.rglob('*')
+                        if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES})
+    for path in [*resources, *files]:
+        _check_destination(path, destination / path.relative_to(source))
+    if dry_run:
+        return
+
+    destination.mkdir(parents=True, exist_ok=True)
+    for path in resources:
+        _copy_missing(path, destination / path.relative_to(source))
+    for path in files:
+        _copy_missing(path, destination / path.relative_to(source))
+        path.unlink()
 
 
 def move_markdown_difference(source_dir, comparison_dirs, destination_dir):
@@ -79,21 +106,9 @@ def move_markdown_difference(source_dir, comparison_dirs, destination_dir):
     source = Path(source_dir).expanduser().resolve()
     destination = Path(destination_dir).expanduser().resolve()
     comparisons = _comparison_roots(comparison_dirs)
-    for root in [source, *(root for root, _ in comparisons)]:
-        if root == destination or root in destination.parents or destination in root.parents:
-            raise ValueError('Destination must be separate from source and comparison directories')
     # Keep a materialized comparison list so generator arguments work on reruns.
     comparison_roots = [root for root, _ in comparisons]
+    _validate_destination(destination, source, *comparison_roots)
     files = markdown_difference(source, comparison_roots)
-    resources = sorted({path for folder in {file.parent for file in files}
-                        for path in folder.rglob('*')
-                        if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES})
-    for path in [*resources, *files]:
-        _check_destination(path, destination / path.relative_to(source))
-    destination.mkdir(parents=True, exist_ok=True)
-    for path in resources:
-        _copy_missing(path, destination / path.relative_to(source))
-    for path in files:
-        _copy_missing(path, destination / path.relative_to(source))
-        path.unlink()
+    _move_markdown_files(source, destination, files)
     return markdown_difference(destination, comparison_roots)

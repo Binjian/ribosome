@@ -3,8 +3,8 @@
 from pathlib import Path
 
 import pytest
-
 from utils.corpus import markdown_corpus as corpus
+from utils.corpus.move_remaining_office_markdown import move_remaining_office_markdown
 
 
 def write(root, relative, content='manual'):
@@ -12,6 +12,30 @@ def write(root, relative, content='manual'):
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_text(content, encoding='utf-8')
     return file
+
+
+def test_move_markdown_without_pdfs_uses_relative_paths(tmp_path):
+    source, pdfs, destination = [tmp_path / name for name in ['markdown', 'pdf', 'office']]
+    nested_match = write(source, 'covered/manual/manual.MD')
+    flat_match = write(source, 'covered/guide.md')
+    write(pdfs, 'covered/manual.PDF')
+    write(pdfs, 'covered/guide.pdf')
+    unmatched = write(source, 'other/manual/manual.md', '![diagram](images/diagram.png)')
+    image = write(source, 'other/manual/images/diagram.png', 'image bytes')
+    summary = write(source, 'other/manual/manual_semantics.json', 'saved summary')
+    checkpoint = write(source, '.object-summary-checkpoint.json', 'saved checkpoint')
+    expected = [unmatched.relative_to(source)]
+
+    assert move_remaining_office_markdown(source, pdfs, destination, dry_run=True) == expected
+    assert unmatched.exists() and not destination.exists()
+
+    assert move_remaining_office_markdown(source, pdfs, destination) == expected
+    assert nested_match.exists() and flat_match.exists() and not unmatched.exists()
+    assert (destination / expected[0]).read_text() == '![diagram](images/diagram.png)'
+    assert (destination / image.relative_to(source)).read_bytes() == image.read_bytes()
+    for artifact in (summary, checkpoint):
+        assert artifact.exists() and not (destination / artifact.relative_to(source)).exists()
+    assert move_remaining_office_markdown(source, pdfs, destination) == []
 
 
 def test_difference_accepts_one_or_multiple_roots_and_compares_relative_paths(tmp_path):

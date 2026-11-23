@@ -14,13 +14,30 @@ same-named PDF in a different folder may belong to another document version.
 import argparse
 import filecmp
 import os
-from pathlib import Path
-from shutil import copy2
 import sys
 import tempfile
-
+from pathlib import Path
+from shutil import copy2
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _pdfs_by_relative_path(pdf_dir):
+    pdfs = {}
+    for path in sorted(pdf_dir.rglob("*")):
+        if path.is_file() and path.suffix.lower() == ".pdf":
+            key = path.relative_to(pdf_dir).with_suffix(".pdf")
+            if key in pdfs:
+                raise ValueError(f"Multiple PDFs at the same relative path: {key}")
+            pdfs[key] = path
+    return pdfs
+
+
+def _corresponding_pdf_path(markdown):
+    parent = markdown.parent
+    if parent.name == markdown.stem:
+        parent = parent.parent
+    return parent / (markdown.stem + ".pdf")
 
 
 def copy_remaining_pdfs(markdown_dir, pdf_dir, output_dir, *, dry_run=False):
@@ -48,22 +65,13 @@ def copy_remaining_pdfs(markdown_dir, pdf_dir, output_dir, *, dry_run=False):
     )
     if not markdown_files:
         raise ValueError(f"No Markdown files found: {markdown_dir}")
-    pdfs = {}
-    for path in sorted(pdf_dir.rglob("*")):
-        if path.is_file() and path.suffix.lower() == ".pdf":
-            key = path.relative_to(pdf_dir).with_suffix(".pdf")
-            if key in pdfs:
-                raise ValueError(f"Multiple PDFs at the same relative path: {key}")
-            pdfs[key] = path
+    pdfs = _pdfs_by_relative_path(pdf_dir)
 
     matches = {}
     skipped = []
     for markdown in markdown_files:
         relative = markdown.relative_to(markdown_dir)
-        parent = relative.parent
-        if parent.name == markdown.stem:
-            parent = parent.parent
-        source = pdfs.get(parent / (markdown.stem + ".pdf"))
+        source = pdfs.get(_corresponding_pdf_path(relative))
         if source is None:
             skipped.append(relative)
         else:

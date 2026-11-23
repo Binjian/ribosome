@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.mark.parametrize("relative", [
     "corpus/copy_remaining_pdfs.py",
+    "corpus/move_remaining_office_markdown.py",
     "deployment/deploy_unlimited_ocr_v2.py",
     "krl/collect_krl_qa.py",
     "krl/solve_captcha.py",

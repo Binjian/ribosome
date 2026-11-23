@@ -11,6 +11,7 @@ library; library imports require the repository root on `sys.path`.
 | --- | --- | --- |
 | [markdown_corpus.py](markdown_corpus.py) | `markdown_difference`, `move_markdown_difference` | Select and collect Markdown absent from one or more comparison corpora. |
 | [copy_remaining_pdfs.py](copy_remaining_pdfs.py) | CLI and `copy_remaining_pdfs` | Copy the corresponding original PDFs while preserving source folders. |
+| [move_remaining_office_markdown.py](move_remaining_office_markdown.py) | CLI and `move_remaining_office_markdown` | Relocate Markdown without a corresponding PDF. |
 
 ## Tutorial: preview the remaining Markdown
 
@@ -133,6 +134,20 @@ For Python callers, `copy_remaining_pdfs(markdown_dir, pdf_dir, output_dir,
 dry_run=False)` returns a dictionary with `markdown_files`, `matched_pdfs`,
 `copied`, `reused`, and `skipped` counts. The `copied` count is zero in dry-run
 mode.
+
+## Relocate Markdown without a matching PDF
+
+```sh
+python utils/corpus/move_remaining_office_markdown.py --dry-run
+python utils/corpus/move_remaining_office_markdown.py
+```
+
+The script compares `assets/md.json.semantics.remaining` with
+`assets/pdf.remaining` using the same relative-path rules as the PDF copy tool.
+It moves the unmatched Markdown to `assets/office.remaining`, preserving the
+folder hierarchy and copying image resources alongside it. Summary JSON and
+checkpoints stay in their original locations. Use `--markdown-dir`, `--pdf-dir`,
+and `--output-dir` to override the defaults.
 
 ## Validation and troubleshooting
 
