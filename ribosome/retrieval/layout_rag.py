@@ -274,8 +274,13 @@ def _validate_ingestion_result(result: LayoutIngestionResult) -> None:
 class SQLiteRetrievalRecordStore:
     """Canonical graph plus FTS5/exact indexes with atomic document replacement."""
 
-    def __init__(self, path: str | Path = ":memory:"):
+    def __init__(self, path: str | Path = ":memory:", *, read_only: bool = False):
         self.path = str(path)
+        if read_only:
+            uri = Path(path).resolve().as_uri() + "?mode=ro"
+            self.connection = sqlite3.connect(uri, uri=True)
+            self.connection.row_factory = sqlite3.Row
+            return
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
@@ -826,6 +831,7 @@ class ChromaDenseIndex:
         pipeline_version: str = LAYOUT_PIPELINE_VERSION,
         embedding_model: str = "",
         collection_prefix: str = "layout_rag",
+        create: bool = True,
     ):
         if not embedding_model.strip():
             raise ValueError("embedding_model must identify the vector space")
@@ -837,11 +843,12 @@ class ChromaDenseIndex:
         namespace = f"{safe_prefix[:24]}_{safe_version[:24]}_{namespace_digest}"
         self.pipeline_version = pipeline_version
         self.embedding_model = embedding_model
-        self.children = client.get_or_create_collection(
+        collection = client.get_or_create_collection if create else client.get_collection
+        self.children = collection(
             name=f"{namespace}_children",
             embedding_function=None,
         )
-        self.parents = client.get_or_create_collection(
+        self.parents = collection(
             name=f"{namespace}_parents",
             embedding_function=None,
         )
