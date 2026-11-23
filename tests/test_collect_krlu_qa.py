@@ -228,6 +228,21 @@ def test_training_timeout_bounds_polling_and_request_timeouts(monkeypatch):
     assert all(max(call.kwargs["timeout"]) <= 3 for call in client.api.call_args_list)
 
 
+def test_progress_wrapper_without_an_answer_retries_generation():
+    wrapper = "<div class='prompt'>\n</div>\n"
+    complete = wrapper + ANSWER
+    session = Mock()
+    session.request.side_effect = [
+        *_project_responses(session_id="empty-answer"), _response(answer=wrapper),
+        *_project_responses(), _response(answer=complete), _response({"status": True}),
+        _response({"answerContent": complete, "id": "verified-answer"}),
+    ]
+    answer, metadata = krlu.KrluClient(session, retries=1, retry_delay=0).ask(QUESTION)
+    assert answer == complete
+    assert metadata["session_id"] == "project-session"
+    assert metadata["answer_id"] == "verified-answer"
+
+
 def test_transient_upload_failure_restarts_fresh_session_but_fetch_retry_does_not_retrain(monkeypatch):
     monkeypatch.setattr(collector.time, "sleep", lambda _: None)
     session = Mock()

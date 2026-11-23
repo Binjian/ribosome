@@ -133,7 +133,16 @@ class KrluClient(collector.KukaClient):
             else:
                 collector.LOG.info("Question %04d: retrying submission in the trained project", question.id)
             try:
-                return self._generate_prepared(question, identifiers)
+                result = self._generate_prepared(question, identifiers)
+                streamed = result[0]
+                # The prompt div holds progress messages. The answer follows it.
+                if streamed.lstrip().startswith(("<div class='prompt'>", '<div class="prompt">')):
+                    _, closed, answer = streamed.partition("</div>")
+                    if not closed or not answer.strip():
+                        raise collector.RetryableCollectionError(
+                            "Project stream returned only the progress wrapper; no answer received"
+                        )
+                return result
             except collector.UnsentStreamRequestError:
                 raise
             except collector.RetryableCollectionError:
