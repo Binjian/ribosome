@@ -117,6 +117,10 @@ class ConversationTransportError(RetryableCollectionError):
     """The connection failed while opening a new conversation."""
 
 
+class UnsentStreamRequestError(RetryableCollectionError):
+    """The stream connection failed before the HTTP POST could be sent."""
+
+
 class ChunkedAnswerStreamError(RetryableCollectionError):
     """An answer arrived with incomplete or invalid HTTP framing."""
 
@@ -145,7 +149,7 @@ def _answer_for_comparison(answer: str) -> str:
     return answer.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
 
 
-def http_failure(exc: Exception, context: str) -> CollectionError | None:
+def http_failure(exc: Exception, context: str, *, opening_stream=False) -> CollectionError | None:
     """Classify requests errors without exposing URLs, credentials, or bodies."""
     from requests.exceptions import (
         ChunkedEncodingError,
@@ -217,6 +221,10 @@ def http_failure(exc: Exception, context: str) -> CollectionError | None:
         return CollectionError(f"{context}: TLS error (SSLError)")
     retryable = isinstance(exc, (ConnectionError, Timeout, ChunkedEncodingError))
     error_type = RetryableCollectionError if retryable else CollectionError
+    if opening_stream and isinstance(exc, (ConnectTimeout, ProxyError)):
+        # A connect timeout or failure establishing the HTTPS proxy tunnel
+        # occurs before the POST. Read failures can occur after submission.
+        error_type = UnsentStreamRequestError
     reason = timeout or type(exc).__name__
     if timeout and isinstance(exc, ProxyError):
         reason += " via proxy"
@@ -424,7 +432,12 @@ class KukaClient:
         try:
             response = self.session.request(method, url, **kwargs)
         except Exception as exc:
-            failure = http_failure(exc, f"{method} {urlsplit(url).path}")
+            address = urlsplit(url)
+            failure = http_failure(
+                exc, f"{method} {address.path}",
+                opening_stream=(address.scheme == "https" and kwargs.get("stream", False)
+                                and kwargs.get("allow_redirects") is False),
+            )
             if failure is not None:
                 raise failure from exc
             raise CollectionError(
@@ -663,14 +676,19 @@ class KukaClient:
 
     def generate(self, question: Question) -> tuple[str, dict, dict | None]:
         """Start a question in a conversation without prior turns."""
+        return self._generate_prepared(question, self._prepare_generation(question))
+
+    def _prepare_generation(self, question: Question) -> dict:
         session_id = self._open_conversation()
-        question_uuid = str(uuid.uuid4())
         identifiers = {
             "sessionId": session_id,
-            "uuid": question_uuid,
+            "uuid": str(uuid.uuid4()),
             "requestId": session_id,
         }
         self.prepare_question(question, identifiers)
+        return identifiers
+
+    def _generate_prepared(self, question, identifiers):
         payload = dict(
             identifiers,
             question=question.prompt,
@@ -678,6 +696,9 @@ class KukaClient:
         )
         if self.profile.robot_model is not None:
             payload.update(robotModel=self.profile.robot_model, networkSearchFlag=False)
+        # With redirects disabled, a connect failure cannot be from a follow-up
+        # request after the original POST reached the server.
+        options = {"allow_redirects": False} if self.profile.key == "krlu" else {}
         try:
             with self.request(
                 "POST",
@@ -686,6 +707,7 @@ class KukaClient:
                 stream=True,
                 # Reasoning can be silent longer than ordinary API calls.
                 timeout=(20, self.answer_timeout),
+                **options,
             ) as response:
                 streamed = read_stream(response, self.answer_timeout)
         except ChunkedAnswerStreamError as exc:
@@ -812,12 +834,15 @@ class KukaClient:
             )
         return saved
 
-    def ask(self, question: Question) -> tuple[str, dict]:
-        streamed, identifiers, recovered = self.retry(
+    def _generate_with_retries(self, question):
+        return self.retry(
             f"Question {question.id:04d} generation (new conversation each attempt; "
             "the previous request may still complete remotely)",
             lambda: self.generate(question),
         )
+
+    def ask(self, question: Question) -> tuple[str, dict]:
+        streamed, identifiers, recovered = self._generate_with_retries(question)
         checked = self.retry(
             f"Question {question.id:04d} answer check",
             lambda: self.api(

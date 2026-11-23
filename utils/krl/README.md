@@ -58,6 +58,8 @@ missing source files are rejected before login. Each question has its own
 conversation and training context, including when collecting concurrently.
 `--answer-timeout` bounds project preparation and then separately bounds answer
 generation; training status and file readiness are polled every two seconds.
+If the HTTPS connection or proxy tunnel fails before the stream POST is sent,
+the collector retries submission with the same trained project and question UUID.
 
 The source bank can be reproduced or checked offline:
 
@@ -270,8 +272,9 @@ interrupted streams, and HTTP 408/429/500/502/503/504 responses get up to three
 additional attempts.
 Retries wait 5, 10, then 20 seconds by default; the configurable delay doubles
 up to 60 seconds. A generation retry discards the partial stream and starts a
-fresh conversation and question UUID. The previous remote request may still
-finish. Once a stream is complete, failures in the answer check or saved-answer
+fresh conversation and question UUID when the previous remote request may still
+finish. KRLU reuses training for connection failures before submission. Once a
+stream is complete, failures in the answer check or saved-answer
 fetch retry only that step, retaining the original stream and identifiers.
 Missing, empty, or mismatching persisted answers also retry the fetch, allowing
 a delayed server save to catch up. HTTP failures and verification mismatches

@@ -246,6 +246,57 @@ def test_transient_upload_failure_restarts_fresh_session_but_fetch_retry_does_no
     assert metadata["session_id"] == "project-session"
 
 
+@pytest.mark.parametrize("error", [requests.exceptions.ProxyError, requests.exceptions.ConnectTimeout,
+                                  requests.exceptions.ReadTimeout])
+def test_0416_stream_retry_reuses_training_only_if_submission_was_unsent(error, tmp_path, monkeypatch):
+    question = next(q for q in collector.parse_questions(krlu.PROFILE.questions) if q.id == 416)
+    output = tmp_path / "qa.md"
+    expected = "本次调用后 `STATE=#RUNNING`、`COUNT=15`。同一次 `SWITCH` 只执行 `CASE #IDLE`。"
+
+    def prepared(session_id):
+        responses = _project_responses(session_id=session_id)
+        responses[-1] = _response([
+            {"name": name, "status": 0} for name, _ in krlu.program_files(question)
+        ])
+        return responses
+
+    reused = error is not requests.exceptions.ReadTimeout
+    request = Mock(side_effect=[
+        *prepared("original-project"), error("private proxy details"),
+        *([] if reused else prepared("fresh-project")),
+        _response(answer=expected), _response({"status": True}),
+        _response({"answerContent": expected, "id": "verified-0416"}),
+    ])
+    monkeypatch.setattr(requests.Session, "request", request)
+    monkeypatch.setattr(collector, "load_credentials", lambda _: ("test-account", "test-password"))
+    monkeypatch.setattr(krlu.KrluClient, "login", lambda *args, **kwargs: None)
+    assert krlu.main([
+        "--start", "416", "--end", "416", "--output", str(output),
+        "--concurrency", "1", "--retries", "1", "--retry-delay", "0",
+    ]) == 0
+
+    record, = _saved_records(output)
+    assert record.question == question and record.answer == expected
+    assert record.metadata["answer_id"] == "verified-0416"
+    by_path = {}
+    for call in request.call_args_list:
+        by_path.setdefault(call.args[1].removeprefix(collector.CHAT_URL), []).append(call)
+    preparation_count = 1 if reused else 2
+    for path in ("/api/session/saveOrUpdate", "/api/uploadFiles", "/api/krl/train"):
+        assert len(by_path[path]) == preparation_count
+    first, second = by_path["/api/krl/stream"]
+    original, retried = first.kwargs["json"], second.kwargs["json"]
+    assert first.kwargs["allow_redirects"] is second.kwargs["allow_redirects"] is False
+    assert original["question"] == retried["question"] == question.prompt
+    if reused:
+        assert original == retried
+    else:
+        assert retried["sessionId"] == "fresh-project" and original["uuid"] != retried["uuid"]
+    check, = by_path["/api/check"]
+    verified, = by_path["/api/krl/selectQuestionInfo"]
+    assert check.kwargs["json"]["uuid"] == verified.kwargs["json"]["uuid"] == retried["uuid"]
+
+
 @pytest.mark.parametrize("replacement", [
     "```krl\nDEF MAIN()\nEND\n```",
     "```krl\n; FILE: ../bad.src\nDEF MAIN()\nEND\n```",

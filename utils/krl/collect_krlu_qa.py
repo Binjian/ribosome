@@ -106,6 +106,26 @@ class KrluClient(collector.KukaClient):
     def validate_question(question):
         program_files(question)
 
+    def _generate_with_retries(self, question):
+        identifiers = None
+
+        def attempt():
+            nonlocal identifiers
+            if identifiers is None:
+                identifiers = self._prepare_generation(question)
+            else:
+                collector.LOG.info("Question %04d: retrying submission in the trained project", question.id)
+            try:
+                return self._generate_prepared(question, identifiers)
+            except collector.UnsentStreamRequestError:
+                raise
+            except collector.RetryableCollectionError:
+                # An earlier POST may still complete. Start fresh on retry.
+                identifiers = None
+                raise
+
+        return self.retry(f"Question {question.id:04d} project generation", attempt)
+
     def _latest_empty_conversation(self):
         """Check for project data that can exist before the first question."""
         session_id = super()._latest_empty_conversation()
