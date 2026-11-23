@@ -15,6 +15,7 @@ import re
 import sys
 import time
 import uuid
+from contextlib import nullcontext
 
 if __package__:
     from . import collect_krl_qa as collector
@@ -126,7 +127,7 @@ class KrluClient(collector.KukaClient):
     def _generate_with_retries(self, question):
         identifiers = None
 
-        def attempt():
+        def generate():
             nonlocal identifiers
             if identifiers is None:
                 identifiers = self._prepare_generation(question)
@@ -139,16 +140,31 @@ class KrluClient(collector.KukaClient):
                 if streamed.lstrip().startswith(("<div class='prompt'>", '<div class="prompt">')):
                     _, closed, answer = streamed.partition("</div>")
                     if not closed or not answer.strip():
+                        if self.project_pacing:
+                            self.project_pacing.slow_down("Progress-only KRLU response")
                         raise collector.RetryableCollectionError(
                             "Project stream returned only the progress wrapper; no answer received"
                         )
                 return result
-            except collector.UnsentStreamRequestError:
+            except (collector.UnsentStreamRequestError, collector.RateLimitedError):
                 raise
             except collector.RetryableCollectionError:
                 # An earlier POST may still complete. Start fresh on retry.
                 identifiers = None
                 raise
+
+        def attempt():
+            with self.project_pacing.generation() if self.project_pacing else nullcontext():
+                try:
+                    return generate()
+                except collector.ApiRejectedError as exc:
+                    if self.project_pacing and collector._conversation_creation_rejected(exc):
+                        self.project_pacing.slow_down("Conversation creation rejected")
+                    raise
+                except collector.ChunkedAnswerStreamError:
+                    if self.project_pacing:
+                        self.project_pacing.slow_down("Interrupted KRLU stream")
+                    raise
 
         return self.retry(f"Question {question.id:04d} project generation", attempt)
 
@@ -186,7 +202,7 @@ class KrluClient(collector.KukaClient):
         def api(path, payload=None, **kwargs):
             seconds = remaining()
             result = self.api(
-                path, payload, timeout=(min(20.0, seconds), min(self.request_timeout, seconds)),
+                path, payload, deadline=deadline, timeout=(min(20.0, seconds), min(self.request_timeout, seconds)),
                 **kwargs,
             )
             remaining()

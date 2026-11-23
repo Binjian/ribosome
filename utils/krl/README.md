@@ -32,6 +32,22 @@ chatbot answers are collected separately.
 .venv/bin/python utils/krl/collect_krlu_qa.py
 ```
 
+For a longer KRLU run, start with two workers and a 40-second interval:
+
+```sh
+uv run utils/krl/collect_krlu_qa.py --concurrency 2 --delay 40 --auto-captcha
+```
+
+KRLU spaces project starts across workers, including generation retries. An
+HTTP 429, an unrecovered conversation-creation rejection (code 1), an
+interrupted chunked stream, or a progress-only answer reduces generation to
+one project at a time once active projects finish. Each such event doubles
+the interval up to 120 seconds (a longer configured delay is preserved).
+HTTP 429 also pauses subsequent requests across workers for at least the
+service's valid `Retry-After`. These settings carry through automatic
+restarts in the same command. The starting values are operating choices;
+the service's exact quota is unverified.
+
 KRLU starts at **0001** and reads `assets/KRLU/krlu_questions_1000.md`.
 Answers go to `assets/KRLU/krlu_qa_collected.md`, then
 `krlu_qa_collected_002.md`, and so on, with 20 pairs per file by default.
@@ -449,7 +465,7 @@ the process exits or crashes.
 | `--batch-size` | 20 | Maximum pairs per file. |
 | `--max-questions` | All pending in the range | Limit newly collected pairs this run. |
 | `--concurrency` | `COLLECT_CONCURRENCY` from the environment / `utils/krl/.env`, or 1 | Maximum simultaneous questions; overrides configured defaults. |
-| `--delay` | 2 seconds | Sequential pause; with concurrency > 1, global spacing between new-question dispatches. |
+| `--delay` | KRLU 40 seconds, other modes 2 seconds | Sequential pause; with concurrency > 1, global spacing between new-question dispatches. |
 | `--request-timeout` | 180 seconds | Non-streaming HTTP read idle timeout; connection timeout is 20 seconds. |
 | `--answer-timeout` | 900 seconds | Streaming read idle timeout and answer-duration limit checked as chunks arrive. |
 | `--retries` | 3 | Additional attempts for login GETs and collection steps after transient HTTP failures or missing or mismatching persisted answers. Set to 0 to disable retries within each attempt. |

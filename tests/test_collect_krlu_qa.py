@@ -288,7 +288,7 @@ def test_0416_stream_retry_reuses_training_only_if_submission_was_unsent(error, 
     monkeypatch.setattr(krlu.KrluClient, "login", lambda *args, **kwargs: None)
     assert krlu.main([
         "--start", "416", "--end", "416", "--output", str(output),
-        "--concurrency", "1", "--retries", "1", "--retry-delay", "0",
+        "--concurrency", "1", "--delay", "0", "--retries", "1", "--retry-delay", "0",
     ]) == 0
 
     record, = _saved_records(output)
@@ -534,3 +534,63 @@ def test_interrupted_training_preserves_completed_pair_and_resume_retrains_only_
     assert paths.count(collector.CHAT_URL + "/api/krl/train") == 1
     saved, = _saved_records(output.with_name("qa_002.md"))
     assert saved.question.id == 2 and saved.answer == ANSWER
+
+
+def test_throttled_stream_reuses_project_and_honors_shared_retry_after(monkeypatch):
+    from utils.krl import krlu_pacing
+
+    now = 100.0
+    pacing = krlu_pacing.ProjectPacing(3, 25)
+    monkeypatch.setattr(krlu_pacing, "time", SimpleNamespace(monotonic=lambda: now))
+
+    def advance(seconds):
+        nonlocal now
+        assert seconds > 0
+        now += seconds
+
+    monkeypatch.setattr(pacing._condition, "wait", advance)
+    limited = _response()
+    limited.status_code = 429
+    limited.headers["Retry-After"] = "90"
+    responses = iter([*_project_responses(), limited, _response(answer=ANSWER),
+                      _response({"status": True}), _response({"answerContent": ANSWER})])
+    starts = []
+
+    def request(method, url, **kwargs):
+        if url.endswith(krlu.PROFILE.stream_path):
+            starts.append((now, kwargs["json"]))
+        return next(responses)
+
+    client = krlu.KrluClient(Mock(), retries=1, retry_delay=0)
+    client.session.request.side_effect = request
+    client.project_pacing = pacing
+    assert client.ask(QUESTION)[0] == ANSWER
+    assert starts == [(100, starts[0][1]), (190, starts[0][1])]
+    assert (pacing.limit, pacing.delay) == (1, 50)
+
+
+def test_retry_after_date_or_invalid(monkeypatch):
+    from utils.krl import krlu_pacing
+
+    monkeypatch.setattr(krlu_pacing, "time", SimpleNamespace(time=lambda: 100))
+    assert krlu_pacing.retry_after_seconds("Thu, 01 Jan 1970 00:03:00 GMT") == 80
+    assert krlu_pacing.retry_after_seconds("invalid") == 0
+
+
+def test_worker_cooldown_respects_other_workers_preparation_deadline(monkeypatch):
+    from utils.krl import krlu_pacing
+
+    now = 100.0
+    first = krlu.KrluClient(Mock())
+    second = krlu.KrluClient(Mock())
+    first.project_pacing = second.project_pacing = krlu_pacing.ProjectPacing(3, 25)
+    monkeypatch.setattr(krlu_pacing, "time", SimpleNamespace(monotonic=lambda: now))
+    limited = _response()
+    limited.status_code = 429
+    limited.headers["Retry-After"] = "180"
+    first.session.request.return_value = limited
+    with pytest.raises(collector.RateLimitedError):
+        first.api("/api/check")
+    with pytest.raises(collector.RateLimitedError, match="cooldown"):
+        second.api("/api/krl/train", deadline=now + 120)
+    second.session.request.assert_not_called()

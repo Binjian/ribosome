@@ -47,6 +47,7 @@ if __package__:
         Question,
         parse_questions,
     )
+    from .krlu_pacing import ProjectPacing, retry_after_seconds
     from .solve_captcha import CaptchaError, solve_captcha
 else:
     from krl_collection_store import (
@@ -55,6 +56,7 @@ else:
         Question,
         parse_questions,
     )
+    from krlu_pacing import ProjectPacing, retry_after_seconds
     from solve_captcha import CaptchaError, solve_captcha
 
 
@@ -125,6 +127,10 @@ class ApiRejectedError(CollectionError):
 
 class RetryableCollectionError(CollectionError):
     """A transient transport or persistence failure; retry the affected stage."""
+
+
+class RateLimitedError(RetryableCollectionError):
+    """The service throttled a request for this account."""
 
 
 class ConversationTransportError(RetryableCollectionError):
@@ -405,6 +411,7 @@ class KukaClient:
         self.diagnostics_dir = Path(diagnostics_dir) if diagnostics_dir is not None else None
         self.recover_saved_answer = recover_saved_answer and profile.key == "kqa"
         self.auto_captcha = auto_captcha
+        self.project_pacing = None
         self._diagnosed_generations = set()
         self._conversation_lock = Lock()
         self._used_conversations = set()
@@ -423,8 +430,8 @@ class KukaClient:
                         error_type = StreamRetryExhaustedError
                     elif isinstance(exc, AnswerMismatchError):
                         error_type = UnverifiedAnswerError
-                    elif isinstance(exc, ConversationTransportError):
-                        error_type = ConversationTransportError
+                    elif isinstance(exc, (RateLimitedError, ConversationTransportError)):
+                        error_type = type(exc)
                     else:
                         error_type = CollectionError
                     raise error_type(
@@ -437,13 +444,21 @@ class KukaClient:
                 time.sleep(delay)
                 delay = min(delay * 2, 60.0)
 
-    def request(self, method, url, **kwargs):
+    def request(self, method, url, *, deadline=None, **kwargs):
         # No blanket POST retries: callers choose stage boundaries explicitly.
         kwargs.setdefault("timeout", (20, self.request_timeout))
         if urlsplit(url).hostname == "chat.kukacenter.com":
             kwargs.setdefault(
                 "headers", {"Origin": CHAT_URL, "Referer": CHAT_URL + "/"}
             )
+        if self.project_pacing:
+            if not self.project_pacing.wait_for_service(deadline):
+                raise RateLimitedError("Service cooldown extends beyond project preparation deadline")
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise CollectionError("Project preparation exceeded --answer-timeout; nothing saved")
+                kwargs["timeout"] = tuple(min(seconds, remaining) for seconds in kwargs["timeout"])
         try:
             response = self.session.request(method, url, **kwargs)
         except Exception as exc:
@@ -463,6 +478,10 @@ class KukaClient:
             error_type = CollectionError
             if response.status_code in (401, 403, 407):
                 error_type = SessionAccessError
+            elif response.status_code == 429 and self.project_pacing:
+                wait = retry_after_seconds(response.headers.get("Retry-After"))
+                self.project_pacing.slow_down("HTTP 429", max(wait, self.retry_delay))
+                error_type = RateLimitedError
             elif response.status_code in (408, 429, 500, 502, 503, 504):
                 error_type = RetryableCollectionError
             raise error_type(
@@ -470,12 +489,14 @@ class KukaClient:
             )
         return response
 
-    def api(self, path, payload=None, *, main_site=False, files=None, timeout=None):
+    def api(self, path, payload=None, *, main_site=False, files=None, timeout=None, deadline=None):
         # The main frontend's HTTP wrapper prefixes service paths such as
         # /api-b/... with /api. The unprefixed sign URL returns HTTP 463.
         # Chat has its own /api/... routes and does not use that proxy prefix.
         host = MAIN_URL + "/api" if main_site else CHAT_URL
         options = {} if timeout is None else {"timeout": timeout}
+        if deadline is not None:
+            options["deadline"] = deadline
         if main_site:
             response = self.request("GET", host + path, params=payload, **options)
         elif files is not None:
@@ -679,6 +700,8 @@ class KukaClient:
             prepared = False
             try:
                 session_id = self._create_conversation()
+            except RateLimitedError:
+                raise
             except RetryableCollectionError as exc:
                 raise ConversationTransportError(str(exc)) from exc
             except ApiRejectedError as exc:
@@ -686,7 +709,7 @@ class KukaClient:
                     raise
                 try:
                     session_id, prepared = self._recover_conversation(question)
-                except SessionAccessError:
+                except (SessionAccessError, RateLimitedError):
                     raise
                 except CollectionError as lookup_error:
                     LOG.warning("Could not check for an empty conversation (%s)", lookup_error)
@@ -1123,6 +1146,7 @@ def _collect_with_workers(client, pending, store, concurrency, delay, *, skip_qu
                 diagnostics_dir=client.diagnostics_dir,
                 recover_saved_answer=client.recover_saved_answer,
             )
+            worker.project_pacing = client.project_pacing
             worker._conversation_lock = client._conversation_lock
             worker._used_conversations = client._used_conversations
             clients.append(worker)
@@ -1188,8 +1212,8 @@ def build_parser(*, profile=KRL_PROFILE):
     parser.add_argument(
         "--delay",
         type=float,
-        default=2.0,
-        help="Seconds between questions; global start spacing with concurrency > 1 (default: 2)",
+        default=40.0 if profile.key == "krlu" else 2.0,
+        help="Seconds between questions; global start spacing with concurrency > 1 (default: %(default)g)",
     )
     parser.add_argument(
         "--request-timeout",
@@ -1291,6 +1315,7 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None, retry_failed_ru
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
+    args.project_pacing = ProjectPacing(args.concurrency, args.delay) if profile.key == "krlu" else None
     failures_without_progress = 0
     skipped_this_run = set()
     try:
@@ -1348,6 +1373,7 @@ def _run_once(args, profile, client_factory, skipped_this_run):
                 )
             print(f"Batch size: {args.batch_size}; output: {args.output}")
             print(f"Concurrency: {args.concurrency}")
+            print(f"Question delay: {args.delay:g}s")
             model = profile.robot_model or "not sent (project endpoint)"
             print(f"Mode: {profile.mode}; model: {model}; stream: {profile.stream_path}")
             return CollectionAttempt(0)
@@ -1386,7 +1412,7 @@ def _run_once(args, profile, client_factory, skipped_this_run):
 
             def skip_failed_question(question, error):
                 if not isinstance(error, (CollectionError, UnicodeError)) or isinstance(
-                    error, (LoginCancelled, SessionAccessError, ConversationTransportError)
+                    error, (LoginCancelled, SessionAccessError, RateLimitedError, ConversationTransportError)
                 ):
                     return False
                 if isinstance(error, ApiRejectedError) and error.path == "/api/session/saveOrUpdate":
@@ -1428,6 +1454,7 @@ def _run_once(args, profile, client_factory, skipped_this_run):
                     recover_saved_answer=getattr(args, "recover_saved_answer", False),
                     auto_captcha=args.auto_captcha,
                 )
+                client.project_pacing = args.project_pacing
                 client.login(
                     username,
                     password,
