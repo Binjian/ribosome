@@ -68,8 +68,10 @@ batches. Regular runs skip matching entries in that report, and `--dry-run`
 shows how many are in the selected range. `--retry-failed` selects only those
 questions. Once an answer is saved, its entry is cleared from the report.
 `--max-questions` limits the number of selected KRLU questions, including any
-that fail. Login, session access, and local write failures stop the current
-attempt and use the usual restart policy.
+that fail. Login, session access, conversation creation, and local write
+failures stop the current attempt and use the usual restart policy.
+Normal runs also retry prompts older versions recorded with a
+`/api/session/saveOrUpdate:` rejection. Saving the answer clears that entry.
 
 The source bank can be reproduced or checked offline:
 
@@ -252,8 +254,10 @@ notice that KUKA cannot answer yet is saved verbatim and collection continues.
 
 If creating a conversation returns `code=1`, all three collectors check whether
 the newest conversation is empty, using the same history checks as the web
-client. KRLU also checks for existing project files and training state before
-uploading a sample. The collector can use that conversation once, and workers
+client. KRLU can resume a trained project in that chat when the complete set of
+ready files matches the sample's numbered `KRLU_NNNN.src` and optional
+`.dat` filenames. It sends the prompt directly in that case. A chat with no
+project files can receive a fresh upload. The collector can use that conversation once, and workers
 share the same record of which conversations have already been assigned during
 the run. KUKA Center rejects creating a second empty conversation, which can
 happen during KRLU training before the first prompt is submitted. When no
@@ -497,7 +501,7 @@ idempotent; a different answer for an existing sample is rejected.
 | `SSLError` | A TLS connection that closes or resets uses the affected step's retry budget. Certificate verification failures and other TLS errors stop collection. Check the certificate or proxy configuration if the log reports a verification failure. |
 | `ChunkedEncodingError` | The HTTP response was incomplete or malformed. The warning gives the elapsed time since response headers and the number of answer bytes delivered to the collector. A `Retrying` line marks the start of each new attempt. Concurrent runs get a serial recovery pass if their generation retries end with this error. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
-| `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation was rejected before generation. For `code=1`, the collector can continue if the newest conversation is confirmed empty and available. KRLU also requires an empty project context. If collection stops, the numeric code alone does not identify the service-side cause. |
+| `Question ... failed: /api/session/saveOrUpdate: API rejected request (code=...)` | Conversation creation failed before generation. For `code=1`, check the newest chat for a project with zero questions. KRLU can use an empty project or resume the matching numbered sample after training completes. |
 | Stream and persisted answer differ | The collector first refetches with the same stream/conversation up to `--retries` times. Both sequential and concurrent CLI runs then retry the unverified question once in a fresh conversation. Concurrent runs first drain active calls and continue with one worker. KRLU records a repeated failure in its `.failed.json` report. KRL and KQA end the attempt. `--retries 0` disables recovery. The private diagnostic JSON contains the `streamed_answer` and `saved_answer` texts. |
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |

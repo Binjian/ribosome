@@ -96,6 +96,23 @@ def _training_status(data):
     raise collector.CollectionError("Project training returned an invalid status value")
 
 
+def _matches_ready_project(files, question):
+    expected = {name.lower() for name, _ in program_files(question)}
+    module = f"krlu_{question.id:04d}"
+    if not expected <= {module + ".src", module + ".dat"}:
+        return False
+    if not isinstance(files, list) or len(files) != len(expected):
+        return False
+    for item in files:
+        if not isinstance(item, dict) or type(item.get("status")) is not int or item["status"] != 0:
+            return False
+        name = item.get("name")
+        if not isinstance(name, str) or name.lower() not in expected:
+            return False
+        expected.remove(name.lower())
+    return True
+
+
 class KrluClient(collector.KukaClient):
     """Train each question's generated project before asking for understanding."""
 
@@ -126,18 +143,24 @@ class KrluClient(collector.KukaClient):
 
         return self.retry(f"Question {question.id:04d} project generation", attempt)
 
-    def _latest_empty_conversation(self):
-        """Check for project data that can exist before the first question."""
-        session_id = super()._latest_empty_conversation()
+    def _recover_conversation(self, question):
+        """Claim an empty chat or resume this numbered sample's ready project."""
+        session_id = self._latest_empty_conversation()
         if session_id is None:
-            return None
+            return None, False
         files = self.api("/api/krl/selectFilesInfo", {"sessionId": session_id})
-        if files not in (None, []):
-            return None
+        has_files = files not in (None, [])
+        if has_files and not _matches_ready_project(files, question):
+            collector.LOG.warning("Newest empty chat's project does not match ready files for %04d", question.id)
+            return None, False
         status = _training_status(self.api("/api/krl/queryStatus", {"requestId": session_id}))
-        if status in (None, 0):
-            return session_id
-        return None
+        if has_files and status == 2:
+            collector.LOG.info("Resuming trained project for question %04d in the existing empty chat", question.id)
+            return session_id, True
+        if not has_files and status in (None, 0):
+            return session_id, False
+        collector.LOG.warning("Newest empty conversation already has project training status %s", status)
+        return None, False
 
     def prepare_question(self, question, identifiers):
         files = program_files(question)

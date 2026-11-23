@@ -356,7 +356,7 @@ def test_collection_keeps_krlu_client_in_workers_preserves_code_and_resumes(conc
     assert len(logins) == 2
 
 
-def test_create_timeouts_and_rejections_are_reported_after_serial_recovery(tmp_path, monkeypatch, caplog):
+def test_create_timeouts_and_rejections_stop_without_blacklisting_questions(tmp_path, monkeypatch, caplog):
     source = tmp_path / "questions.md"
     source.write_text("\n".join(f"## {number:04d} 程序理解{number}\n\n{PROMPT}" for number in range(1, 5)),
                       encoding="utf-8")
@@ -384,17 +384,14 @@ def test_create_timeouts_and_rejections_are_reported_after_serial_recovery(tmp_p
     assert krlu.main([
         "--questions", str(source), "--output", str(output), "--concurrency", "3",
         "--delay", "0", "--retries", "1", "--retry-delay", "0",
-    ], retry_failed_runs=True) == 0
+    ], retry_failed_runs=True) == 1
 
-    login.assert_called_once()
-    assert pauses == [0]
+    assert login.call_count == 4
+    assert [delay for delay in pauses if delay] == [10, 20, 40]
     assert "Continuing with concurrency 1" in caplog.text
     assert "POST /api/session/saveOrUpdate: HTTP read timeout" in caplog.text
     assert "private response details" not in caplog.text
-    assert "Finished with 3 unanswered question(s)" in caplog.text
-    failures = json.loads(output.with_suffix(".failed.json").read_text(encoding="utf-8"))
-    assert [item["id"] for item in failures] == [2, 3, 4]
-    assert all("saveOrUpdate" in item["reason"] and "code=1" in item["reason"] for item in failures)
+    assert not output.with_suffix(".failed.json").exists()
     assert output.read_bytes() == previous
 
 
@@ -440,6 +437,52 @@ def test_failed_questions_are_skipped_on_resume_and_can_be_retried(concurrency, 
     assert sorted(asked) == [1, 3]
     assert [record.question.id for record in _saved_records(output)] == [1, 2, 3, 4]
     assert json.loads(report.read_text(encoding="utf-8")) == []
+
+
+def test_normal_resume_recovers_legacy_creation_failures_only(tmp_path, monkeypatch):
+    source = tmp_path / "questions.md"
+    source.write_text(f"## 0416 First\n\n{PROMPT}\n## 0417 Second\n\n{PROMPT}", encoding="utf-8")
+    first, second = collector.parse_questions(source)
+    output = tmp_path / "qa.md"
+    report = collector.FailedQuestions(output)
+    report.record(first, "/api/session/saveOrUpdate: API rejected request (code=1)")
+    report.record(second, "Stream and saved answer differ")
+    ask = Mock(return_value=(ANSWER, {}))
+    monkeypatch.setattr(collector, "load_credentials", lambda _: ("test-account", "test-password"))
+    monkeypatch.setattr(krlu.KrluClient, "login", Mock())
+    monkeypatch.setattr(krlu.KrluClient, "ask", ask)
+    assert krlu.main(["--questions", str(source), "--output", str(output), "--start", "416",
+                      "--concurrency", "1"]) == 0
+    ask.assert_called_once_with(first)
+    assert [entry["id"] for entry in json.loads(report.path.read_text())] == [417]
+
+
+@pytest.mark.parametrize("case", ["ready", "wrong-question", "missing-dat", "duplicate", "training"])
+def test_recover_unasked_numbered_project_without_uploading_again(case):
+    question = next(q for q in collector.parse_questions(krlu.PROFILE.questions) if q.id == 416)
+    files = [{"name": name, "status": 0} for name, _ in krlu.program_files(question)]
+    if case == "wrong-question":
+        files[0]["name"] = "KRLU_0417.src"
+    elif case == "missing-dat":
+        files.pop()
+    elif case == "duplicate":
+        files[1] = files[0]
+    responses = [_response(code=1), _response({"TODAY": [{"sessionId": "orphan"}]}),
+                 _response({"questionInfos": []}), _response(files)]
+    if case in ("ready", "training"):
+        responses.append(_response({"status": 2 if case == "ready" else 1}))
+    if case == "ready":
+        responses.extend([_response(answer=ANSWER), _response({"status": True}), _response({"answerContent": ANSWER})])
+    session = Mock()
+    session.request.side_effect = responses
+    client = krlu.KrluClient(session, retries=0)
+    if case == "ready":
+        answer, meta = client.ask(question)
+        assert answer == ANSWER and meta["session_id"] == "orphan"
+    else:
+        with pytest.raises(collector.ApiRejectedError):
+            client.ask(question)
+    assert session.request.call_count == len(responses)
 
 
 def test_interrupted_training_preserves_completed_pair_and_resume_retrains_only_missing(tmp_path, monkeypatch):

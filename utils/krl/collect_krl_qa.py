@@ -666,12 +666,17 @@ class KukaClient:
         details = self.api("/api/question/select", {"sessionId": session_id})
         if isinstance(details, dict) and details.get("questionInfos") == []:
             return session_id
+        LOG.warning("Newest conversation has existing turns or unconfirmed history; cannot claim it")
         return None
 
-    def _open_conversation(self):
+    def _recover_conversation(self, question):
+        return self._latest_empty_conversation(), False
+
+    def _open_conversation(self, question):
         # Workers share the account's history. Keep creation and claiming an
         # empty conversation exclusive; generation runs outside the lock.
         with self._conversation_lock:
+            prepared = False
             try:
                 session_id = self._create_conversation()
             except RetryableCollectionError as exc:
@@ -680,7 +685,7 @@ class KukaClient:
                 if exc.code != "1":
                     raise
                 try:
-                    session_id = self._latest_empty_conversation()
+                    session_id, prepared = self._recover_conversation(question)
                 except SessionAccessError:
                     raise
                 except CollectionError as lookup_error:
@@ -693,20 +698,21 @@ class KukaClient:
                 if str(session_id) in self._used_conversations:
                     raise CollectionError("Chat returned a conversation already used in this run")
             self._used_conversations.add(str(session_id))
-            return session_id
+            return session_id, prepared
 
     def generate(self, question: Question) -> tuple[str, dict, dict | None]:
         """Start a question in a conversation without prior turns."""
         return self._generate_prepared(question, self._prepare_generation(question))
 
     def _prepare_generation(self, question: Question) -> dict:
-        session_id = self._open_conversation()
+        session_id, prepared = self._open_conversation(question)
         identifiers = {
             "sessionId": session_id,
             "uuid": str(uuid.uuid4()),
             "requestId": session_id,
         }
-        self.prepare_question(question, identifiers)
+        if not prepared:
+            self.prepare_question(question, identifiers)
         return identifiers
 
     def _generate_prepared(self, question, identifiers):
@@ -1242,11 +1248,15 @@ def _select_pending(store, args, failed, skipped_this_run):
     pending = store.pending(args.start, args.end)
     if failed is None:
         return pending, 0
-    failed_ids = {question.id for question in pending if failed.matches(question)}
+    # Older collectors recorded session creation rejections as failed prompts,
+    # even though the service had received no question. Retry those by default.
+    reasons = {q.id: failed.reason_for(q) for q in pending}
+    failed_ids = {qid for qid, reason in reasons.items() if reason is not None}
     if args.retry_failed:
         retry_ids = failed_ids - skipped_this_run
         selected = [question for question in pending if question.id in retry_ids]
     else:
+        failed_ids = {qid for qid in failed_ids if not reasons[qid].startswith("/api/session/saveOrUpdate:")}
         selected = [question for question in pending if question.id not in failed_ids]
     return selected, len(failed_ids)
 
@@ -1376,8 +1386,10 @@ def _run_once(args, profile, client_factory, skipped_this_run):
 
             def skip_failed_question(question, error):
                 if not isinstance(error, (CollectionError, UnicodeError)) or isinstance(
-                    error, (LoginCancelled, SessionAccessError)
+                    error, (LoginCancelled, SessionAccessError, ConversationTransportError)
                 ):
+                    return False
+                if isinstance(error, ApiRejectedError) and error.path == "/api/session/saveOrUpdate":
                     return False
                 reason = _failure_reason(error)
                 failed.record(question, reason)

@@ -293,9 +293,11 @@ class FailedQuestions:
                 raise ValueError(f"Invalid failed-question record: {self.path}")
             self._records[record["id"]] = record
 
-    def matches(self, question: Question) -> bool:
+    def reason_for(self, question: Question) -> str | None:
         record = self._records.get(question.id)
-        return record is not None and (record["title"], record["prompt"]) == (question.title, question.prompt)
+        if record is not None and (record["title"], record["prompt"]) == (question.title, question.prompt):
+            return record["reason"]
+        return None
 
     def record(self, question: Question, reason: str) -> None:
         self._publish({**self._records, question.id: {
