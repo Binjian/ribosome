@@ -89,6 +89,7 @@ TERMS = (
     f"{MAIN_URL}/policy/kuka_bbs_policy.html",
 )
 LOG = logging.getLogger("collect_krl_qa")
+MAX_FAILED_RUNS_WITHOUT_PROGRESS = 4
 
 
 class CollectionError(RuntimeError):
@@ -110,6 +111,10 @@ class ApiRejectedError(CollectionError):
 
 class RetryableCollectionError(CollectionError):
     """A transient transport or persistence failure; retry the affected stage."""
+
+
+class ConversationTransportError(RetryableCollectionError):
+    """The connection failed while opening a new conversation."""
 
 
 class ChunkedAnswerStreamError(RetryableCollectionError):
@@ -145,9 +150,17 @@ def http_failure(exc: Exception, context: str) -> CollectionError | None:
     from requests.exceptions import (
         ChunkedEncodingError,
         ConnectionError,
+        ConnectTimeout,
+        ProxyError,
+        ReadTimeout,
         RequestException,
         SSLError,
         Timeout,
+    )
+    from urllib3.exceptions import (
+        ConnectTimeoutError,
+        NewConnectionError,
+        ReadTimeoutError,
     )
     from urllib3.util.ssl_match_hostname import CertificateError
 
@@ -158,7 +171,7 @@ def http_failure(exc: Exception, context: str) -> CollectionError | None:
     # Inspect types and fixed error codes to avoid exposing request data.
     causes = [exc]
     seen = set()
-    timed_out = False
+    timeout = None
     tls_closed = False
     certificate_failed = False
     while causes:
@@ -166,8 +179,14 @@ def http_failure(exc: Exception, context: str) -> CollectionError | None:
         if id(cause) in seen:
             continue
         seen.add(id(cause))
-        if isinstance(cause, Timeout) or type(cause).__name__ == "ReadTimeoutError":
-            timed_out = True
+        if isinstance(cause, (ReadTimeout, ReadTimeoutError)):
+            timeout = "HTTP read timeout"
+        elif isinstance(cause, (ConnectTimeout, ConnectTimeoutError)) and not isinstance(
+            cause, NewConnectionError
+        ):
+            timeout = "HTTP connect timeout"
+        elif isinstance(cause, Timeout) and timeout is None:
+            timeout = "HTTP read/connect timeout"
         reason = getattr(cause, "reason", None)
         if isinstance(reason, BaseException):
             causes.append(reason)
@@ -198,7 +217,9 @@ def http_failure(exc: Exception, context: str) -> CollectionError | None:
         return CollectionError(f"{context}: TLS error (SSLError)")
     retryable = isinstance(exc, (ConnectionError, Timeout, ChunkedEncodingError))
     error_type = RetryableCollectionError if retryable else CollectionError
-    reason = "HTTP read/connect timeout" if timed_out else type(exc).__name__
+    reason = timeout or type(exc).__name__
+    if timeout and isinstance(exc, ProxyError):
+        reason += " via proxy"
     return error_type(f"{context}: {reason}")
 
 
@@ -379,6 +400,8 @@ class KukaClient:
                         error_type = StreamRetryExhaustedError
                     elif isinstance(exc, AnswerMismatchError):
                         error_type = UnverifiedAnswerError
+                    elif isinstance(exc, ConversationTransportError):
+                        error_type = ConversationTransportError
                     else:
                         error_type = CollectionError
                     raise error_type(
@@ -619,6 +642,8 @@ class KukaClient:
         with self._conversation_lock:
             try:
                 session_id = self._create_conversation()
+            except RetryableCollectionError as exc:
+                raise ConversationTransportError(str(exc)) from exc
             except ApiRejectedError as exc:
                 if exc.code != "1":
                     raise
@@ -849,8 +874,15 @@ def _failure_reason(error):
     return str(error) if isinstance(error, CollectionError) else type(error).__name__
 
 
+def _conversation_open_failed(error):
+    return isinstance(error, ConversationTransportError) or (
+        isinstance(error, ApiRejectedError)
+        and error.path == "/api/session/saveOrUpdate" and error.code == "1"
+    )
+
+
 async def _collect_concurrently(clients, pending, store, delay):
-    """Bound whole ask calls; only this coordinator publishes completed answers."""
+    """Publish completed answers and report the failure and final worker limit."""
     idle = deque(clients)
     active = {}
     completed = asyncio.Queue()
@@ -889,16 +921,11 @@ async def _collect_concurrently(clients, pending, store, delay):
                 idle.append(client)
                 if error is not None:
                     recovery_key = (question.id, type(error))
-                    creation_rejected = (
-                        concurrency > 1 and isinstance(error, ApiRejectedError)
-                        and error.path == "/api/session/saveOrUpdate" and error.code == "1"
-                    )
-                    stream_interrupted = (
-                        concurrency > 1 and isinstance(error, StreamRetryExhaustedError)
+                    needs_serial_recovery = concurrency > 1 and (
+                        _conversation_open_failed(error) or isinstance(error, StreamRetryExhaustedError)
                     )
                     if (
-                        (isinstance(error, UnverifiedAnswerError) or creation_rejected
-                         or stream_interrupted)
+                        (isinstance(error, UnverifiedAnswerError) or needs_serial_recovery)
                         and client.retries > 0 and recovery_key not in recovered
                         and failure is None and not interrupted
                     ):
@@ -992,8 +1019,7 @@ async def _collect_concurrently(clients, pending, store, delay):
 
     if interrupted:
         raise KeyboardInterrupt
-    if failure is not None:
-        raise failure
+    return failure, concurrency
 
 
 def _collect_with_workers(client, pending, store, concurrency, delay):
@@ -1017,7 +1043,7 @@ def _collect_with_workers(client, pending, store, concurrency, delay):
             worker._conversation_lock = client._conversation_lock
             worker._used_conversations = client._used_conversations
             clients.append(worker)
-        asyncio.run(_collect_concurrently(clients, pending, store, delay))
+        return asyncio.run(_collect_concurrently(clients, pending, store, delay))
 
 
 def build_parser(*, profile=KRL_PROFILE):
@@ -1028,7 +1054,8 @@ def build_parser(*, profile=KRL_PROFILE):
                      "Enter the site's image CAPTCHA when prompted, or use --auto-captcha.\n"
                      "Start with --dry-run to inspect pending questions offline."),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="After a failed collection attempt, the CLI waits 10 seconds and resumes from saved answers.",
+        epilog=("After a failed collection attempt, the CLI backs off and resumes from saved answers. "
+                f"It stops after {MAX_FAILED_RUNS_WITHOUT_PROGRESS} consecutive failed attempts without a save."),
     )
     parser.add_argument(
         "--questions", type=Path, default=profile.questions
@@ -1121,6 +1148,12 @@ def build_parser(*, profile=KRL_PROFILE):
     return parser
 
 
+@dataclass(frozen=True)
+class CollectionAttempt:
+    status: int
+    saved: int = 0
+
+
 def main(argv=None, *, profile=KRL_PROFILE, client_factory=None, retry_failed_runs=False):
     client_factory = KukaClient if client_factory is None else client_factory
     parser = build_parser(profile=profile)
@@ -1151,19 +1184,34 @@ def main(argv=None, *, profile=KRL_PROFILE, client_factory=None, retry_failed_ru
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
+    failures_without_progress = 0
     try:
         while True:
-            status = _run_once(args, profile, client_factory)
-            if status != 1 or not retry_failed_runs or args.dry_run or args.repair_headings:
-                return status
-            LOG.warning("Collection attempt failed. Retrying in 10 seconds from saved answers")
-            time.sleep(10)
+            attempt = _run_once(args, profile, client_factory)
+            if attempt.status != 1 or not retry_failed_runs or args.dry_run or args.repair_headings:
+                return attempt.status
+            failures_without_progress = 0 if attempt.saved else failures_without_progress + 1
+            if failures_without_progress >= MAX_FAILED_RUNS_WITHOUT_PROGRESS:
+                LOG.error(
+                    "No new answers after %d collection attempts. Resolve the last error and rerun to resume",
+                    failures_without_progress,
+                )
+                return 1
+            delay = 10 * 2 ** max(0, failures_without_progress - 1)
+            LOG.warning(
+                "Collection attempt failed after saving %d new answer(s). "
+                "Resuming from saved answers in %d seconds with concurrency %d",
+                attempt.saved, delay, args.concurrency,
+            )
+            time.sleep(delay)
     except KeyboardInterrupt:
         LOG.info("Stopped. Completed pairs are preserved")
         return 130
 
 
 def _run_once(args, profile, client_factory):
+    store = None
+    initial_saved = None
     try:
         args.questions = args.questions.resolve()
         args.output = args.output.resolve()
@@ -1191,7 +1239,7 @@ def _run_once(args, profile, client_factory):
             print(f"Concurrency: {args.concurrency}")
             model = profile.robot_model or "not sent (project endpoint)"
             print(f"Mode: {profile.mode}; model: {model}; stream: {profile.stream_path}")
-            return 0
+            return CollectionAttempt(0)
         if args.repair_headings:
             with output_lock(args.output):
                 CollectionStore.recover(args.output)
@@ -1201,7 +1249,7 @@ def _run_once(args, profile, client_factory):
                 )
                 store.ensure_heading_hierarchy()
             LOG.info("Repaired heading hierarchy for %d saved Q&A pairs", len(store.completed_ids))
-            return 0
+            return CollectionAttempt(0)
         with output_lock(args.output):
             CollectionStore.recover(args.output)
             store = CollectionStore(
@@ -1210,6 +1258,7 @@ def _run_once(args, profile, client_factory):
             )
             store.ensure_heading_hierarchy()
             store.ensure_order()
+            initial_saved = len(store.completed_ids)
             pending = store.pending(args.start, args.end)
             if args.max_questions and pending:
                 pending = pending[: args.max_questions]
@@ -1217,7 +1266,7 @@ def _run_once(args, profile, client_factory):
                 args.end = pending[-1].id
             if not pending:
                 LOG.info("All selected questions are already collected")
-                return 0
+                return CollectionAttempt(0)
             try:
                 import requests
             except ImportError as exc:
@@ -1226,7 +1275,7 @@ def _run_once(args, profile, client_factory):
                 ) from exc
             LOG.info(
                 "%d already saved; collecting %d pending questions from %04d",
-                len(store.completed_ids),
+                initial_saved,
                 len(pending),
                 pending[0].id,
             )
@@ -1255,9 +1304,11 @@ def _run_once(args, profile, client_factory):
                     accept_terms=args.accept_login_terms,
                 )
                 if args.concurrency > 1:
-                    _collect_with_workers(
+                    failure, args.concurrency = _collect_with_workers(
                         client, pending, store, args.concurrency, args.delay,
                     )
+                    if failure is not None:
+                        raise failure
                 else:
                     for index, question in enumerate(pending):
                         LOG.info(
@@ -1286,11 +1337,11 @@ def _run_once(args, profile, client_factory):
                 "Finished: %d Q&A pairs saved across output batches",
                 len(store.completed_ids),
             )
-        return 0
+        return CollectionAttempt(0)
     except (KeyboardInterrupt, EOFError, LoginCancelled) as exc:
         message = str(exc) if isinstance(exc, LoginCancelled) else "Stopped"
         LOG.info("%s. Completed pairs are preserved", message)
-        return 130
+        return CollectionAttempt(130)
     except (CollectionError, OSError, ValueError) as exc:
         message = (
             f"{type(exc).__name__} during HTTP response"
@@ -1298,14 +1349,16 @@ def _run_once(args, profile, client_factory):
             else str(exc)
         )
         LOG.error("%s. Completed pairs are preserved", message)
-        return 1
+        if _conversation_open_failed(exc):
+            args.concurrency = 1
     except Exception as exc:
         # Avoid printing a requests exception that embeds a signed login URL.
         LOG.error(
             "%s during collection. Current answer was not published; completed pairs are preserved",
             type(exc).__name__,
         )
-        return 1
+    saved = len(store.completed_ids) - initial_saved if initial_saved is not None else 0
+    return CollectionAttempt(1, saved)
 
 
 if __name__ == "__main__":

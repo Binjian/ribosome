@@ -5,17 +5,16 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
 import pytest
 import requests
-
 from utils.krl import collect_kqa_qa as kqa
 from utils.krl import collect_krl_qa as collector
 from utils.krl import collect_krlu_qa as krlu
 from utils.krl import generate_krlu_questions as generator
 from utils.krl.krl_collection_store import _saved_records
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "; FILE: MAIN.src\nDEF MAIN()\n  DECL INT count\n  count = 2\n  $OUT[10] = count > 1\nEND\n"
@@ -303,6 +302,51 @@ def test_collection_keeps_krlu_client_in_workers_preserves_code_and_resumes(conc
     assert krlu.main(arguments) == 0
     assert sorted(asked) == [1, 2, 3]
     assert len(logins) == 2
+
+
+def test_create_timeouts_and_rejections_keep_restarts_serial_and_stop_without_progress(tmp_path, monkeypatch, caplog):
+    source = tmp_path / "questions.md"
+    source.write_text("\n".join(f"## {number:04d} 程序理解{number}\n\n{PROMPT}" for number in range(1, 5)),
+                      encoding="utf-8")
+    questions = collector.parse_questions(source)
+    output = tmp_path / "qa.md"
+    store = collector.CollectionStore(output, questions, title=krlu.PROFILE.title, mode=krlu.PROFILE.mode)
+    store.save(questions[0], ANSWER, {"session_id": "saved-project"})
+    previous = output.read_bytes()
+    logins = []
+    opens = []
+    pauses = []
+
+    def login(client, *args, **kwargs):
+        logins.append(client.session)
+
+    def request(session, method, url, **kwargs):
+        if url.endswith("/api/session/select"):
+            return _response({})
+        assert url.endswith("/api/session/saveOrUpdate")
+        opens.append((len(logins), session))
+        if len(logins) == 1:
+            raise requests.exceptions.ReadTimeout("private response details")
+        return _response(code=1)
+
+    monkeypatch.setattr(requests.Session, "request", request)
+    monkeypatch.setattr(collector, "load_credentials", lambda _: ("test-account", "test-password"))
+    monkeypatch.setattr(krlu.KrluClient, "login", login)
+    monkeypatch.setattr(collector, "time", SimpleNamespace(sleep=pauses.append))
+    assert krlu.main([
+        "--questions", str(source), "--output", str(output), "--concurrency", "3", "--auto-captcha",
+        "--delay", "0", "--retries", "1", "--retry-delay", "0",
+    ], retry_failed_runs=True) == 1
+
+    assert len(logins) == 4
+    assert [seconds for seconds in pauses if seconds] == [10, 20, 40]
+    assert any(session is not logins[0] for attempt, session in opens if attempt == 1)
+    assert opens[-3:] == list(enumerate(logins[1:], start=2))
+    assert "Continuing with concurrency 1" in caplog.text
+    assert "POST /api/session/saveOrUpdate: HTTP read timeout" in caplog.text
+    assert "private response details" not in caplog.text
+    assert "No new answers after 4 collection attempts" in caplog.text
+    assert output.read_bytes() == previous
 
 
 def test_interrupted_training_preserves_completed_pair_and_resume_retrains_only_missing(tmp_path, monkeypatch):

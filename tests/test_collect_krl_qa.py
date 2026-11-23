@@ -855,7 +855,7 @@ def test_cli_retries_failed_runs_until_selected_answers_are_saved(mode, capped, 
 
     def ask(client, question):
         calls.append(question.id)
-        if question.id == 20 and len(sessions) < 3:
+        if len(sessions) < 3 or (question.id == 20 and len(sessions) < 6):
             raise collector.CollectionError("answer generation failed")
         return ANSWER, {}
 
@@ -863,9 +863,10 @@ def test_cli_retries_failed_runs_until_selected_answers_are_saved(mode, capped, 
         if seconds == 0:
             return
         delays.append(seconds)
-        assert len(delays) <= 2
+        assert len(delays) <= 5
         with collector.output_lock(output):
-            assert collector.CollectionStore(output, collector.parse_questions(questions)).completed_ids == {19}
+            completed = collector.CollectionStore(output, collector.parse_questions(questions)).completed_ids
+        assert completed == ({19} if len(sessions) >= 3 else set())
 
     monkeypatch.setattr(collector.KukaClient, "login", login)
     monkeypatch.setattr(collector.KukaClient, "ask", ask)
@@ -875,10 +876,10 @@ def test_cli_retries_failed_runs_until_selected_answers_are_saved(mode, capped, 
     if capped:
         args += ["--max-questions", "2"]
     assert entry.main(args, retry_failed_runs=True) == 0
-    assert delays == [10, 10]
-    assert len(set(sessions)) == 3
+    assert delays == [10, 20, 10, 10, 20]
+    assert len(set(sessions)) == 6
     expected = [19, 20] if capped else [19, 20, 21]
-    assert calls == [19, 20, 20, *expected[1:]]
+    assert calls == [19, 19, 19, 20, 20, 20, *expected[1:]]
     assert collector.CollectionStore(output, collector.parse_questions(questions)).completed_ids == set(expected)
 
 
@@ -887,7 +888,7 @@ def test_ctrl_c_during_outer_retry_wait_exits(monkeypatch):
         assert seconds == 10
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(collector, "_run_once", lambda *args: 1)
+    monkeypatch.setattr(collector, "_run_once", lambda *args: collector.CollectionAttempt(1))
     monkeypatch.setattr(collector, "time", SimpleNamespace(sleep=interrupt))
     assert collector.main([], retry_failed_runs=True) == 130
 

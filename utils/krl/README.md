@@ -255,8 +255,11 @@ questions, retries the deferred question once, and continues with one worker.
 .venv/bin/python utils/krl/collect_krl_qa.py
 ```
 
-If a live collection attempt fails, all three CLIs wait 10 seconds and resume
-using the saved batches. They stop when every selected question is answered.
+If a live collection attempt fails, all three CLIs resume using the saved
+batches after a 10-second wait. Consecutive failures without a new answer
+increase the wait to 20 and then 40 seconds. The fourth consecutive failure
+without a save exits with status 1. Saving an answer resets the backoff, and
+collection succeeds when every selected question is answered.
 `--start`, `--end`, and `--max-questions` define the selection across attempts.
 Ctrl+C, a blank CAPTCHA entry, or end-of-input at a prompt stops the run.
 Only fully checked answers are published. An interrupted question can be asked
@@ -303,8 +306,8 @@ the answer text differs or the stream carries an extra marker.
 
 Use `--retries 0` to disable retries within each attempt, or adjust `--retries`
 and `--retry-delay`. Authentication/API rejections and malformed response types
-end the current attempt immediately. The 10-second restart applies after a
-failed attempt even with `--retries 0`.
+can end the current attempt. The CLI restart limit and backoff still apply
+with `--retries 0`.
 
 ### 4. Collect concurrently
 
@@ -330,7 +333,7 @@ the Markdown batches are adjusted as needed. Completed answers remain saved
 even if an earlier question fails; filling that gap on resume restores its
 correct position without requesting the completed answers again.
 
-Login and CAPTCHA happen once. Workers have independent HTTP sessions with
+Login and CAPTCHA happen once per attempt. Workers have independent HTTP sessions with
 copied authentication cookies, but still use the same account. KUKA Center's
 account concurrency limits are unverified; measure a small run before increasing
 concurrency. More workers do not guarantee faster service-side generation.
@@ -342,12 +345,12 @@ shutdown can wait through HTTP timeouts and retry backoff. Keep the process
 running until it exits to retain these answers. An output-write failure stops
 all further publication while active HTTP calls drain.
 
-If a question exhausts its saved-answer mismatch retries or its generation
-retries end with `ChunkedEncodingError`, the coordinator drains active calls
+If a question exhausts its retries for conversation creation, saved-answer
+mismatches, or interrupted chunked streams, the coordinator drains active calls
 and makes one recovery pass in a fresh conversation with the configured retry
-budget. Deferred questions run sequentially, and collection continues with
-one worker after a successful recovery. Each recovered answer goes through the
-full stream and saved-answer verification.
+budget. Deferred questions run sequentially. The one-worker limit carries over
+to subsequent attempts in the same invocation. Each recovered answer goes
+through the full stream and saved-answer verification.
 
 For a bounded session or a separate collection:
 
@@ -475,7 +478,7 @@ idempotent; a different answer for an existing sample is rejected.
 | --- | --- |
 | Login fails | The next attempt fetches a fresh CAPTCHA. If login keeps failing, stop the run and check the account and CAPTCHA. |
 | HTTP 463 at `/api-b/program_assistant/api/sign` | Update the collector and rerun. Main-site service requests need the frontend's `/api` proxy prefix: `/api/api-b/program_assistant/api/sign`. Completed pairs are reused. |
-| `ConnectionError` or read timeout | If step retries are exhausted, the CLI waits 10 seconds and resumes. Check connectivity if failures persist. Increase `--answer-timeout` if generation needs longer silent intervals. |
+| `ConnectionError` or HTTP timeout | If step retries are exhausted, the CLI backs off and resumes. Check connectivity or the configured proxy if failures persist. Increase `--answer-timeout` if generation needs longer silent intervals. |
 | `SSLError` | A TLS connection that closes or resets uses the affected step's retry budget. Certificate verification failures and other TLS errors stop collection. Check the certificate or proxy configuration if the log reports a verification failure. |
 | `ChunkedEncodingError` | The HTTP response was incomplete or malformed. The warning gives the elapsed time since response headers and the number of answer bytes delivered to the collector. A `Retrying` line marks the start of each new attempt. Concurrent runs get a serial recovery pass if their generation retries end with this error. |
 | API rejection, quota limit, or expired login | Resolve the service/account issue, then rerun; completed pairs remain saved. |
@@ -484,7 +487,7 @@ idempotent; a different answer for an existing sample is rejected.
 | Another collector owns the output | Wait for or stop that process; an existing lock file alone does not mean it is locked. |
 | Saved-record conflict | Compare the source and output files; retain the original series or choose a separate output path. |
 
-Exit status is 0 for success, 1 for errors in offline commands, 130 for Ctrl+C,
+Exit status is 0 for success, 1 for collection failures, 130 for Ctrl+C,
 a blank CAPTCHA entry, or end-of-input at an interactive prompt, and 2 for
 invalid command-line arguments.
 The frontend HTTP interface can change, so live collection still requires an
